@@ -38,11 +38,28 @@ public sealed class AbilityState
 
     public Ability Definition { get; }
 
-    public int CooldownRemainingTicks { get; set; }
+    public int CooldownRemainingTicks { get; private set; }
+
+    /// <summary>Length of the current cooldown, after the ship's cooldown speed was applied.</summary>
+    public int CooldownDurationTicks { get; private set; }
 
     public bool IsReady => CooldownRemainingTicks == 0;
 
     /// <summary>1 right after casting, falling to 0 when ready.</summary>
     public float CooldownFraction =>
-        Definition.CooldownTicks == 0 ? 0f : (float)CooldownRemainingTicks / Definition.CooldownTicks;
+        CooldownDurationTicks == 0 ? 0f : (float)CooldownRemainingTicks / CooldownDurationTicks;
+
+    /// <summary>Starts the cooldown, shortened by <paramref name="cooldownSpeed"/> (1 = normal).</summary>
+    public void StartCooldown(float cooldownSpeed)
+    {
+        var duration = Definition.CooldownTicks / MathF.Max(cooldownSpeed, 0.01f);
+        CooldownDurationTicks = Math.Max(1, (int)MathF.Round(duration));
+        CooldownRemainingTicks = CooldownDurationTicks;
+    }
+
+    public void TickCooldown()
+    {
+        if (CooldownRemainingTicks > 0)
+            CooldownRemainingTicks--;
+    }
 }

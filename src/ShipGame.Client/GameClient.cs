@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
@@ -6,8 +7,8 @@ using ShipGame.Client.Input;
 using ShipGame.Client.Rendering;
 using ShipGame.Client.Session;
 using ShipGame.Shared.Abilities;
-using ShipGame.Shared.Ai;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using NVector2 = System.Numerics.Vector2;
 
@@ -16,6 +17,9 @@ namespace ShipGame.Client;
 public sealed class GameClient : Game
 {
     private const int LocalPlayerId = 1;
+
+    // Playable area in tiles (plus World.OutOfBoundsMargin of open water around it).
+    private const float MapSize = 192f;
     private const float CameraPanSpeed = 900f;
 
     private static readonly (Keys Key, AbilitySlot Slot)[] AbilityKeys =
@@ -40,6 +44,8 @@ public sealed class GameClient : Game
     private WorldRenderer _worldRenderer = null!;
     private AbilityBar _abilityBar = null!;
     private CompassRose _compass = null!;
+    private HudCounters _hudCounters = null!;
+    private OffscreenMarkers _offscreenMarkers = null!;
 
     private bool _cameraLocked = true;
     private NVector2 _lastMoveOrder;
@@ -63,15 +69,19 @@ public sealed class GameClient : Game
 
     protected override void Initialize()
     {
-        var world = new World(new NVector2(64, 64));
-        world.SpawnShip(new NVector2(32, 32), 0f, ShipStats.Sloop, LocalPlayerId, Loadouts.Sloop);
-        // Two pirate hunters, starting from opposite quarters. They chase and fight until one side is sunk.
-        foreach (var (position, heading) in new[] { (new NVector2(48, 18), MathF.PI), (new NVector2(16, 48), 0f) })
-            world.SpawnShip(position, heading, ShipStats.Sloop, abilities: Loadouts.Sloop).Behavior = new HunterBehavior();
+        StartRun();
+        base.Initialize();
+    }
+
+    /// <summary>A fresh run: the player's ship at the center, pirates arriving in waves.</summary>
+    private void StartRun()
+    {
+        var world = new World(new NVector2(MapSize)) { Waves = new WaveDirector(seed: Environment.TickCount) };
+        world.SpawnShip(new NVector2(MapSize / 2f), 0f, ShipStats.Sloop, LocalPlayerId, Loadouts.Sloop);
 
         _session = new LocalGameSession(world, LocalPlayerId);
-
-        base.Initialize();
+        _sentRudder = 0;
+        _cameraLocked = true;
     }
 
     protected override void LoadContent()
@@ -80,6 +90,8 @@ public sealed class GameClient : Game
         _worldRenderer = new WorldRenderer(_primitives);
         _abilityBar = new AbilityBar(_primitives);
         _compass = new CompassRose(_primitives);
+        _hudCounters = new HudCounters(_primitives);
+        _offscreenMarkers = new OffscreenMarkers(_primitives);
     }
 
     protected override void UnloadContent()
@@ -94,6 +106,10 @@ public sealed class GameClient : Game
 
         if (_input.IsKeyDown(Keys.Escape))
             Exit();
+
+        // Sunk: the run is over. Enter starts a new one.
+        if (IsActive && _session.World.GetPlayerShip(LocalPlayerId) is null && _input.WasKeyPressed(Keys.Enter))
+            StartRun();
 
         if (IsActive)
             HandleOrders();
@@ -111,9 +127,13 @@ public sealed class GameClient : Game
     protected override void Draw(GameTime gameTime)
     {
         GraphicsDevice.Clear(new Color(10, 22, 40));
-        _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, _camera.GetView(GraphicsDevice.Viewport));
+        var view = _camera.GetView(GraphicsDevice.Viewport);
+        _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
+        _offscreenMarkers.Draw(_session.World, _session.InterpolationAlpha, view, GraphicsDevice.Viewport);
         _abilityBar.Draw(_session.World.GetPlayerShip(LocalPlayerId), GraphicsDevice.Viewport);
         _compass.Draw(_session.World.Wind, GraphicsDevice.Viewport);
+        var gold = _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
+        _hudCounters.Draw(gold, _session.World.Waves?.Wave ?? 0, GraphicsDevice.Viewport);
         base.Draw(gameTime);
     }
 
@@ -197,9 +217,22 @@ public sealed class GameClient : Game
         if (_titleTimer < 0.5)
             return;
 
-        var ship = _session.World.GetPlayerShip(LocalPlayerId);
+        var world = _session.World;
+        var ship = world.GetPlayerShip(LocalPlayerId);
         var fps = _framesSinceTitle / _titleTimer;
-        Window.Title = $"ShipGame | {fps:0} fps | tick {_session.World.Tick} | speed {ship?.Speed:0.0} (sail {ship?.Throttle}/{ShipMovement.ThrottleLevels}) | camera {(_cameraLocked ? "locked" : "free")} (Y)";
+        var wave = world.Waves?.Wave ?? 0;
+        var pirates = world.Ships.Count(s => s.Team == Team.Pirates);
+        var gold = world.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
+
+        // The window title doubles as a status line until the game has text rendering.
+        string status;
+        if (ship is null)
+            status = $"SUNK on wave {wave} with {gold} gold - press Enter for a new run";
+        else if (world.Waves is { } waves && pirates == 0)
+            status = $"wave {wave + 1} in {Math.Ceiling(waves.TicksUntilNextWave / (double)SimConstants.TickRate):0}s";
+        else
+            status = $"wave {wave}: {pirates} pirates";
+        Window.Title = $"ShipGame | {status} | speed {ship?.Speed:0.0} (sail {ship?.Throttle}/{ShipMovement.ThrottleLevels}) | {fps:0} fps";
         _titleTimer = 0;
         _framesSinceTitle = 0;
     }

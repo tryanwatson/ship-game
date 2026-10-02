@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Microsoft.Xna.Framework;
 using ShipGame.Shared.Abilities;
+using ShipGame.Shared.Ai;
 using ShipGame.Shared.Simulation;
 using NVector2 = System.Numerics.Vector2;
 
@@ -24,6 +25,7 @@ public sealed class WorldRenderer
     private static readonly Color HullOutline = new(30, 20, 12);
     private static readonly Color LaneReady = new Color(255, 230, 150) * 0.14f;
     private static readonly Color LaneCooling = new Color(255, 230, 150) * 0.04f;
+    private static readonly Color AggroRing = new Color(230, 80, 60) * 0.35f;
     private static readonly Color MoveMarker = new Color(120, 255, 140) * 0.8f;
     private static readonly Color Cannonball = new(20, 20, 24);
     private static readonly Color Shadow = new Color(0, 0, 0) * 0.3f;
@@ -43,6 +45,13 @@ public sealed class WorldRenderer
         _batch.Begin(view);
 
         DrawWater(world.WorldSize);
+
+        // Guarding pirates show how close you can get before they come for you.
+        foreach (var ship in world.Ships)
+        {
+            if (ship.Behavior is HunterBehavior { State: HunterState.Guarding })
+                DrawGroundCircle(NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), HunterBehavior.AggroRange, AggroRing);
+        }
 
         var localShip = world.GetPlayerShip(localPlayerId);
         if (localShip is not null)
@@ -85,6 +94,18 @@ public sealed class WorldRenderer
             _batch.Line(IsoProjection.WorldToIso(new NVector2(x, 0)), IsoProjection.WorldToIso(new NVector2(x, size.Y)), GridLine);
         for (var y = 0; y <= (int)size.Y; y++)
             _batch.Line(IsoProjection.WorldToIso(new NVector2(0, y)), IsoProjection.WorldToIso(new NVector2(size.X, y)), GridLine);
+    }
+
+    /// <summary>Outline of a circle on the water (an ellipse on screen).</summary>
+    private void DrawGroundCircle(NVector2 center, float radius, Color color)
+    {
+        Span<Vector2> points = stackalloc Vector2[64];
+        for (var i = 0; i < points.Length; i++)
+        {
+            var angle = MathF.Tau * i / points.Length;
+            points[i] = IsoProjection.WorldToIso(center + new NVector2(MathF.Cos(angle), MathF.Sin(angle)) * radius);
+        }
+        _batch.Outline(points, color);
     }
 
     private void FillWorldRect(NVector2 min, NVector2 max, Color color)
@@ -141,27 +162,12 @@ public sealed class WorldRenderer
 
     private void DrawShip(Ship ship, NVector2 pos, float heading, Color color)
     {
-        var length = ship.Stats.Length;
-        var beam = ship.Stats.Beam;
-
-        // Hull outline in ship-local space (+X is the bow), then rotated, placed, and projected.
-        Span<NVector2> local = stackalloc NVector2[]
-        {
-            new(length * 0.5f, 0f),
-            new(length * 0.15f, beam * 0.5f),
-            new(-length * 0.5f, beam * 0.4f),
-            new(-length * 0.5f, -beam * 0.4f),
-            new(length * 0.15f, -beam * 0.5f),
-        };
-
-        var cos = MathF.Cos(heading);
-        var sin = MathF.Sin(heading);
-        Span<Vector2> hull = stackalloc Vector2[local.Length];
-        for (var i = 0; i < local.Length; i++)
-        {
-            var p = local[i];
-            hull[i] = IsoProjection.WorldToIso(pos + new NVector2(p.X * cos - p.Y * sin, p.X * sin + p.Y * cos));
-        }
+        // The same outline the simulation hits against, placed at the interpolated pose and projected.
+        Span<NVector2> outline = stackalloc NVector2[HullShape.PointCount];
+        HullShape.GetWorldOutline(pos, heading, ship.Stats, outline);
+        Span<Vector2> hull = stackalloc Vector2[HullShape.PointCount];
+        for (var i = 0; i < hull.Length; i++)
+            hull[i] = IsoProjection.WorldToIso(outline[i]);
 
         _batch.FillConvex(hull, color);
         _batch.Outline(hull, HullOutline);

@@ -4,13 +4,36 @@ using ShipGame.Shared.Simulation;
 
 namespace ShipGame.Shared.Ai;
 
+public enum HunterState
+{
+    /// <summary>At anchor at home, watching for enemies within <see cref="HunterBehavior.AggroRange"/>.</summary>
+    Guarding,
+
+    /// <summary>Chasing and fighting a target.</summary>
+    Hunting,
+
+    /// <summary>Leashed: sailing home, ignoring enemies until it gets there.</summary>
+    Returning,
+}
+
 /// <summary>
-/// Aggressive pirate: hunts the nearest enemy ship anywhere on the map and fights it to the death. Chases at full
-/// sail; once in range, steers to hold the target abeam at a comfortable distance and fires whichever broadside
-/// bears. Steers by rudder, like a player on WASD.
+/// Aggressive pirate that guards its home. Aggroes onto enemies that come within <see cref="AggroRange"/>, then
+/// chases at full sail and, once in range, steers to hold the target abeam at a comfortable distance and fires
+/// whichever broadside bears. Steers by rudder, like a player on WASD. Leashed: if dragged too far from home, or
+/// the target gets away, it sails home and resumes guarding.
 /// </summary>
 public sealed class HunterBehavior : INpcBehavior
 {
+    /// <summary>Enemies within this many tiles of a guarding pirate draw it out.</summary>
+    public const float AggroRange = 20f;
+
+    /// <summary>A hunting pirate gives up once its target is this far away. Above <see cref="AggroRange"/> so a
+    /// player loitering at the aggro edge doesn't toggle it on and off.</summary>
+    public const float DisengageRange = 30f;
+
+    /// <summary>A hunting pirate turns for home once it's this far from it.</summary>
+    public const float LeashRange = 40f;
+
     private const int ChaseThrottle = ShipMovement.ThrottleLevels;
     private const int EngageThrottle = 4;
 
@@ -36,15 +59,89 @@ public sealed class HunterBehavior : INpcBehavior
     // sides every time the target crosses the bow.
     private int _side;
 
+    private Ship? _target;
+
+    public HunterBehavior(Vector2 home)
+    {
+        Home = home;
+    }
+
+    /// <summary>Where the pirate guards from and returns to when leashed: its spawn point.</summary>
+    public Vector2 Home { get; }
+
+    public HunterState State { get; private set; } = HunterState.Guarding;
+
+    public Ship? Target => _target;
+
     public void Update(World world, Ship ship)
     {
-        var target = FindNearestEnemy(world, ship);
-        if (target is null)
+        switch (State)
         {
-            // Nothing left to hunt: heave to.
-            ship.Rudder = 0;
-            ship.MoveTarget = null;
-            ship.Throttle = 0;
+            case HunterState.Guarding:
+                Guard(world, ship);
+                break;
+            case HunterState.Hunting:
+                Hunt(world, ship);
+                break;
+            case HunterState.Returning:
+                // Autopilot clears the move order on arrival (and takes in sail): back on station.
+                if (ship.MoveTarget is null)
+                    StartGuarding(ship);
+                break;
+        }
+    }
+
+    private void Guard(World world, Ship ship)
+    {
+        var target = FindNearestEnemy(world, ship, AggroRange);
+        if (target is null)
+            return;
+
+        _target = target;
+        _side = 0;
+        ship.IsAnchored = false;
+        State = HunterState.Hunting;
+        Hunt(world, ship); // engage this tick
+    }
+
+    private void StartGuarding(Ship ship)
+    {
+        State = HunterState.Guarding;
+        _target = null;
+        ship.MoveTarget = null;
+        ship.Rudder = 0;
+        ship.Throttle = 0;
+        ship.IsAnchored = true;
+    }
+
+    private void StartReturning(Ship ship)
+    {
+        State = HunterState.Returning;
+        _target = null;
+        ship.Rudder = 0;
+        ship.Throttle = ChaseThrottle;
+        ship.MoveTarget = Home;
+        ship.IsHoldingCourse = false;
+    }
+
+    private void Hunt(World world, Ship ship)
+    {
+        // Lost the target (sunk): take on another one in range, or go home.
+        if (_target is null || _target.IsSunk)
+        {
+            _target = FindNearestEnemy(world, ship, AggroRange);
+            if (_target is null)
+            {
+                StartReturning(ship);
+                return;
+            }
+        }
+
+        var target = _target;
+        if (Vector2.Distance(ship.Position, Home) > LeashRange
+            || Vector2.Distance(ship.Position, target.Position) > DisengageRange)
+        {
+            StartReturning(ship);
             return;
         }
 
@@ -101,16 +198,16 @@ public sealed class HunterBehavior : INpcBehavior
         }
     }
 
-    private static Ship? FindNearestEnemy(World world, Ship ship)
+    private static Ship? FindNearestEnemy(World world, Ship ship, float range)
     {
         Ship? nearest = null;
-        var nearestDistance = float.MaxValue;
+        var nearestDistance = range * range;
         foreach (var other in world.Ships)
         {
             if (other.Team == ship.Team || other.IsSunk)
                 continue;
             var d = Vector2.DistanceSquared(other.Position, ship.Position);
-            if (d < nearestDistance)
+            if (d <= nearestDistance)
             {
                 nearest = other;
                 nearestDistance = d;

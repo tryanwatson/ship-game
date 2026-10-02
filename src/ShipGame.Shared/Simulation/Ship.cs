@@ -1,6 +1,7 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Ai;
+using ShipGame.Shared.Stats;
 
 namespace ShipGame.Shared.Simulation;
 
@@ -24,6 +25,7 @@ public sealed class Ship
     {
         Id = id;
         OwnerPlayerId = ownerPlayerId;
+        BaseStats = stats;
         Stats = stats;
         Health = stats.MaxHealth;
         Team = ownerPlayerId is null ? Team.Pirates : Team.Players;
@@ -40,7 +42,42 @@ public sealed class Ship
     /// <summary>The controlling player, or null for NPC / uncontrolled ships.</summary>
     public int? OwnerPlayerId { get; }
 
-    public ShipStats Stats { get; }
+    /// <summary>The hull's stats before upgrades.</summary>
+    public ShipStats BaseStats { get; }
+
+    /// <summary>Effective stats: <see cref="BaseStats"/> with <see cref="Modifiers"/> applied.</summary>
+    public ShipStats Stats { get; private set; }
+
+    /// <summary>Upgrades applied to this ship. Change through <see cref="AddModifier"/> / <see cref="RemoveModifiers"/>.</summary>
+    public IReadOnlyList<StatModifier> Modifiers => _modifiers.All;
+
+    private readonly StatModifiers _modifiers = new();
+
+    public void AddModifier(StatModifier modifier)
+    {
+        _modifiers.Add(modifier);
+        RecalculateStats();
+    }
+
+    public void RemoveModifiers(string source)
+    {
+        if (_modifiers.RemoveSource(source) > 0)
+            RecalculateStats();
+    }
+
+    private void RecalculateStats()
+    {
+        var oldMaxHealth = Stats.MaxHealth;
+        Stats = _modifiers.Apply(BaseStats);
+
+        // Raising max health adds the same to current health, so an upgrade never shows as damage;
+        // lowering it only clamps.
+        var gained = Stats.MaxHealth - oldMaxHealth;
+        Health = Math.Clamp(Health + MathF.Max(0f, gained), 0f, Stats.MaxHealth);
+    }
+
+    /// <summary>Id of the ship that last damaged this one, for kill credit.</summary>
+    public int? LastHitByShipId { get; set; }
 
     /// <summary>Ships only damage, and NPCs only hunt, ships of other teams.</summary>
     public Team Team { get; set; }

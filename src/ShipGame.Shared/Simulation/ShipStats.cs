@@ -8,6 +8,7 @@ namespace ShipGame.Shared.Simulation;
 /// Seconds for water drag to bleed off most of the ship's way once sail is reduced. Higher drifts further.
 /// </param>
 /// <param name="MinDeceleration">Constant drag that finally brings a drifting ship to rest instead of creeping forever.</param>
+/// <param name="CooldownSpeed">How fast ability cooldowns tick down; 1 is normal, 1.25 recovers 25% faster.</param>
 /// <param name="MinTurnRadius">Tightest turning radius, approached as the ship slows to a crawl.</param>
 /// <param name="TurnRadiusAtMaxSpeed">Turning radius at full sail. Radius scales linearly with speed in between.</param>
 public readonly record struct ShipStats(
@@ -20,7 +21,8 @@ public readonly record struct ShipStats(
     float Radius,
     float Length,
     float Beam,
-    float MaxHealth)
+    float MaxHealth,
+    float CooldownSpeed = 1f)
 {
     public static readonly ShipStats Sloop = new(
         MaxSpeed: 5f,

@@ -1,6 +1,7 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Progression;
 
 namespace ShipGame.Shared.Simulation;
 
@@ -13,6 +14,7 @@ public sealed class World
     private readonly List<Ship> _ships = new();
     private readonly List<Projectile> _projectiles = new();
     private readonly Queue<Command> _pendingCommands = new();
+    private readonly Dictionary<int, PlayerState> _players = new();
     private int _nextEntityId = 1;
 
     /// <summary>
@@ -44,6 +46,18 @@ public sealed class World
 
     public IReadOnlyList<Projectile> Projectiles => _projectiles;
 
+    public IReadOnlyDictionary<int, PlayerState> Players => _players;
+
+    /// <summary>Sends pirates in waves when set; null for worlds that place their own ships (tests, sandboxes).</summary>
+    public WaveDirector? Waves { get; set; }
+
+    public PlayerState GetOrAddPlayer(int playerId)
+    {
+        if (!_players.TryGetValue(playerId, out var player))
+            _players[playerId] = player = new PlayerState(playerId);
+        return player;
+    }
+
     public Ship SpawnShip(
         Vector2 position,
         float heading,
@@ -59,6 +73,8 @@ public sealed class World
             PreviousHeading = heading,
         };
         _ships.Add(ship);
+        if (ownerPlayerId is { } playerId)
+            GetOrAddPlayer(playerId);
         return ship;
     }
 
@@ -90,10 +106,7 @@ public sealed class World
             ship.PreviousHeading = ship.Heading;
 
             foreach (var ability in ship.Abilities)
-            {
-                if (ability is { CooldownRemainingTicks: > 0 })
-                    ability.CooldownRemainingTicks--;
-            }
+                ability?.TickCooldown();
         }
 
         foreach (var projectile in _projectiles)
@@ -115,15 +128,34 @@ public sealed class World
 
         StepProjectiles(dt);
 
-        _ships.RemoveAll(s => s.IsSunk);
+        ResolveSinkings();
+
+        Waves?.Update(this);
 
         Tick++;
+    }
+
+    private void ResolveSinkings()
+    {
+        foreach (var victim in _ships)
+        {
+            if (!victim.IsSunk || victim.LastHitByShipId is not { } killerId)
+                continue;
+
+            // Credit the kill even if the killer went down in the same exchange.
+            var killer = _ships.Find(s => s.Id == killerId);
+            if (killer is not null && killer.Team != victim.Team)
+                KillRewards.Grant(this, killer);
+        }
+
+        _ships.RemoveAll(s => s.IsSunk);
     }
 
     private void StepProjectiles(float dt)
     {
         foreach (var projectile in _projectiles)
         {
+            var from = projectile.Position;
             projectile.Position += projectile.Velocity * dt;
             projectile.RemainingTicks--;
 
@@ -132,10 +164,10 @@ public sealed class World
                 if (ship.Team == projectile.Team || ship.IsSunk)
                     continue;
 
-                var hitDistance = ship.Stats.Radius + Projectile.Radius;
-                if (Vector2.DistanceSquared(projectile.Position, ship.Position) <= hitDistance * hitDistance)
+                if (HullShape.SegmentHits(ship, from, projectile.Position, Projectile.Radius))
                 {
                     ship.Health = MathF.Max(0f, ship.Health - projectile.Damage);
+                    ship.LastHitByShipId = projectile.OwnerShipId;
                     projectile.RemainingTicks = 0;
                     break;
                 }
@@ -199,7 +231,7 @@ public sealed class World
         if (!ability.Definition.Cast(this, ship, target))
             return false;
 
-        ability.CooldownRemainingTicks = ability.Definition.CooldownTicks;
+        ability.StartCooldown(ship.Stats.CooldownSpeed);
         return true;
     }
 }
