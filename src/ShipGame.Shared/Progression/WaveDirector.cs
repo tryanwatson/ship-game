@@ -33,6 +33,7 @@ public sealed class WaveDirector
     private const float EdgeInset = 3f;
     private const float MinDistanceFromPlayers = 24f;
     private const float MinDistanceBetweenSpawns = 6f;
+    private const float MinDistanceFromLand = 4f;
     private const int PlacementAttempts = 40;
 
     private readonly Random _rng;
@@ -107,9 +108,13 @@ public sealed class WaveDirector
             var candidate = RandomRingPoint(anchor, world.WorldSize);
             var nearestPlayer = NearestDistance(candidate, players);
             var nearestSpawn = NearestDistance(candidate, placed);
-            if (nearestPlayer >= MinDistanceFromPlayers && nearestSpawn >= MinDistanceBetweenSpawns)
+            var nearestLand = world.DistanceToLand(candidate);
+            if (nearestPlayer >= MinDistanceFromPlayers && nearestSpawn >= MinDistanceBetweenSpawns && nearestLand >= MinDistanceFromLand)
                 return candidate;
 
+            // Never settle for a spot on (or hard against) land; otherwise take the least-bad candidate.
+            if (nearestLand < MinDistanceFromLand)
+                continue;
             var score = MathF.Min(nearestPlayer / MinDistanceFromPlayers, nearestSpawn / MinDistanceBetweenSpawns);
             if (score > bestScore)
             {

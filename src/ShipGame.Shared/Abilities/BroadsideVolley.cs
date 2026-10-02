@@ -7,9 +7,17 @@ namespace ShipGame.Shared.Abilities;
 public sealed class BroadsideVolley : Ability
 {
     public const int CannonCount = 4;
+
+    // Base values; the firing ship's stats scale them (see DamageFor / RangeFor / ProjectileSpeedFor).
     public const float Damage = 10f;
     public const float Range = 8f;
     public const float ProjectileSpeed = 14f;
+
+    public static float DamageFor(Ship ship) => Damage * ship.Stats.WeaponDamage;
+
+    public static float RangeFor(Ship ship) => Range * ship.Stats.WeaponRange;
+
+    public static float ProjectileSpeedFor(Ship ship) => ProjectileSpeed * ship.Stats.ProjectileSpeed;
 
     // Fraction of the hull length that the row of cannons spans.
     private const float CannonSpanFraction = 0.6f;
@@ -32,16 +40,18 @@ public sealed class BroadsideVolley : Ability
         var forward = caster.Forward;
         var outward = FiringDirection(caster);
         var halfSpan = HalfSpan(caster);
-        var lifetimeTicks = (int)MathF.Ceiling(Range / ProjectileSpeed * SimConstants.TickRate);
+        var speed = ProjectileSpeedFor(caster);
+        var damage = DamageFor(caster);
+        var lifetimeTicks = (int)MathF.Ceiling(RangeFor(caster) / speed * SimConstants.TickRate);
 
         // Cannonballs inherit the ship's motion, so firing on the move leads the shot.
-        var velocity = outward * ProjectileSpeed + forward * caster.Speed;
+        var velocity = outward * speed + forward * caster.Speed;
 
         for (var i = 0; i < CannonCount; i++)
         {
             var along = -halfSpan + 2f * halfSpan * i / (CannonCount - 1);
             var muzzle = caster.Position + forward * along + outward * (caster.Stats.Beam / 2f);
-            world.SpawnProjectile(caster, muzzle, velocity, Damage, lifetimeTicks);
+            world.SpawnProjectile(caster, muzzle, velocity, damage, lifetimeTicks);
         }
 
         return true;
@@ -66,7 +76,7 @@ public sealed class BroadsideVolley : Ability
         var along = Vector2.Dot(offset, ship.Forward);
         var outward = Vector2.Dot(offset, FiringDirection(ship));
         return outward >= 0f
-            && outward <= ship.Stats.Beam / 2f + Range + radius
+            && outward <= ship.Stats.Beam / 2f + RangeFor(ship) + radius
             && MathF.Abs(along) <= HalfSpan(ship) + Projectile.Radius + radius;
     }
 }

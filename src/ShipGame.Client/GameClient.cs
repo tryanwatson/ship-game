@@ -8,8 +8,10 @@ using ShipGame.Client.Rendering;
 using ShipGame.Client.Session;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
+using ShipGame.Shared.Upgrades;
 using NVector2 = System.Numerics.Vector2;
 
 namespace ShipGame.Client;
@@ -18,8 +20,6 @@ public sealed class GameClient : Game
 {
     private const int LocalPlayerId = 1;
 
-    // Playable area in tiles (plus World.OutOfBoundsMargin of open water around it).
-    private const float MapSize = 192f;
     private const float CameraPanSpeed = 900f;
 
     private static readonly (Keys Key, AbilitySlot Slot)[] AbilityKeys =
@@ -46,6 +46,8 @@ public sealed class GameClient : Game
     private CompassRose _compass = null!;
     private HudCounters _hudCounters = null!;
     private OffscreenMarkers _offscreenMarkers = null!;
+    private IslandOverlays _islandOverlays = null!;
+    private ShipyardPanel _shipyardPanel = null!;
 
     private bool _cameraLocked = true;
     private NVector2 _lastMoveOrder;
@@ -76,8 +78,10 @@ public sealed class GameClient : Game
     /// <summary>A fresh run: the player's ship at the center, pirates arriving in waves.</summary>
     private void StartRun()
     {
-        var world = new World(new NVector2(MapSize)) { Waves = new WaveDirector(seed: Environment.TickCount) };
-        world.SpawnShip(new NVector2(MapSize / 2f), 0f, ShipStats.Sloop, LocalPlayerId, Loadouts.Sloop);
+        var world = new World(Archipelago.Size) { Waves = new WaveDirector(seed: Environment.TickCount) };
+        foreach (var island in Archipelago.CreateIslands())
+            world.AddIsland(island);
+        world.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, LocalPlayerId, Loadouts.Sloop);
 
         _session = new LocalGameSession(world, LocalPlayerId);
         _sentRudder = 0;
@@ -92,6 +96,8 @@ public sealed class GameClient : Game
         _compass = new CompassRose(_primitives);
         _hudCounters = new HudCounters(_primitives);
         _offscreenMarkers = new OffscreenMarkers(_primitives);
+        _islandOverlays = new IslandOverlays(_primitives);
+        _shipyardPanel = new ShipyardPanel(_primitives);
     }
 
     protected override void UnloadContent()
@@ -112,7 +118,10 @@ public sealed class GameClient : Game
             StartRun();
 
         if (IsActive)
+        {
+            _shipyardPanel.Update(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _input, GraphicsDevice.Viewport, _session.Send);
             HandleOrders();
+        }
         UpdateRudder();
 
         _session.Update(dt);
@@ -129,18 +138,23 @@ public sealed class GameClient : Game
         GraphicsDevice.Clear(new Color(10, 22, 40));
         var view = _camera.GetView(GraphicsDevice.Viewport);
         _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
+        _islandOverlays.Draw(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _session.InterpolationAlpha, view, GraphicsDevice.Viewport);
         _offscreenMarkers.Draw(_session.World, _session.InterpolationAlpha, view, GraphicsDevice.Viewport);
-        _abilityBar.Draw(_session.World.GetPlayerShip(LocalPlayerId), GraphicsDevice.Viewport);
+        var localShip = _session.World.GetPlayerShip(LocalPlayerId);
+        var plunderReady = localShip is not null && Plundering.PlunderableFrom(_session.World, localShip.Position) is not null;
+        var shipyardReady = localShip is not null && Shipyards.ShipyardFrom(_session.World, localShip.Position) is not null;
+        _abilityBar.Draw(localShip, plunderReady, shipyardReady, GraphicsDevice.Viewport);
         _compass.Draw(_session.World.Wind, GraphicsDevice.Viewport);
         var gold = _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
         _hudCounters.Draw(gold, _session.World.Waves?.Wave ?? 0, GraphicsDevice.Viewport);
+        _shipyardPanel.Draw(_session.World, localShip, _input, GraphicsDevice.Viewport);
         base.Draw(gameTime);
     }
 
     private void HandleOrders()
     {
         if (_input.WasKeyPressed(Keys.X))
-            _session.Send(new StopCommand(LocalPlayerId));
+            _session.Send(new ToggleAnchorCommand(LocalPlayerId));
 
         if (_input.WasKeyPressed(Keys.W) || _input.WasKeyPressed(Keys.Space))
             _session.Send(new AdjustThrottleCommand(LocalPlayerId, +1));
@@ -232,6 +246,11 @@ public sealed class GameClient : Game
             status = $"wave {wave + 1} in {Math.Ceiling(waves.TicksUntilNextWave / (double)SimConstants.TickRate):0}s";
         else
             status = $"wave {wave}: {pirates} pirates";
+
+        if (ship?.Anchor == AnchorState.Down)
+            status += ship.PlunderIslandId is null ? " | at anchor" : " | at anchor, plundering";
+        else if (ship?.Anchor == AnchorState.Raising)
+            status += $" | weighing anchor {Math.Ceiling(ship.AnchorRaiseTicksRemaining / (double)SimConstants.TickRate):0}s";
         Window.Title = $"ShipGame | {status} | speed {ship?.Speed:0.0} (sail {ship?.Throttle}/{ShipMovement.ThrottleLevels}) | {fps:0} fps";
         _titleTimer = 0;
         _framesSinceTitle = 0;

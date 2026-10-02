@@ -46,6 +46,28 @@ public sealed class AbilityBar
     };
     private static readonly Vector2[][][] Glyphs = { Glyph1, Glyph2, Glyph3, Glyph4 };
 
+    private static readonly Vector2[][] GlyphX =
+    {
+        new Vector2[] { new(0, 0), new(1, 1) },
+        new Vector2[] { new(1, 0), new(0, 1) },
+    };
+
+    // An anchor in a unit box: ring, shank, stock, curved arms with flukes.
+    private static readonly Vector2[][] AnchorIcon =
+    {
+        new Vector2[] { new(0.5f, 0.05f), new(0.6f, 0.15f), new(0.5f, 0.25f), new(0.4f, 0.15f), new(0.5f, 0.05f) },
+        new Vector2[] { new(0.5f, 0.25f), new(0.5f, 0.9f) },
+        new Vector2[] { new(0.3f, 0.34f), new(0.7f, 0.34f) },
+        new Vector2[] { new(0.15f, 0.6f), new(0.28f, 0.8f), new(0.5f, 0.9f), new(0.72f, 0.8f), new(0.85f, 0.6f) },
+        new Vector2[] { new(0.08f, 0.68f), new(0.15f, 0.6f), new(0.24f, 0.65f) },
+        new Vector2[] { new(0.92f, 0.68f), new(0.85f, 0.6f), new(0.76f, 0.65f) },
+    };
+
+    private static readonly Color ChestWood = new(150, 95, 45);
+    private static readonly Color ChestBand = new(235, 190, 60);
+    private static readonly Color AnchorUp = new Color(180, 190, 210) * 0.45f;
+    private static readonly Color AnchorDown = new(170, 220, 255);
+
     private readonly PrimitiveBatch _batch;
 
     public AbilityBar(PrimitiveBatch batch)
@@ -53,7 +75,9 @@ public sealed class AbilityBar
         _batch = batch;
     }
 
-    public void Draw(Ship? ship, Viewport viewport)
+    /// <param name="plunderReady">An island is in plunder range: the anchor slot shows a chest instead.</param>
+    /// <param name="shipyardReady">A shipyard is in range: the anchor slot shows a hammer (takes precedence).</param>
+    public void Draw(Ship? ship, bool plunderReady, bool shipyardReady, Viewport viewport)
     {
         _batch.Begin(Matrix.Identity);
 
@@ -80,9 +104,83 @@ public sealed class AbilityBar
         }
 
         if (ship is not null)
+        {
             DrawSailGauge(ship, origin - new Vector2(SlotGap * 2 + SailPipWidth, 0));
+            DrawAnchorSlot(ship, plunderReady, shipyardReady, origin + new Vector2(totalWidth + SlotGap * 2, 0));
+        }
 
         _batch.Flush();
+    }
+
+    /// <summary>
+    /// The X slot. A treasure chest when anchoring here would plunder an island (and while plundering);
+    /// otherwise an anchor, dim when weighed and bright when down. While hauling, it fills bottom-up.
+    /// </summary>
+    private void DrawAnchorSlot(Ship ship, bool plunderReady, bool shipyardReady, Vector2 topLeft)
+    {
+        FillRect(topLeft, new Vector2(SlotSize), SlotBack);
+
+        if (shipyardReady && ship.Anchor != AnchorState.Raising)
+        {
+            DrawHammer(topLeft + new Vector2(SlotSize / 2f), SlotSize * 0.6f);
+        }
+        else if (plunderReady && ship.Anchor != AnchorState.Raising)
+        {
+            DrawChest(topLeft + new Vector2(SlotSize / 2f, SlotSize * 0.56f), SlotSize * 0.6f);
+        }
+        else
+        {
+            var color = ship.Anchor == AnchorState.Weighed ? AnchorUp : AnchorDown;
+            DrawGlyph(AnchorIcon, topLeft + new Vector2(SlotSize * 0.2f), new Vector2(SlotSize * 0.6f), color);
+        }
+        if (ship.Anchor == AnchorState.Raising)
+            FillRect(topLeft, new Vector2(SlotSize, SlotSize * (1f - Anchoring.RaiseProgress(ship))), CoolingOverlay);
+
+        Outline(topLeft, new Vector2(SlotSize), SlotBorder);
+        DrawGlyph(GlyphX, topLeft + new Vector2(5, 5), new Vector2(8, 10), KeyLabel);
+    }
+
+    /// <summary>A shipwright's hammer: steel head on a wooden handle, angled.</summary>
+    private void DrawHammer(Vector2 center, float size)
+    {
+        var along = Vector2.Normalize(new Vector2(1f, 1f));   // handle runs top-left to bottom-right
+        var across = new Vector2(-along.Y, along.X);
+        var handleStart = center - along * size * 0.15f;
+        var handleEnd = center + along * size * 0.5f;
+        Span<Vector2> handle = stackalloc Vector2[]
+        {
+            handleStart + across * 2.5f, handleEnd + across * 2.5f, handleEnd - across * 2.5f, handleStart - across * 2.5f,
+        };
+        _batch.FillConvex(handle, ChestWood);
+
+        var headCenter = center - along * size * 0.25f;
+        Span<Vector2> head = stackalloc Vector2[]
+        {
+            headCenter + across * size * 0.32f + along * 5f, headCenter + across * size * 0.32f - along * 5f,
+            headCenter - across * size * 0.32f - along * 5f, headCenter - across * size * 0.32f + along * 5f,
+        };
+        _batch.FillConvex(head, AnchorDown);
+    }
+
+    /// <summary>A treasure chest: wooden body and domed lid, with gold bands and lock.</summary>
+    private void DrawChest(Vector2 center, float width)
+    {
+        var height = width * 0.62f;
+        var lidHeight = height * 0.38f;
+        var left = center.X - width / 2f;
+        var top = center.Y - height / 2f;
+
+        Span<Vector2> lid = stackalloc Vector2[]
+        {
+            new(left, top + lidHeight), new(left + width * 0.12f, top), new(left + width * 0.88f, top), new(left + width, top + lidHeight),
+        };
+        _batch.FillConvex(lid, ChestWood);
+        FillRect(new Vector2(left, top + lidHeight), new Vector2(width, height - lidHeight), ChestWood);
+
+        FillRect(new Vector2(left, top + lidHeight - 1.5f), new Vector2(width, 3f), ChestBand);              // lid seam
+        FillRect(new Vector2(left + width * 0.18f, top + 2f), new Vector2(3f, height - 2f), ChestBand);      // straps
+        FillRect(new Vector2(left + width * 0.82f - 3f, top + 2f), new Vector2(3f, height - 2f), ChestBand);
+        FillRect(new Vector2(center.X - 3.5f, top + lidHeight - 1f), new Vector2(7f, 8f), ChestBand);       // lock
     }
 
     /// <summary>Stacked pips left of the bar, filled bottom-up to the current sail setting.</summary>

@@ -2,6 +2,7 @@ using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Progression;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Simulation;
 
@@ -13,6 +14,8 @@ public sealed class World
 {
     private readonly List<Ship> _ships = new();
     private readonly List<Projectile> _projectiles = new();
+    private readonly List<Island> _islands = new();
+    private readonly Dictionary<int, int> _plunderCooldowns = new();
     private readonly Queue<Command> _pendingCommands = new();
     private readonly Dictionary<int, PlayerState> _players = new();
     private int _nextEntityId = 1;
@@ -45,6 +48,28 @@ public sealed class World
     public IReadOnlyList<Ship> Ships => _ships;
 
     public IReadOnlyList<Projectile> Projectiles => _projectiles;
+
+    public IReadOnlyList<Island> Islands => _islands;
+
+    public void AddIsland(Island island) => _islands.Add(island);
+
+    /// <summary>Ticks until <paramref name="island"/> can be plundered again; 0 when it's ripe.</summary>
+    public int PlunderCooldownTicks(Island island) => _plunderCooldowns.GetValueOrDefault(island.Id);
+
+    public void StartPlunderCooldown(Island island, int ticks) => _plunderCooldowns[island.Id] = ticks;
+
+    /// <summary>Distance from a point to the nearest shore; 0 on land, infinity with no islands.</summary>
+    public float DistanceToLand(Vector2 point)
+    {
+        var nearest = float.PositiveInfinity;
+        foreach (var island in _islands)
+        {
+            if (Vector2.Distance(point, island.Center) - island.BoundingRadius > nearest)
+                continue;
+            nearest = MathF.Min(nearest, island.DistanceTo(point));
+        }
+        return nearest;
+    }
 
     public IReadOnlyDictionary<int, PlayerState> Players => _players;
 
@@ -100,10 +125,17 @@ public sealed class World
     {
         const float dt = SimConstants.TickDelta;
 
+        foreach (var islandId in _plunderCooldowns.Keys.ToList())
+        {
+            if (--_plunderCooldowns[islandId] <= 0)
+                _plunderCooldowns.Remove(islandId);
+        }
+
         foreach (var ship in _ships)
         {
             ship.PreviousPosition = ship.Position;
             ship.PreviousHeading = ship.Heading;
+            Anchoring.Tick(ship);
 
             foreach (var ability in ship.Abilities)
                 ability?.TickCooldown();
@@ -124,9 +156,14 @@ public sealed class World
         ShipMovement.ResolveCollisions(_ships);
 
         foreach (var ship in _ships)
+            IslandCollision.Resolve(ship, _islands);
+
+        foreach (var ship in _ships)
             ShipMovement.ClampToBounds(ship, new Vector2(-OutOfBoundsMargin), WorldSize + new Vector2(OutOfBoundsMargin));
 
         StepProjectiles(dt);
+
+        Plundering.Step(this);
 
         ResolveSinkings();
 
@@ -159,6 +196,12 @@ public sealed class World
             projectile.Position += projectile.Velocity * dt;
             projectile.RemainingTicks--;
 
+            if (LineHitsLand(from, projectile.Position, Projectile.Radius))
+            {
+                projectile.RemainingTicks = 0;
+                continue;
+            }
+
             foreach (var ship in _ships)
             {
                 if (ship.Team == projectile.Team || ship.IsSunk)
@@ -177,6 +220,19 @@ public sealed class World
         _projectiles.RemoveAll(p => p.RemainingTicks <= 0);
     }
 
+    /// <summary>Whether a ball of <paramref name="radius"/> travelling from <paramref name="from"/> to <paramref name="to"/> would strike land.</summary>
+    public bool LineHitsLand(Vector2 from, Vector2 to, float radius)
+    {
+        foreach (var island in _islands)
+        {
+            if (Geometry.DistanceToSegment(island.Center, from, to) > island.BoundingRadius + radius)
+                continue;
+            if (Geometry.SegmentTouchesConvex(island.Outline, from, to, radius))
+                return true;
+        }
+        return false;
+    }
+
     private void Apply(Command command)
     {
         // Commands only ever act on the issuing player's own ship; this is also the server-side ownership check.
@@ -186,6 +242,8 @@ public sealed class World
 
         switch (command)
         {
+            case MoveCommand when ship.IsAnchored:
+                break; // held fast: no sailing anywhere until the anchor is up
             case MoveCommand move:
                 ship.MoveTarget = Vector2.Clamp(move.Target, Vector2.Zero, WorldSize);
                 ship.IsHoldingCourse = false;
@@ -200,6 +258,15 @@ public sealed class World
                 break;
             case AdjustThrottleCommand adjust:
                 ship.Throttle = Math.Clamp(ship.Throttle + adjust.Delta, 0, ShipMovement.ThrottleLevels);
+                break;
+            case ToggleAnchorCommand:
+                Anchoring.Toggle(ship);
+                break;
+            case ChoosePlunderCommand:
+                Shipyards.TryChoosePlunder(this, ship);
+                break;
+            case PurchaseUpgradeCommand purchase:
+                Shipyards.TryPurchase(this, ship, purchase.UpgradeId);
                 break;
             case SetRudderCommand rudder:
                 ship.Rudder = Math.Clamp(rudder.Rudder, -1, 1);

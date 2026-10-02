@@ -38,5 +38,13 @@ public sealed class StatModifiers
         MaxSpeed = Apply(StatId.MaxSpeed, baseStats.MaxSpeed),
         MaxHealth = Apply(StatId.MaxHealth, baseStats.MaxHealth),
         CooldownSpeed = Apply(StatId.CooldownSpeed, baseStats.CooldownSpeed),
+        WeaponDamage = Apply(StatId.WeaponDamage, baseStats.WeaponDamage),
+        ProjectileSpeed = Apply(StatId.ProjectileSpeed, baseStats.ProjectileSpeed),
+        WeaponRange = Apply(StatId.WeaponRange, baseStats.WeaponRange),
+        MinTurnRadius = Apply(StatId.TurnRadius, baseStats.MinTurnRadius),
+        TurnRadiusAtMaxSpeed = Apply(StatId.TurnRadius, baseStats.TurnRadiusAtMaxSpeed),
     };
+
+    /// <summary>How many modifiers come from <paramref name="source"/> (e.g. levels bought of an upgrade).</summary>
+    public int CountSource(string source) => _modifiers.Count(m => m.Source == source);
 }

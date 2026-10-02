@@ -8,6 +8,18 @@ public enum StatId
 
     /// <summary>Multiplier on how fast cooldowns tick down (base 1). Cooldown duration = base / CooldownSpeed.</summary>
     CooldownSpeed,
+
+    /// <summary>Multiplier on weapon damage (base 1).</summary>
+    WeaponDamage,
+
+    /// <summary>Multiplier on projectile speed (base 1).</summary>
+    ProjectileSpeed,
+
+    /// <summary>Multiplier on weapon range (base 1).</summary>
+    WeaponRange,
+
+    /// <summary>Applies to both turning radii (tiles): negative percentages mean tighter turns.</summary>
+    TurnRadius,
 }
 
 public enum ModifierKind

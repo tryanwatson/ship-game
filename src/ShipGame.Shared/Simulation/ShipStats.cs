@@ -9,6 +9,9 @@ namespace ShipGame.Shared.Simulation;
 /// </param>
 /// <param name="MinDeceleration">Constant drag that finally brings a drifting ship to rest instead of creeping forever.</param>
 /// <param name="CooldownSpeed">How fast ability cooldowns tick down; 1 is normal, 1.25 recovers 25% faster.</param>
+/// <param name="WeaponDamage">Multiplier on weapon damage; 1 is a weapon's base damage.</param>
+/// <param name="ProjectileSpeed">Multiplier on projectile speed.</param>
+/// <param name="WeaponRange">Multiplier on weapon range.</param>
 /// <param name="MinTurnRadius">Tightest turning radius, approached as the ship slows to a crawl.</param>
 /// <param name="TurnRadiusAtMaxSpeed">Turning radius at full sail. Radius scales linearly with speed in between.</param>
 public readonly record struct ShipStats(
@@ -22,7 +25,10 @@ public readonly record struct ShipStats(
     float Length,
     float Beam,
     float MaxHealth,
-    float CooldownSpeed = 1f)
+    float CooldownSpeed = 1f,
+    float WeaponDamage = 1f,
+    float ProjectileSpeed = 1f,
+    float WeaponRange = 1f)
 {
     public static readonly ShipStats Sloop = new(
         MaxSpeed: 5f,

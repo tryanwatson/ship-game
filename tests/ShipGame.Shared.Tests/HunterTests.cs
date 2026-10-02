@@ -178,4 +178,80 @@ public class HunterTests
         Assert.Equal(Team.Pirates, friend.Team);
         Assert.Equal(friend.Stats.MaxHealth, friend.Health);
     }
+
+    // A 6x14 wall of land (84 sq tiles) spanning x 97..103, y 93..107.
+    private static Island Wall() => new(1, new[] { new Vector2(97, 93), new Vector2(103, 93), new Vector2(103, 107), new Vector2(97, 107) });
+
+    private static bool Touching(World world, Ship ship)
+    {
+        Span<Vector2> hull = stackalloc Vector2[HullShape.PointCount];
+        HullShape.GetWorldOutline(ship.Position, ship.Heading, ship.Stats, hull);
+        foreach (var point in hull)
+        {
+            if (world.DistanceToLand(point) < 0.05f)
+                return true;
+        }
+        return false;
+    }
+
+    [Fact]
+    public void Hunter_SailsAroundAnIslandToReachItsTarget()
+    {
+        var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
+        world.AddIsland(Wall());
+        var player = world.SpawnShip(new Vector2(110, 100), 0f, ShipStats.Sloop, PlayerId); // behind the wall
+        player.IsAnchored = true;
+        player.Health = 1e6f;
+        var (hunter, behavior) = SpawnHunter(world, new Vector2(91, 100), 0f); // bow pointed straight at it
+
+        var closest = float.MaxValue;
+        for (var t = 0; t < SimConstants.TickRate * 20; t++)
+        {
+            world.Step();
+            Assert.False(Touching(world, hunter), $"tick {t}: ran onto the island at {hunter.Position}");
+            closest = MathF.Min(closest, Vector2.Distance(hunter.Position, player.Position));
+        }
+
+        Assert.Equal(hunter.Stats.MaxHealth, hunter.Health);
+        Assert.True(closest < 8f, $"never got closer than {closest}");
+        Assert.Equal(HunterState.Hunting, behavior.State);
+    }
+
+    [Fact]
+    public void Hunter_SailsHomeAroundAnIsland()
+    {
+        var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
+        world.AddIsland(Wall());
+        var player = world.SpawnShip(new Vector2(85, 100), 0f, ShipStats.Sloop, PlayerId);
+        player.IsAnchored = true;
+        // Home is on the far side of the wall from where the pirate finds itself.
+        var (hunter, behavior) = SpawnHunter(world, new Vector2(90, 100), 0f, home: new Vector2(110, 100));
+        world.Step();
+        Assert.Equal(HunterState.Hunting, behavior.State);
+        player.Position = new Vector2(20, 20); // target gets away: leash
+        var guarding = false;
+
+        for (var t = 0; t < SimConstants.TickRate * 30 && !guarding; t++)
+        {
+            world.Step();
+            Assert.False(Touching(world, hunter), $"tick {t}: ran onto the island at {hunter.Position}");
+            guarding = behavior.State == HunterState.Guarding;
+        }
+
+        Assert.True(guarding, $"never made it home; at {hunter.Position}, state {behavior.State}");
+        Assert.True(Vector2.Distance(hunter.Position, behavior.Home) < 4f);
+    }
+
+    [Fact]
+    public void Hunter_HoldsFireWhenLandIsInTheWay()
+    {
+        var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
+        world.AddIsland(new Island(1, new[] { new Vector2(98, 102), new Vector2(102, 102), new Vector2(102, 103), new Vector2(98, 103) }));
+        world.SpawnShip(new Vector2(100, 106), 0f, ShipStats.Sloop, PlayerId); // abeam, but behind a strip of land
+        SpawnHunter(world, new Vector2(100, 99), 0f);
+
+        world.Step();
+
+        Assert.Empty(world.Projectiles);
+    }
 }

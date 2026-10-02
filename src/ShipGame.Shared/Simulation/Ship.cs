@@ -59,6 +59,9 @@ public sealed class Ship
         RecalculateStats();
     }
 
+    /// <summary>Number of modifiers from <paramref name="source"/>, e.g. levels bought of an upgrade.</summary>
+    public int ModifierCount(string source) => _modifiers.CountSource(source);
+
     public void RemoveModifiers(string source)
     {
         if (_modifiers.RemoveSource(source) > 0)
@@ -75,6 +78,9 @@ public sealed class Ship
         var gained = Stats.MaxHealth - oldMaxHealth;
         Health = Math.Clamp(Health + MathF.Max(0f, gained), 0f, Stats.MaxHealth);
     }
+
+    /// <summary>Whether the hull was against a shore last tick. Grounding only hurts on first contact.</summary>
+    public bool IsAground { get; set; }
 
     /// <summary>Id of the ship that last damaged this one, for kill credit.</summary>
     public int? LastHitByShipId { get; set; }
@@ -110,8 +116,37 @@ public sealed class Ship
     /// <summary>AI controller for NPC ships; null for player ships and inert hulks.</summary>
     public INpcBehavior? Behavior { get; set; }
 
-    /// <summary>Anchored ships hold station against the wind.</summary>
-    public bool IsAnchored { get; set; }
+    /// <summary>Anchor state; change it through <see cref="Anchoring"/>. Anchored ships can't move, turn, or drift.</summary>
+    public AnchorState Anchor { get; set; }
+
+    public int AnchorRaiseTicksRemaining { get; set; }
+
+    /// <summary>
+    /// True while the anchor is down or being raised. Setting it drops or weighs the anchor instantly, which
+    /// NPCs and setup code use; players go through <see cref="Anchoring.Toggle"/> and its slow haul.
+    /// </summary>
+    public bool IsAnchored
+    {
+        get => Anchor != AnchorState.Weighed;
+        set
+        {
+            if (value)
+                Anchoring.Drop(this);
+            else
+                Anchoring.Weigh(this);
+        }
+    }
+
+    /// <summary>The island this ship is part-way through plundering, if any.</summary>
+    public int? PlunderIslandId { get; set; }
+
+    public int PlunderTicks { get; set; }
+
+    /// <summary>
+    /// The shipyard island this player chose to plunder (rather than shop at) this anchorage. Shipyards only
+    /// plunder on request; cleared when the anchor comes up.
+    /// </summary>
+    public int? PlunderConsentIslandId { get; set; }
 
     /// <summary>Manual helm: -1 port, 0 amidships, +1 starboard. Only steers when there's no move order.</summary>
     public int Rudder { get; set; }

@@ -61,6 +61,12 @@ public sealed class HunterBehavior : INpcBehavior
 
     private Ship? _target;
 
+    // Which way we last swerved around land; see Navigation.ChooseHeading.
+    private int _avoidSide;
+
+    // Close enough to home to drop anchor.
+    private const float HomeArrivalDistance = 2f;
+
     public HunterBehavior(Vector2 home)
     {
         Home = home;
@@ -84,9 +90,7 @@ public sealed class HunterBehavior : INpcBehavior
                 Hunt(world, ship);
                 break;
             case HunterState.Returning:
-                // Autopilot clears the move order on arrival (and takes in sail): back on station.
-                if (ship.MoveTarget is null)
-                    StartGuarding(ship);
+                SailHome(world, ship);
                 break;
         }
     }
@@ -118,10 +122,34 @@ public sealed class HunterBehavior : INpcBehavior
     {
         State = HunterState.Returning;
         _target = null;
-        ship.Rudder = 0;
+        ship.MoveTarget = null;
         ship.Throttle = ChaseThrottle;
-        ship.MoveTarget = Home;
-        ship.IsHoldingCourse = false;
+    }
+
+    /// <summary>
+    /// Steers home by hand rather than autopilot, so the trip goes round islands. Takes in sail once the
+    /// drift will carry it the rest of the way, and anchors on arrival.
+    /// </summary>
+    private void SailHome(World world, Ship ship)
+    {
+        var toHome = Home - ship.Position;
+        var distance = toHome.Length();
+        if (distance <= HomeArrivalDistance)
+        {
+            StartGuarding(ship);
+            return;
+        }
+
+        ship.Throttle = ship.Stats.StoppingDistance(ship.Speed) >= distance - HomeArrivalDistance / 2f ? 0 : ChaseThrottle;
+        Steer(world, ship, MathF.Atan2(toHome.Y, toHome.X));
+    }
+
+    /// <summary>Puts the helm over toward <paramref name="desiredHeading"/>, or the nearest heading clear of land.</summary>
+    private void Steer(World world, Ship ship, float desiredHeading)
+    {
+        var heading = Navigation.ChooseHeading(world, ship, desiredHeading, ref _avoidSide);
+        var headingError = Angles.Delta(ship.Heading, heading);
+        ship.Rudder = MathF.Abs(headingError) < HeadingDeadband ? 0 : MathF.Sign(headingError);
     }
 
     private void Hunt(World world, Ship ship)
@@ -174,8 +202,7 @@ public sealed class HunterBehavior : INpcBehavior
             desiredHeading = bearing - _side * offAbeam;
         }
 
-        var headingError = Angles.Delta(ship.Heading, desiredHeading);
-        ship.Rudder = MathF.Abs(headingError) < HeadingDeadband ? 0 : MathF.Sign(headingError);
+        Steer(world, ship, desiredHeading);
 
         FireIfBearing(world, ship, target, distance);
     }
@@ -184,14 +211,15 @@ public sealed class HunterBehavior : INpcBehavior
     {
         // Cannonballs carry the firing ship's motion, so what matters is the target's motion relative to us
         // over the shot's flight time.
-        var flightSeconds = distance / BroadsideVolley.ProjectileSpeed;
+        var flightSeconds = distance / BroadsideVolley.ProjectileSpeedFor(ship);
         var predicted = target.Position + (target.Velocity - ship.Velocity) * flightSeconds;
 
         for (var slot = 0; slot < Ship.AbilitySlotCount; slot++)
         {
             var ability = ship.Abilities[slot];
             if (ability is { IsReady: true, Definition: BroadsideVolley volley }
-                && volley.Covers(ship, predicted, target.Stats.Radius * AimTightness))
+                && volley.Covers(ship, predicted, target.Stats.Radius * AimTightness)
+                && !Navigation.LineBlockedByLand(world, ship.Position, predicted))
             {
                 world.TryCastAbility(ship, (AbilitySlot)slot, target.Position);
             }

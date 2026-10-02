@@ -14,6 +14,15 @@ public sealed record MoveCommand(int PlayerId, Vector2 Target) : Command(PlayerI
 /// <summary>All stop: cancels any move order and furls the sails.</summary>
 public sealed record StopCommand(int PlayerId) : Command(PlayerId);
 
+/// <summary>Drops the anchor if it's up; starts the slow haul to raise it if it's down.</summary>
+public sealed record ToggleAnchorCommand(int PlayerId) : Command(PlayerId);
+
+/// <summary>At a shipyard: plunder the island instead of trading (shipyards don't plunder unless asked).</summary>
+public sealed record ChoosePlunderCommand(int PlayerId) : Command(PlayerId);
+
+/// <summary>At a shipyard: buy the next level of an upgrade from <c>UpgradeCatalog</c>.</summary>
+public sealed record PurchaseUpgradeCommand(int PlayerId, string UpgradeId) : Command(PlayerId);
+
 /// <summary>
 /// Sets the helm: -1 hard to port, 0 amidships, +1 hard to starboard. Sent when the input changes rather than
 /// every frame. Putting the helm over takes manual control, cancelling any move order.

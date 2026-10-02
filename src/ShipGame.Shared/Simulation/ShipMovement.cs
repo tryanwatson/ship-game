@@ -37,6 +37,14 @@ public static class ShipMovement
 
     public static void Step(Ship ship, float dt, Vector2 wind)
     {
+        if (ship.IsAnchored)
+        {
+            // Held fast: no way, no turning, no drift.
+            ship.Speed = 0f;
+            ship.WindDrift = Vector2.Zero;
+            return;
+        }
+
         var stats = ship.Stats;
         var desiredSpeed = 0f;
         var headingError = 0f;
@@ -106,7 +114,7 @@ public static class ShipMovement
         }
 
         // A ship that isn't making way is set downwind; under way, the sails and keel hold her course.
-        var exposure = ship.IsAnchored ? 0f : 1f - MathF.Min(1f, ship.Speed / WindDriftCutoffSpeed);
+        var exposure = 1f - MathF.Min(1f, ship.Speed / WindDriftCutoffSpeed);
         var targetDrift = wind * exposure;
         ship.WindDrift += (targetDrift - ship.WindDrift) * MathF.Min(1f, dt / WindDriftResponseTime);
 
