@@ -27,6 +27,7 @@ public sealed class GameClient : Game
     private readonly bool _hosting;
     private readonly bool _hostFriendlyFire;
     private readonly NetworkConditions _conditions;
+    private readonly string? _connectPassword;
     private HostedServer? _hostedServer;
     private ClientSettings _settings = new();
 
@@ -42,8 +43,10 @@ public sealed class GameClient : Game
 
     // While right mouse is held, re-issue the move order once the cursor drifts this far (world units). Kept small:
     // with the camera following the ship the target rides along ahead of it, and coarse jumps in the target made
-    // the glide-in speed limit sawtooth. If this gets chatty over the network, rate-limit it there.
+    // the glide-in speed limit sawtooth. At most once per simulation tick, though: the world only acts on the last
+    // order each tick, and the server drops players who send faster than GameServer.MessagesPerSecond.
     private const float DragReissueDistance = 0.1f;
+    private double _sinceMoveOrder;
 
     private readonly GraphicsDeviceManager _graphics;
     private readonly InputState _input = new();
@@ -97,9 +100,11 @@ public sealed class GameClient : Game
     /// <param name="host">Run a server in this process on <paramref name="connectPort"/> and join it.</param>
     /// <param name="friendlyFire">When hosting: whether players' shots hurt each other.</param>
     /// <param name="conditions">Simulated lag and loss for online games, for testing.</param>
+    /// <param name="password">Password for <paramref name="connectHost"/>, if it has one.</param>
     public GameClient(string? connectHost = null, int connectPort = Protocol.DefaultPort, bool host = false, bool friendlyFire = true,
-        NetworkConditions? conditions = null)
+        NetworkConditions? conditions = null, string? password = null)
     {
+        _connectPassword = password;
         _conditions = conditions ?? new NetworkConditions();
         _hostFriendlyFire = friendlyFire;
         _connectHost = connectHost;
@@ -131,12 +136,13 @@ public sealed class GameClient : Game
 
         _settings = ClientSettings.Load();
         _menu.Address = _settings.LastAddress;
+        _menu.Password = _settings.LastPassword;
         _menu.FriendlyFire = _settings.HostFriendlyFire;
 
         if (_hosting)
             StartHosting(_hostFriendlyFire);
         else if (_connectHost is not null)
-            Join(new ServerAddress(_connectHost, _connectPort));
+            Join(new ServerAddress(_connectHost, _connectPort), _connectPassword);
         else
             OpenMenu();
     }
@@ -174,10 +180,10 @@ public sealed class GameClient : Game
         Join(new ServerAddress("127.0.0.1", _hostedServer.Port));
     }
 
-    private void Join(ServerAddress address)
+    private void Join(ServerAddress address, string? password = null)
     {
         _menu.Close();
-        _session = new NetworkGameSession(address.Host, address.Port, _conditions);
+        _session = new NetworkGameSession(address.Host, address.Port, _conditions, password);
         ResetControls();
     }
 
@@ -321,7 +327,7 @@ public sealed class GameClient : Game
                 break;
             case MenuAction.Join when _menu.ParsedAddress is { } address:
                 SaveSettings();
-                Join(address);
+                Join(address, _menu.Password);
                 break;
             case MenuAction.Quit:
                 SaveSettings();
@@ -333,6 +339,7 @@ public sealed class GameClient : Game
     private void SaveSettings()
     {
         _settings.LastAddress = _menu.Address.Trim();
+        _settings.LastPassword = _menu.Password;
         _settings.HostFriendlyFire = _menu.FriendlyFire;
         _settings.Save();
     }
@@ -369,6 +376,7 @@ public sealed class GameClient : Game
 
     private void HandleOrders(double dt)
     {
+        _sinceMoveOrder += dt;
         UpdateAnchorKey(dt);
 
         if (_input.WasKeyPressed(Keys.M))
@@ -423,11 +431,13 @@ public sealed class GameClient : Game
         if (!GraphicsDevice.Viewport.Bounds.Contains(_input.Mouse.Position))
             return;
 
-        var dragged = _input.IsRightMouseDown && NVector2.Distance(mouseWorld, _lastMoveOrder) > DragReissueDistance;
+        var dragged = _input.IsRightMouseDown && _sinceMoveOrder >= SimConstants.TickDelta
+                      && NVector2.Distance(mouseWorld, _lastMoveOrder) > DragReissueDistance;
         if (_input.WasRightMousePressed || dragged)
         {
             _session.Send(new MoveCommand(LocalPlayerId, mouseWorld));
             _lastMoveOrder = mouseWorld;
+            _sinceMoveOrder = 0;
         }
     }
 

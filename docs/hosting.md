@@ -14,8 +14,14 @@ hand out new client builds together. An outdated client is refused with "VERSION
 |----------------------|-----------------------------|---------|
 | `--port N`           | `SHIPGAME_PORT`             | `7777`  |
 | `--no-friendly-fire` | `SHIPGAME_FRIENDLY_FIRE=false` | on   |
+| `--password P`       | `SHIPGAME_PASSWORD`         | none    |
 
 Arguments override environment variables. A bad value stops the server with exit code 2 and a usage message.
+
+**Set a password** on any server with a public address. Without one, anyone who finds the IP can join. Players
+enter it on the Join Game screen, or pass `--password P` with `--connect`. It travels unencrypted and only keeps
+strangers out; it doesn't make the server secure. Each player is also limited to 60 commands a second (bursts of
+120). Normal play stays far below that, and anything over it is dropped and logged.
 
 ## A VPS with Docker (recommended)
 
@@ -105,4 +111,5 @@ Open UDP 7777 in the provider's firewall and in `ufw allow 7777/udp` if ufw is o
 - **"COULD NOT REACH SERVER" / "CONNECTION TIMED OUT"**: UDP 7777 isn't getting through. Check the provider
   firewall rule is UDP, not TCP, and that `docker compose ps` shows `0.0.0.0:7777->7777/udp`.
 - **"VERSION MISMATCH"**: the client and server were built from different protocol versions.
+- **"WRONG PASSWORD"**: the server has `SHIPGAME_PASSWORD` set and the player gave a different one, or none.
 - **"RUN IN PROGRESS"**: players can't join mid-run. Wait for the run to end and the server to return to the lobby.

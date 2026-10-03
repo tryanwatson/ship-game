@@ -9,6 +9,8 @@ services:
     environment:
       SHIPGAME_PORT: "7777"
       SHIPGAME_FRIENDLY_FIRE: "true"
+      # Strongly recommended on a public server. Or put it in a .env file next to this one: SHIPGAME_PASSWORD=...
+      SHIPGAME_PASSWORD: "${SHIPGAME_PASSWORD:-}"
     stop_grace_period: 10s
     logging:
       driver: json-file

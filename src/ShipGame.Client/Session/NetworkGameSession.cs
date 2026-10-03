@@ -9,11 +9,11 @@ namespace ShipGame.Client.Session;
 /// <summary>Online play: the world is a mirror of the server's, and commands go over the wire.</summary>
 public sealed class NetworkGameSession : IGameSession, IDisposable
 {
-    public NetworkGameSession(string host, int port, NetworkConditions? conditions = null)
+    public NetworkGameSession(string host, int port, NetworkConditions? conditions = null, string? password = null)
     {
         Host = host;
         Port = port;
-        Connection = new ClientConnection(host, port, conditions);
+        Connection = new ClientConnection(host, port, conditions, password);
     }
 
     public string Host { get; }

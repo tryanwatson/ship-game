@@ -17,9 +17,10 @@ public enum MenuAction
 }
 
 /// <summary>
-/// The title menu: play solo, host, or join a server by address. Arrow keys and Enter or the mouse; Esc backs out
-/// (and quits from the top page). Typing goes through <see cref="OnTextInput"/> so keyboard layouts and key repeat
-/// behave. <see cref="Message"/> shows why we're back here (refused, dropped, couldn't host).
+/// The title menu: play solo, host, or join a server by address (and password, if it has one). Arrow keys and
+/// Enter or the mouse; Tab or Up/Down move between the join page's fields; Esc backs out (and quits from the top
+/// page). Typing goes through <see cref="OnTextInput"/> so keyboard layouts and key repeat behave.
+/// <see cref="Message"/> shows why we're back here (refused, dropped, couldn't host).
 /// </summary>
 public sealed class MainMenu
 {
@@ -40,13 +41,20 @@ public sealed class MainMenu
         Back,
     }
 
+    private enum Field
+    {
+        Address,
+        Password,
+    }
+
     private sealed record Button(Rectangle Bounds, string Label, Item Item);
 
     private const int MinPanelWidth = 520;
     private const int Padding = 24;
     private const int ButtonHeight = 40;
     private const int ButtonGap = 12;
-    private const int MaxAddressLength = 64;
+    private const int LabelGap = 10;
+    private const int MaxFieldLength = 64;
     private const float TitleScale = 6f;
     private const float LabelScale = 2f;
     private const float SmallScale = 1.5f;
@@ -68,6 +76,7 @@ public sealed class MainMenu
     private readonly PrimitiveBatch _batch;
     private Page _page;
     private int _selected;
+    private Field _focus;
     private double _blink;
 
     public MainMenu(PrimitiveBatch batch)
@@ -79,6 +88,9 @@ public sealed class MainMenu
 
     /// <summary>The server address being typed on the join page.</summary>
     public string Address { get; set; } = "";
+
+    /// <summary>The server's password, if it has one; blank otherwise.</summary>
+    public string Password { get; set; } = "";
 
     /// <summary>Whether a game hosted from here has friendly fire on.</summary>
     public bool FriendlyFire { get; set; } = true;
@@ -95,6 +107,7 @@ public sealed class MainMenu
         Message = message;
         _page = onJoinPage ? Page.Join : Page.Main;
         _selected = 0;
+        _focus = onJoinPage && message == "WRONG PASSWORD" ? Field.Password : Field.Address;
     }
 
     public void Close() => IsOpen = false;
@@ -103,19 +116,27 @@ public sealed class MainMenu
     {
         if (!IsOpen || _page != Page.Join)
             return;
+
+        var text = _focus == Field.Address ? Address : Password;
         if (key == Keys.Back)
         {
-            if (Address.Length > 0)
-                Address = Address[..^1];
+            if (text.Length == 0)
+                return;
+            text = text[..^1];
         }
-        else if (Address.Length < MaxAddressLength && (char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or ':' or '[' or ']'))
+        else if (text.Length < MaxFieldLength && Accepts(_focus, character))
         {
-            Address += character;
+            text += character;
         }
         else
         {
             return;
         }
+
+        if (_focus == Field.Address)
+            Address = text;
+        else
+            Password = text;
         _blink = 0;
         _selected = 0; // Enter joins
         Message = null;
@@ -141,14 +162,18 @@ public sealed class MainMenu
             if (input.WasKeyPressed(Keys.Down))
                 _selected = (_selected + 1) % items.Length;
         }
-        else if (input.WasKeyPressed(Keys.Left) || input.WasKeyPressed(Keys.Right))
+        else
         {
-            _selected = 1 - _selected;
+            if (input.WasKeyPressed(Keys.Tab) || input.WasKeyPressed(Keys.Up) || input.WasKeyPressed(Keys.Down))
+                Focus(_focus == Field.Address ? Field.Password : Field.Address);
+            if (input.WasKeyPressed(Keys.Left) || input.WasKeyPressed(Keys.Right))
+                _selected = 1 - _selected;
         }
 
         var mouse = hud.FromScreen(input.Mouse.Position);
         var moved = input.Mouse.Position != input.PreviousMouse.Position;
-        foreach (var button in Layout(hud, out _, out _))
+        var buttons = Layout(hud, out _, out var addressField, out var passwordField);
+        foreach (var button in buttons)
         {
             if (!button.Bounds.Contains(mouse))
                 continue;
@@ -156,6 +181,13 @@ public sealed class MainMenu
                 _selected = Array.IndexOf(items, button.Item);
             if (input.WasLeftMousePressed)
                 return Activate(button.Item);
+        }
+        if (_page == Page.Join && input.WasLeftMousePressed)
+        {
+            if (addressField.Contains(mouse))
+                Focus(Field.Address);
+            else if (passwordField.Contains(mouse))
+                Focus(Field.Password);
         }
 
         if (input.WasKeyPressed(Keys.Enter))
@@ -166,7 +198,7 @@ public sealed class MainMenu
     public void Draw(HudView hud)
     {
         _batch.Begin(hud.Transform);
-        var buttons = Layout(hud, out var panel, out var field);
+        var buttons = Layout(hud, out var panel, out var addressField, out var passwordField);
 
         FillRect(panel, PanelBack);
         OutlineRect(panel, PanelBorder);
@@ -177,34 +209,25 @@ public sealed class MainMenu
 
         if (Message is not null)
             DrawCentered(Message, panel, y, LabelScale, Error);
-        y += PixelFont.Height(LabelScale) + Padding;
 
         if (_page == Page.Join)
         {
-            PixelFont.Draw(_batch, "SERVER ADDRESS", new Vector2(field.X, y), LabelScale, Muted);
-            FillRect(field, FieldBack);
-            OutlineRect(field, ButtonBorder);
-            // Long addresses scroll: show the end, where the typing is.
-            var visible = Address;
-            while (visible.Length > 0 && PixelFont.Measure(visible, LabelScale) > field.Width - 28)
-                visible = visible[1..];
-            var textTop = field.Center.Y - PixelFont.Height(LabelScale) / 2f;
-            PixelFont.Draw(_batch, visible, new Vector2(field.X + 10, textTop), LabelScale, Text);
-            if (_blink % 1.0 < 0.6)
-            {
-                var caretX = field.X + 10 + PixelFont.Measure(visible, LabelScale) + (visible.Length > 0 ? 4 : 0);
-                FillRect(new Rectangle((int)caretX, (int)textTop, 3, (int)PixelFont.Height(LabelScale)), Text);
-            }
+            DrawField("SERVER ADDRESS", Address, addressField, _focus == Field.Address);
+            DrawField("PASSWORD - BLANK IF NONE", new string('*', Password.Length), passwordField, _focus == Field.Password);
         }
 
         for (var i = 0; i < buttons.Count; i++)
             DrawButton(buttons[i], i == _selected);
 
-        var hint = _page == Page.Main ? "ARROWS AND ENTER OR CLICK" : "HOST OR HOST:PORT  -  ESC TO GO BACK";
+        var hint = _page == Page.Main ? "ARROWS AND ENTER OR CLICK" : "TAB SWITCHES FIELD  -  ESC TO GO BACK";
         DrawCentered(hint, panel, panel.Bottom - Padding - PixelFont.Height(SmallScale), SmallScale, Muted);
 
         _batch.Flush();
     }
+
+    private static bool Accepts(Field field, char character) => field == Field.Address
+        ? char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or ':' or '[' or ']'
+        : character is >= ' ' and <= '~';
 
     private MenuAction Activate(Item item)
     {
@@ -227,6 +250,7 @@ public sealed class MainMenu
                 if (ParsedAddress is not null)
                     return MenuAction.Join;
                 Message = Address.Trim().Length == 0 ? "TYPE A SERVER ADDRESS" : "NOT A VALID ADDRESS";
+                Focus(Field.Address);
                 return MenuAction.None;
             default:
                 GoTo(Page.Main, Array.IndexOf(MainItems, Item.Join));
@@ -238,6 +262,13 @@ public sealed class MainMenu
     {
         _page = page;
         _selected = selected;
+        _focus = Field.Address;
+        _blink = 0;
+    }
+
+    private void Focus(Field field)
+    {
+        _focus = field;
         _blink = 0;
     }
 
@@ -252,20 +283,23 @@ public sealed class MainMenu
         _ => "BACK",
     };
 
-    /// <summary>The panel, the address field (join page only), and the buttons. Shared by drawing and input.</summary>
-    private List<Button> Layout(HudView hud, out Rectangle panel, out Rectangle field)
+    /// <summary>
+    /// The panel, the join page's two text fields (empty on the main page), and the buttons. Shared by drawing and
+    /// input. Each field's label sits just above it.
+    /// </summary>
+    private List<Button> Layout(HudView hud, out Rectangle panel, out Rectangle addressField, out Rectangle passwordField)
     {
         var viewport = hud.Viewport;
         var width = (int)MathF.Max(MinPanelWidth, PixelFont.Measure(Message ?? "", LabelScale) + Padding * 2);
         var inner = width - Padding * 2;
-        var header = Padding + (int)PixelFont.Height(TitleScale) + Padding + (int)PixelFont.Height(LabelScale) + Padding;
+        var labelHeight = (int)PixelFont.Height(LabelScale);
+        var header = Padding + (int)PixelFont.Height(TitleScale) + Padding + labelHeight + Padding;
         var footer = Padding + (int)PixelFont.Height(SmallScale) + Padding;
+        var fieldBlock = labelHeight + LabelGap + ButtonHeight;
 
-        int body;
-        if (_page == Page.Main)
-            body = MainItems.Length * (ButtonHeight + ButtonGap) - ButtonGap;
-        else
-            body = (int)PixelFont.Height(LabelScale) + 10 + ButtonHeight + Padding + ButtonHeight;
+        var body = _page == Page.Main
+            ? MainItems.Length * (ButtonHeight + ButtonGap) - ButtonGap
+            : fieldBlock + Padding + fieldBlock + Padding + ButtonHeight;
 
         var height = header + body + footer;
         panel = new Rectangle((viewport.Width - width) / 2, (viewport.Height - height) / 2, width, height);
@@ -275,18 +309,39 @@ public sealed class MainMenu
         var buttons = new List<Button>();
         if (_page == Page.Main)
         {
-            field = Rectangle.Empty;
+            addressField = passwordField = Rectangle.Empty;
             for (var i = 0; i < MainItems.Length; i++)
                 buttons.Add(new Button(new Rectangle(left, top + i * (ButtonHeight + ButtonGap), inner, ButtonHeight), LabelFor(MainItems[i]), MainItems[i]));
             return buttons;
         }
 
-        field = new Rectangle(left, top + (int)PixelFont.Height(LabelScale) + 10, inner, ButtonHeight);
-        var buttonTop = field.Bottom + Padding;
+        addressField = new Rectangle(left, top + labelHeight + LabelGap, inner, ButtonHeight);
+        passwordField = new Rectangle(left, addressField.Bottom + Padding + labelHeight + LabelGap, inner, ButtonHeight);
+        var buttonTop = passwordField.Bottom + Padding;
         var half = (inner - ButtonGap) / 2;
         buttons.Add(new Button(new Rectangle(left, buttonTop, half, ButtonHeight), LabelFor(Item.Connect), Item.Connect));
         buttons.Add(new Button(new Rectangle(left + half + ButtonGap, buttonTop, half, ButtonHeight), LabelFor(Item.Back), Item.Back));
         return buttons;
+    }
+
+    private void DrawField(string label, string shown, Rectangle field, bool focused)
+    {
+        PixelFont.Draw(_batch, label, new Vector2(field.X, field.Y - LabelGap - PixelFont.Height(LabelScale)), LabelScale, Muted);
+        FillRect(field, FieldBack);
+        OutlineRect(field, focused ? Title : ButtonBorder);
+
+        // Long text scrolls: show the end, where the typing is.
+        var visible = shown;
+        while (visible.Length > 0 && PixelFont.Measure(visible, LabelScale) > field.Width - 28)
+            visible = visible[1..];
+        var textTop = field.Center.Y - PixelFont.Height(LabelScale) / 2f;
+        PixelFont.Draw(_batch, visible, new Vector2(field.X + 10, textTop), LabelScale, Text);
+
+        if (focused && _blink % 1.0 < 0.6)
+        {
+            var caretX = field.X + 10 + PixelFont.Measure(visible, LabelScale) + (visible.Length > 0 ? 4 : 0);
+            FillRect(new Rectangle((int)caretX, (int)textTop, 3, (int)PixelFont.Height(LabelScale)), Text);
+        }
     }
 
     private void DrawCentered(string text, Rectangle panel, float y, float scale, Color color) =>

@@ -17,7 +17,7 @@ Download the zip for your system from [Releases](https://github.com/tryanwatson/
 - **Linux**: `./ShipGame/ShipGame.Client`.
 
 From the menu: **Play Solo**, **Host Game** (others join you on UDP port 7777, which your router has to forward
-for internet play), or **Join Game** and type the server's address (`host` or `host:port`). Everyone in the lobby
+for internet play), or **Join Game** and type the server's address (`host` or `host:port`) and its password, if it has one. Everyone in the lobby
 presses **Enter** to ready up, and the run starts when the whole crew is ready. Players can't join a run already in
 progress.
 
@@ -46,8 +46,9 @@ dotnet tool restore
 dotnet test ShipGame.slnx
 dotnet run --project src/ShipGame.Client                          # menu
 dotnet run --project src/ShipGame.Client -- --host [port]         # host straight away
-dotnet run --project src/ShipGame.Client -- --connect host[:port] # join straight away
-dotnet run --project src/ShipGame.Server -- [--port 7777] [--no-friendly-fire]
+dotnet run --project src/ShipGame.Client -- --connect host[:port] [--password P] # join straight away
+dotnet run --project src/ShipGame.Client -- --connect host --lag 150 --jitter 30 --loss 5  # test on a bad network
+dotnet run --project src/ShipGame.Server -- [--port 7777] [--no-friendly-fire] [--password P]
 ```
 
 | Project | |

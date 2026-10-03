@@ -52,7 +52,17 @@ public class ServerOptionsTests
         Assert.Equal(ServerOptions.Default, options);
     }
 
+    [Fact]
+    public void Password_FromEnvironmentOrArgument_BlankMeansNone()
+    {
+        Assert.Null(Parse([]).Password);
+        Assert.Equal("hunter2", Parse([], ("SHIPGAME_PASSWORD", "hunter2")).Password);
+        Assert.Equal("arg", Parse(["--password", "arg"], ("SHIPGAME_PASSWORD", "env")).Password);
+        Assert.Null(Parse(["--password", ""], ("SHIPGAME_PASSWORD", "env")).Password);
+    }
+
     [Theory]
+    [InlineData("--password")]
     [InlineData("--port")]
     [InlineData("--port", "abc")]
     [InlineData("--port", "70000")]

@@ -15,6 +15,9 @@ public sealed class ClientSettings
     /// <summary>The server last joined from the menu, as typed.</summary>
     public string LastAddress { get; set; } = "";
 
+    /// <summary>The password given for <see cref="LastAddress"/> (a game server's shared password, kept in plain text).</summary>
+    public string LastPassword { get; set; } = "";
+
     /// <summary>Whether to host with friendly fire on.</summary>
     public bool HostFriendlyFire { get; set; } = true;
 

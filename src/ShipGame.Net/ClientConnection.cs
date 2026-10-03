@@ -40,7 +40,8 @@ public sealed class ClientConnection : IDisposable
     private double _lastReliableIn;
     private double _lastReliableOut;
 
-    public ClientConnection(string host, int port, NetworkConditions? conditions = null)
+    /// <param name="password">The server's password, if it has one.</param>
+    public ClientConnection(string host, int port, NetworkConditions? conditions = null, string? password = null)
     {
         _conditions = conditions is { IsPerfect: false } ? conditions : null;
         _net = new NetManager(_listener) { DisconnectTimeout = 10_000 };
@@ -52,6 +53,7 @@ public sealed class ClientConnection : IDisposable
         var hello = new NetDataWriter();
         hello.Put(Protocol.Key);
         hello.Put(Protocol.Version);
+        hello.Put(password ?? "");
         _net.Connect(host, port, hello);
     }
 

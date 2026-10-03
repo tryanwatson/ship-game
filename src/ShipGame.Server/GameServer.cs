@@ -1,4 +1,6 @@
 using System.Numerics;
+using System.Security.Cryptography;
+using System.Text;
 using LiteNetLib;
 using LiteNetLib.Utils;
 using ShipGame.Net;
@@ -22,9 +24,20 @@ public sealed class GameServer : IDisposable
         public required NetPeer Peer { get; init; }
         public required int PlayerId { get; init; }
         public bool Ready { get; set; }
+
+        /// <summary>Messages this player may still send right now; refills every tick (a token bucket).</summary>
+        public float MessageBudget { get; set; } = MessageBurst;
+
+        public int DroppedMessages { get; set; }
     }
 
     private const float StartSpacing = 6f;
+
+    // Rate limit on commands and lobby messages per player: a sustained MessagesPerSecond, bursts up to
+    // MessageBurst. The client sends at most one move order per tick plus key presses, far below this; anything
+    // over it is dropped.
+    public const float MessagesPerSecond = 60f;
+    public const float MessageBurst = 120f;
 
     private readonly EventBasedNetListener _listener = new();
     private readonly NetManager _net;
@@ -32,12 +45,15 @@ public sealed class GameServer : IDisposable
     private readonly Dictionary<int, int> _sentStatsVersions = new();
     private readonly NetDataWriter _writer = new();
     private readonly Action<string> _log;
+    private readonly byte[]? _password;
     private int _nextPlayerId = 1;
     private int _runSeed = Environment.TickCount;
 
-    public GameServer(int port = Protocol.DefaultPort, Action<string>? log = null, bool friendlyFire = true)
+    /// <param name="password">Required to join; null or empty for an open server.</param>
+    public GameServer(int port = Protocol.DefaultPort, Action<string>? log = null, bool friendlyFire = true, string? password = null)
     {
         FriendlyFire = friendlyFire;
+        _password = string.IsNullOrEmpty(password) ? null : Encoding.UTF8.GetBytes(password);
         _log = log ?? (_ => { });
         _net = new NetManager(_listener) { DisconnectTimeout = 10_000 };
         _listener.ConnectionRequestEvent += OnConnectionRequest;
@@ -69,6 +85,8 @@ public sealed class GameServer : IDisposable
     public void Tick()
     {
         _net.PollEvents();
+        foreach (var player in _byPeerId.Values)
+            player.MessageBudget = MathF.Min(MessageBurst, player.MessageBudget + MessagesPerSecond / SimConstants.TickRate);
 
         if (World is null)
         {
@@ -95,6 +113,8 @@ public sealed class GameServer : IDisposable
         {
             if (request.Data.GetString() != Protocol.Key || request.Data.GetInt() != Protocol.Version)
                 refusal = "VERSION MISMATCH - UPDATE YOUR GAME";
+            else if (_password is not null && !PasswordMatches(request.Data.GetString()))
+                refusal = "WRONG PASSWORD";
         }
         catch
         {
@@ -116,6 +136,9 @@ public sealed class GameServer : IDisposable
         request.Reject(reason);
         _log($"Refused {request.RemoteEndPoint}: {refusal}");
     }
+
+    private bool PasswordMatches(string given) =>
+        CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(given), _password);
 
     private void OnPeerConnected(NetPeer peer)
     {
@@ -265,6 +288,15 @@ public sealed class GameServer : IDisposable
         {
             if (!_byPeerId.TryGetValue(peer.Id, out var player))
                 return;
+
+            if (player.MessageBudget < 1f)
+            {
+                // Logged on the first and then every 100th, so a flood can't flood the log too.
+                if (player.DroppedMessages++ % 100 == 0)
+                    _log($"Player {player.PlayerId} is sending too fast; dropped {player.DroppedMessages} message(s) so far");
+                return;
+            }
+            player.MessageBudget -= 1f;
 
             switch ((MessageType)reader.GetByte())
             {

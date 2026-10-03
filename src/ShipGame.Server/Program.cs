@@ -15,8 +15,9 @@ catch (FormatException ex)
     return 2;
 }
 
-using var server = new GameServer(options.Port, message => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}"), options.FriendlyFire);
-Console.WriteLine($"ShipGame server listening on UDP {server.Port} (protocol v{Protocol.Version}), friendly fire {(options.FriendlyFire ? "on" : "off")}. Ctrl+C to stop.");
+using var server = new GameServer(options.Port, message => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}"), options.FriendlyFire, options.Password);
+Console.WriteLine($"ShipGame server listening on UDP {server.Port} (protocol v{Protocol.Version}), friendly fire {(options.FriendlyFire ? "on" : "off")}, " +
+                  $"{(options.Password is null ? "no password" : "password required")}. Ctrl+C to stop.");
 
 // Ctrl+C, and SIGTERM from `docker stop` or systemd: finish the current tick, then say goodbye to everyone.
 using var stop = new CancellationTokenSource();
