@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Simulation;
 
@@ -11,6 +12,7 @@ public sealed class LocalGameSession : IGameSession
     private const double MaxFrameSeconds = 0.25;
 
     private double _accumulator;
+    private readonly List<WorldEvent> _events = new();
 
     public LocalGameSession(World world, int localPlayerId)
     {
@@ -26,12 +28,20 @@ public sealed class LocalGameSession : IGameSession
 
     public void Send(Command command) => World.Enqueue(command);
 
+    public IReadOnlyList<WorldEvent> TakeEvents()
+    {
+        var taken = _events.ToArray();
+        _events.Clear();
+        return taken;
+    }
+
     public void Update(double elapsedSeconds)
     {
         _accumulator += Math.Min(elapsedSeconds, MaxFrameSeconds);
         while (_accumulator >= SimConstants.TickDelta)
         {
             World.Step();
+            _events.AddRange(World.DrainEvents());
             _accumulator -= SimConstants.TickDelta;
         }
     }

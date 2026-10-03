@@ -68,8 +68,12 @@ public sealed class Ship
             RecalculateStats();
     }
 
+    /// <summary>Bumped whenever <see cref="Stats"/> changes, so replication can tell when to resend modifiers.</summary>
+    public int StatsVersion { get; private set; }
+
     private void RecalculateStats()
     {
+        StatsVersion++;
         var oldMaxHealth = Stats.MaxHealth;
         Stats = _modifiers.Apply(BaseStats);
 
@@ -113,8 +117,11 @@ public sealed class Ship
     /// <summary>Sideways set from the wind, separate from <see cref="Speed"/> (which is always bow-first).</summary>
     public Vector2 WindDrift { get; set; }
 
-    /// <summary>AI controller for NPC ships; null for player ships and inert hulks.</summary>
+    /// <summary>AI controller for NPC ships; null for player ships and inert hulks. Server-side only.</summary>
     public INpcBehavior? Behavior { get; set; }
+
+    /// <summary>The NPC's visible stance, kept up to date by its behavior. Replicated; read this, not <see cref="Behavior"/>.</summary>
+    public NpcStance Stance { get; set; }
 
     /// <summary>Anchor state; change it through <see cref="Anchoring"/>. Anchored ships can't move, turn, or drift.</summary>
     public AnchorState Anchor { get; set; }

@@ -17,9 +17,8 @@ public static class KillRewards
         if (killer.OwnerPlayerId is not { } playerId)
             return; // NPC kills earn nothing
 
-        var player = world.GetOrAddPlayer(playerId);
-        player.Gold += Gold;
-        player.Kills++;
+        world.AddGold(playerId, Gold);
+        world.GetOrAddPlayer(playerId).Kills++;
 
         // Gold is the player's; the rest goes to the ship, and a ship that went down in the same exchange stays down.
         if (killer.IsSunk)

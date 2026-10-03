@@ -50,8 +50,9 @@ public static class Plundering
             if (++ship.PlunderTicks < DurationTicks)
                 continue;
 
-            world.GetOrAddPlayer(playerId).Gold += island.PlunderGold;
+            world.AddGold(playerId, island.PlunderGold);
             world.StartPlunderCooldown(island, CooldownTicks);
+            world.Emit(new IslandPlundered(world.Tick, island.Id, playerId, island.PlunderGold, CooldownTicks));
             ship.PlunderConsentIslandId = null;
             ship.PlunderIslandId = null;
             ship.PlunderTicks = 0;

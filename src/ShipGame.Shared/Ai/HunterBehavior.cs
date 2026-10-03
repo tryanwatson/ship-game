@@ -81,6 +81,17 @@ public sealed class HunterBehavior : INpcBehavior
 
     public void Update(World world, Ship ship)
     {
+        UpdateState(world, ship);
+        ship.Stance = State switch
+        {
+            HunterState.Guarding => NpcStance.Guarding,
+            HunterState.Hunting => NpcStance.Hunting,
+            _ => NpcStance.Returning,
+        };
+    }
+
+    private void UpdateState(World world, Ship ship)
+    {
         switch (State)
         {
             case HunterState.Guarding:

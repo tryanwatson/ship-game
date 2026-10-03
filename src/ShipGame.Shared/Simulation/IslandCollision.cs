@@ -14,12 +14,14 @@ public static class IslandCollision
     /// </summary>
     public const float DamagingImpactSpeed = 1f;
 
-    public static void Resolve(Ship ship, IReadOnlyList<Island> islands)
+    /// <summary>Pushes the hull out of any island it overlaps. Returns true if it ran aground hard enough to take damage.</summary>
+    public static bool Resolve(Ship ship, IReadOnlyList<Island> islands)
     {
         var wasAground = ship.IsAground;
+        var damaged = false;
         ship.IsAground = false;
         if (islands.Count == 0)
-            return;
+            return false;
 
         Span<Vector2> hull = stackalloc Vector2[HullShape.PointCount];
         var hullReach = ship.Stats.Length / 2f;
@@ -37,7 +39,10 @@ public static class IslandCollision
             // scraping along a coast with its bow still angled in would otherwise be hit again every tick.
             var impactSpeed = -Vector2.Dot(ship.Velocity, normal);
             if (impactSpeed > DamagingImpactSpeed && !wasAground && !ship.IsAground)
+            {
                 ship.Health = MathF.Max(0f, ship.Health - GroundingDamage);
+                damaged = true;
+            }
             ship.IsAground = true;
 
             // Back out of the land, then lose the part of our way that was driving into it. Ships only move
@@ -51,5 +56,7 @@ public static class IslandCollision
             if (driftInto < 0f)
                 ship.WindDrift -= normal * driftInto;
         }
+
+        return damaged;
     }
 }

@@ -10,6 +10,7 @@ public sealed class PlayerState
 
     public int PlayerId { get; }
 
+    /// <summary>Change through <see cref="Simulation.World.AddGold"/> in game code, so the change is announced.</summary>
     public int Gold { get; set; }
 
     public int Kills { get; set; }

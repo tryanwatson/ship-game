@@ -1,7 +1,6 @@
 using System;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
-using ShipGame.Shared.Ai;
 using ShipGame.Shared.Simulation;
 using NVector2 = System.Numerics.Vector2;
 
@@ -58,7 +57,7 @@ public sealed class OffscreenMarkers
             arrow[1] = baseCenter + side * ArrowHalfWidth;
             arrow[2] = baseCenter - side * ArrowHalfWidth;
 
-            var hostile = ship.Behavior is not HunterBehavior { State: HunterState.Guarding };
+            var hostile = ship.Stance != NpcStance.Guarding;
             _batch.FillConvex(arrow, hostile ? Hostile : Dormant);
         }
 

@@ -62,7 +62,7 @@ public sealed class WorldRenderer
         // Guarding pirates show how close you can get before they come for you.
         foreach (var ship in world.Ships)
         {
-            if (ship.Behavior is HunterBehavior { State: HunterState.Guarding })
+            if (ship.Stance == NpcStance.Guarding)
                 DrawGroundCircle(NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), HunterBehavior.AggroRange, AggroRing);
         }
 

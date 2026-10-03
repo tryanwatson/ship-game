@@ -16,6 +16,7 @@ public sealed class World
     private readonly List<Projectile> _projectiles = new();
     private readonly List<Island> _islands = new();
     private readonly Dictionary<int, int> _plunderCooldowns = new();
+    private readonly List<WorldEvent> _events = new();
     private readonly Queue<Command> _pendingCommands = new();
     private readonly Dictionary<int, PlayerState> _players = new();
     private int _nextEntityId = 1;
@@ -76,6 +77,28 @@ public sealed class World
     /// <summary>Sends pirates in waves when set; null for worlds that place their own ships (tests, sandboxes).</summary>
     public WaveDirector? Waves { get; set; }
 
+    /// <summary>Records an event for <see cref="DrainEvents"/>.</summary>
+    public void Emit(WorldEvent worldEvent) => _events.Add(worldEvent);
+
+    /// <summary>
+    /// Everything that happened since the last call, in order. The owner of the world (the server, or the local
+    /// session) drains after each step; events otherwise accumulate.
+    /// </summary>
+    public IReadOnlyList<WorldEvent> DrainEvents()
+    {
+        var drained = _events.ToArray();
+        _events.Clear();
+        return drained;
+    }
+
+    /// <summary>Changes a player's gold (negative to spend) and announces it.</summary>
+    public void AddGold(int playerId, int delta)
+    {
+        var player = GetOrAddPlayer(playerId);
+        player.Gold += delta;
+        Emit(new GoldChanged(Tick, playerId, player.Gold, delta));
+    }
+
     public PlayerState GetOrAddPlayer(int playerId)
     {
         if (!_players.TryGetValue(playerId, out var player))
@@ -100,6 +123,7 @@ public sealed class World
         _ships.Add(ship);
         if (ownerPlayerId is { } playerId)
             GetOrAddPlayer(playerId);
+        Emit(new ShipSpawned(Tick, ship.Id));
         return ship;
     }
 
@@ -113,6 +137,7 @@ public sealed class World
             RemainingTicks = lifetimeTicks,
         };
         _projectiles.Add(projectile);
+        Emit(new ProjectileSpawned(Tick, projectile.Id, owner.Id, owner.Team, position, velocity, damage, lifetimeTicks));
         return projectile;
     }
 
@@ -156,7 +181,10 @@ public sealed class World
         ShipMovement.ResolveCollisions(_ships);
 
         foreach (var ship in _ships)
-            IslandCollision.Resolve(ship, _islands);
+        {
+            if (IslandCollision.Resolve(ship, _islands))
+                Emit(new ShipGrounded(Tick, ship.Id));
+        }
 
         foreach (var ship in _ships)
             ShipMovement.ClampToBounds(ship, new Vector2(-OutOfBoundsMargin), WorldSize + new Vector2(OutOfBoundsMargin));
@@ -185,6 +213,12 @@ public sealed class World
                 KillRewards.Grant(this, killer);
         }
 
+        foreach (var victim in _ships)
+        {
+            if (victim.IsSunk)
+                Emit(new ShipSunk(Tick, victim.Id, victim.LastHitByShipId));
+        }
+
         _ships.RemoveAll(s => s.IsSunk);
     }
 
@@ -199,6 +233,7 @@ public sealed class World
             if (LineHitsLand(from, projectile.Position, Projectile.Radius))
             {
                 projectile.RemainingTicks = 0;
+                Emit(new ProjectileImpact(Tick, projectile.Id, null));
                 continue;
             }
 
@@ -212,6 +247,7 @@ public sealed class World
                     ship.Health = MathF.Max(0f, ship.Health - projectile.Damage);
                     ship.LastHitByShipId = projectile.OwnerShipId;
                     projectile.RemainingTicks = 0;
+                    Emit(new ProjectileImpact(Tick, projectile.Id, ship.Id));
                     break;
                 }
             }
@@ -235,39 +271,47 @@ public sealed class World
 
     private void Apply(Command command)
     {
+        var reason = TryApply(command);
+        if (reason is { } rejected)
+            Emit(new CommandRejected(Tick, command.PlayerId, command, rejected));
+    }
+
+    /// <summary>Applies a command, or explains why not. Null means it went through.</summary>
+    private RejectionReason? TryApply(Command command)
+    {
         // Commands only ever act on the issuing player's own ship; this is also the server-side ownership check.
         var ship = GetPlayerShip(command.PlayerId);
         if (ship is null)
-            return;
+            return RejectionReason.NoShip;
 
         switch (command)
         {
             case MoveCommand when ship.IsAnchored:
-                break; // held fast: no sailing anywhere until the anchor is up
+                return RejectionReason.Anchored; // held fast: no sailing anywhere until the anchor is up
             case MoveCommand move:
                 ship.MoveTarget = Vector2.Clamp(move.Target, Vector2.Zero, WorldSize);
                 ship.IsHoldingCourse = false;
                 ship.Rudder = 0;
                 if (ship.Throttle == 0)
                     ship.Throttle = ShipMovement.AutopilotThrottle;
-                break;
+                return null;
             case StopCommand:
                 ship.MoveTarget = null;
                 ship.IsHoldingCourse = false;
                 ship.Throttle = 0;
-                break;
+                return null;
             case AdjustThrottleCommand adjust:
                 ship.Throttle = Math.Clamp(ship.Throttle + adjust.Delta, 0, ShipMovement.ThrottleLevels);
-                break;
+                return null;
+            case ToggleAnchorCommand when ship.Anchor == AnchorState.Raising:
+                return RejectionReason.AnchorBusy;
             case ToggleAnchorCommand:
                 Anchoring.Toggle(ship);
-                break;
+                return null;
             case ChoosePlunderCommand:
-                Shipyards.TryChoosePlunder(this, ship);
-                break;
+                return Shipyards.TryChoosePlunder(this, ship);
             case PurchaseUpgradeCommand purchase:
-                Shipyards.TryPurchase(this, ship, purchase.UpgradeId);
-                break;
+                return Shipyards.ToRejection(Shipyards.TryPurchase(this, ship, purchase.UpgradeId));
             case SetRudderCommand rudder:
                 ship.Rudder = Math.Clamp(rudder.Rudder, -1, 1);
                 if (ship.Rudder != 0)
@@ -275,10 +319,11 @@ public sealed class World
                     ship.MoveTarget = null;
                     ship.IsHoldingCourse = false;
                 }
-                break;
+                return null;
             case CastAbilityCommand cast:
-                TryCastAbility(ship, cast.Slot, cast.Target);
-                break;
+                return CastAbility(ship, cast.Slot, cast.Target);
+            default:
+                return null;
         }
     }
 
@@ -286,19 +331,25 @@ public sealed class World
     /// Casts a ship's ability if the slot is filled and off cooldown. The single entry point for both player
     /// commands and NPC behaviors, so both play by the same rules.
     /// </summary>
-    public bool TryCastAbility(Ship ship, AbilitySlot slot, Vector2 target)
+    public bool TryCastAbility(Ship ship, AbilitySlot slot, Vector2 target) => CastAbility(ship, slot, target) is null;
+
+    private RejectionReason? CastAbility(Ship ship, AbilitySlot slot, Vector2 target)
     {
         if (!Enum.IsDefined(slot))
-            return false;
+            return RejectionReason.InvalidSlot;
 
         var ability = ship.GetAbility(slot);
-        if (ability is null || !ability.IsReady)
-            return false;
+        if (ability is null)
+            return RejectionReason.EmptySlot;
+        if (!ability.IsReady)
+            return RejectionReason.OnCooldown;
 
         if (!ability.Definition.Cast(this, ship, target))
-            return false;
+            return RejectionReason.CastFailed;
 
         ability.StartCooldown(ship.Stats.CooldownSpeed);
-        return true;
+        Emit(new AbilityCast(Tick, ship.Id, slot, ability.CooldownDurationTicks));
+        return null;
     }
+
 }

@@ -125,6 +125,7 @@ public sealed class GameClient : Game
         UpdateRudder();
 
         _session.Update(dt);
+        _session.TakeEvents(); // nothing listens yet; drained so they don't pile up (effects and sounds will)
 
         if (IsActive)
             HandleCamera((float)dt);

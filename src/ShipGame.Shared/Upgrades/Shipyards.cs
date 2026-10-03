@@ -59,18 +59,30 @@ public static class Shipyards
         if (player.Gold < cost)
             return PurchaseResult.NotEnoughGold;
 
-        player.Gold -= cost;
+        world.AddGold(playerId, -cost);
         ship.AddModifier(upgrade.Modifier);
+        world.Emit(new UpgradePurchased(world.Tick, ship.Id, upgrade.Id, level + 1));
         return PurchaseResult.Purchased;
     }
 
-    /// <summary>Asks to plunder the shipyard we're anchored at (shipyards don't plunder unless asked).</summary>
-    public static bool TryChoosePlunder(World world, Ship ship)
+    /// <summary>Asks to plunder the shipyard we're anchored at (shipyards don't plunder unless asked). Null on success.</summary>
+    public static RejectionReason? TryChoosePlunder(World world, Ship ship)
     {
         var shipyard = DockedAt(world, ship);
-        if (shipyard is null || world.PlunderCooldownTicks(shipyard) > 0)
-            return false;
+        if (shipyard is null)
+            return RejectionReason.NotAtShipyard;
+        if (world.PlunderCooldownTicks(shipyard) > 0)
+            return RejectionReason.IslandOnCooldown;
         ship.PlunderConsentIslandId = shipyard.Id;
-        return true;
+        return null;
     }
+
+    public static RejectionReason? ToRejection(PurchaseResult result) => result switch
+    {
+        PurchaseResult.Purchased => null,
+        PurchaseResult.NotAtShipyard => RejectionReason.NotAtShipyard,
+        PurchaseResult.UnknownUpgrade => RejectionReason.UnknownUpgrade,
+        PurchaseResult.MaxLevel => RejectionReason.MaxLevel,
+        _ => RejectionReason.NotEnoughGold,
+    };
 }

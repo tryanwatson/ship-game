@@ -65,6 +65,7 @@ public sealed class WaveDirector
 
         Wave++;
         SpawnWave(world, Wave);
+        world.Emit(new WaveStarted(world.Tick, Wave, WaveSize(Wave)));
         TicksUntilNextWave = (int)(IntermissionSeconds * SimConstants.TickRate);
     }
 
@@ -81,6 +82,7 @@ public sealed class WaveDirector
 
             var pirate = world.SpawnShip(position, MathF.Atan2(toCenter.Y, toCenter.X), ShipStats.Sloop, abilities: Loadouts.Sloop);
             pirate.Behavior = new HunterBehavior(home: position);
+            pirate.Stance = NpcStance.Guarding;
             pirate.IsAnchored = true; // guarding: rides at anchor until something comes in range
 
             var scale = wave - 1;
