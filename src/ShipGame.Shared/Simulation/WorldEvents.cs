@@ -36,6 +36,14 @@ public sealed record UpgradePurchased(long Tick, int ShipId, string UpgradeId, i
 
 public sealed record WaveStarted(long Tick, int Wave, int Pirates) : WorldEvent(Tick);
 
+/// <summary>A player's ship went down; they'll be back in <paramref name="RespawnTicks"/> unless the run ends first.</summary>
+public sealed record PlayerSunk(long Tick, int PlayerId, int RespawnTicks) : WorldEvent(Tick);
+
+public sealed record PlayerRespawned(long Tick, int PlayerId, int ShipId) : WorldEvent(Tick);
+
+/// <summary>Every player was sunk at once: game over for this run.</summary>
+public sealed record RunEnded(long Tick) : WorldEvent(Tick);
+
 /// <summary>A player's command was refused; the server tells that player why.</summary>
 public sealed record CommandRejected(long Tick, int PlayerId, Command Command, RejectionReason Reason) : WorldEvent(Tick);
 

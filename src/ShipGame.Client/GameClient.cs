@@ -48,6 +48,7 @@ public sealed class GameClient : Game
     private OffscreenMarkers _offscreenMarkers = null!;
     private IslandOverlays _islandOverlays = null!;
     private ShipyardPanel _shipyardPanel = null!;
+    private StatusBanner _statusBanner = null!;
 
     private bool _cameraLocked = true;
     private NVector2 _lastMoveOrder;
@@ -98,6 +99,7 @@ public sealed class GameClient : Game
         _offscreenMarkers = new OffscreenMarkers(_primitives);
         _islandOverlays = new IslandOverlays(_primitives);
         _shipyardPanel = new ShipyardPanel(_primitives);
+        _statusBanner = new StatusBanner(_primitives);
     }
 
     protected override void UnloadContent()
@@ -113,8 +115,8 @@ public sealed class GameClient : Game
         if (_input.IsKeyDown(Keys.Escape))
             Exit();
 
-        // Sunk: the run is over. Enter starts a new one.
-        if (IsActive && _session.World.GetPlayerShip(LocalPlayerId) is null && _input.WasKeyPressed(Keys.Enter))
+        // Everyone's sunk: the run is over. Enter starts a new one.
+        if (IsActive && _session.World.IsRunOver && _input.WasKeyPressed(Keys.Enter))
             StartRun();
 
         if (IsActive)
@@ -149,6 +151,7 @@ public sealed class GameClient : Game
         var gold = _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
         _hudCounters.Draw(gold, _session.World.Waves?.Wave ?? 0, GraphicsDevice.Viewport);
         _shipyardPanel.Draw(_session.World, localShip, _input, GraphicsDevice.Viewport);
+        DrawStatusBanner();
         base.Draw(gameTime);
     }
 
@@ -225,6 +228,21 @@ public sealed class GameClient : Game
         _camera.Position += pan * (CameraPanSpeed / _camera.Zoom * dt);
     }
 
+    private void DrawStatusBanner()
+    {
+        var world = _session.World;
+        if (world.IsRunOver)
+        {
+            var wave = world.Waves?.Wave ?? 0;
+            _statusBanner.Draw("RUN OVER", $"SUNK ON WAVE {wave}  -  PRESS ENTER FOR A NEW RUN", GraphicsDevice.Viewport);
+        }
+        else if (world.Players.TryGetValue(LocalPlayerId, out var player) && player.IsAwaitingRespawn)
+        {
+            var seconds = (int)Math.Ceiling(player.RespawnTicksRemaining / (double)SimConstants.TickRate);
+            _statusBanner.Draw("SUNK", $"RESPAWNING IN {seconds}", GraphicsDevice.Viewport);
+        }
+    }
+
     private void UpdateTitle(double dt)
     {
         _framesSinceTitle++;
@@ -241,8 +259,10 @@ public sealed class GameClient : Game
 
         // The window title doubles as a status line until the game has text rendering.
         string status;
-        if (ship is null)
-            status = $"SUNK on wave {wave} with {gold} gold - press Enter for a new run";
+        if (world.IsRunOver)
+            status = $"RUN OVER on wave {wave} with {gold} gold - press Enter for a new run";
+        else if (ship is null)
+            status = "sunk - respawning";
         else if (world.Waves is { } waves && pirates == 0)
             status = $"wave {wave + 1} in {Math.Ceiling(waves.TicksUntilNextWave / (double)SimConstants.TickRate):0}s";
         else

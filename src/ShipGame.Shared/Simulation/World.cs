@@ -77,6 +77,22 @@ public sealed class World
     /// <summary>Sends pirates in waves when set; null for worlds that place their own ships (tests, sandboxes).</summary>
     public WaveDirector? Waves { get; set; }
 
+    /// <summary>True once every player was sunk at the same time. Nothing respawns and no more waves come.</summary>
+    public bool IsRunOver { get; private set; }
+
+    public void EndRun()
+    {
+        if (IsRunOver)
+            return;
+        IsRunOver = true;
+        foreach (var player in _players.Values)
+        {
+            player.RespawnTicksRemaining = 0;
+            player.LostShip = null;
+        }
+        Emit(new RunEnded(Tick));
+    }
+
     /// <summary>Records an event for <see cref="DrainEvents"/>.</summary>
     public void Emit(WorldEvent worldEvent) => _events.Add(worldEvent);
 
@@ -194,6 +210,7 @@ public sealed class World
         Plundering.Step(this);
 
         ResolveSinkings();
+        Respawning.Step(this);
 
         Waves?.Update(this);
 
@@ -215,8 +232,11 @@ public sealed class World
 
         foreach (var victim in _ships)
         {
-            if (victim.IsSunk)
-                Emit(new ShipSunk(Tick, victim.Id, victim.LastHitByShipId));
+            if (!victim.IsSunk)
+                continue;
+            Emit(new ShipSunk(Tick, victim.Id, victim.LastHitByShipId));
+            if (victim.OwnerPlayerId is { } playerId)
+                Respawning.OnPlayerSunk(this, victim, GetOrAddPlayer(playerId));
         }
 
         _ships.RemoveAll(s => s.IsSunk);

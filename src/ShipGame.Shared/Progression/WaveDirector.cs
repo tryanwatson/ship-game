@@ -18,6 +18,12 @@ public sealed class WaveDirector
     public const int FirstWaveSize = 2;
     public const int MaxWaveSize = 8;
 
+    /// <summary>Each player beyond the first adds this fraction to every wave's size (and to its cap).</summary>
+    public const float SizePerExtraPlayer = 0.5f;
+
+    /// <summary>Hard ceiling on one wave, whatever the player count, to protect the server and bandwidth.</summary>
+    public const int AbsoluteMaxWaveSize = 40;
+
     // Per wave after the first, as fractions of base stats.
     public const float HealthPerWave = 0.15f;
     public const float CooldownSpeedPerWave = 0.04f;
@@ -50,11 +56,17 @@ public sealed class WaveDirector
     /// <summary>Countdown to the next wave. Only runs while no pirates are afloat.</summary>
     public int TicksUntilNextWave { get; private set; }
 
-    public static int WaveSize(int wave) => Math.Min(FirstWaveSize + wave - 1, MaxWaveSize);
+    /// <summary>Pirates in <paramref name="wave"/> for a run of <paramref name="players"/> players.</summary>
+    public static int WaveSize(int wave, int players = 1)
+    {
+        var scale = 1f + SizePerExtraPlayer * Math.Max(0, players - 1);
+        var solo = Math.Min(FirstWaveSize + wave - 1, MaxWaveSize);
+        return Math.Min((int)MathF.Ceiling(solo * scale), AbsoluteMaxWaveSize);
+    }
 
     public void Update(World world)
     {
-        if (AnyPiratesAfloat(world))
+        if (world.IsRunOver || AnyPiratesAfloat(world))
             return;
 
         if (TicksUntilNextWave > 0)
@@ -65,7 +77,7 @@ public sealed class WaveDirector
 
         Wave++;
         SpawnWave(world, Wave);
-        world.Emit(new WaveStarted(world.Tick, Wave, WaveSize(Wave)));
+        world.Emit(new WaveStarted(world.Tick, Wave, WaveSize(Wave, world.Players.Count)));
         TicksUntilNextWave = (int)(IntermissionSeconds * SimConstants.TickRate);
     }
 
@@ -74,7 +86,8 @@ public sealed class WaveDirector
         var placed = new List<Vector2>();
         var center = world.WorldSize / 2f;
 
-        for (var i = 0; i < WaveSize(wave); i++)
+        // Everyone in the run counts, including players waiting to respawn.
+        for (var i = 0; i < WaveSize(wave, world.Players.Count); i++)
         {
             var position = PickSpawnPoint(world, placed);
             placed.Add(position);
