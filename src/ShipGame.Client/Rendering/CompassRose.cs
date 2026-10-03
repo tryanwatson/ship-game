@@ -33,9 +33,10 @@ public sealed class CompassRose
         _batch = batch;
     }
 
-    public void Draw(NVector2 wind, Viewport viewport)
+    public void Draw(NVector2 wind, HudView hud)
     {
-        _batch.Begin(Matrix.Identity);
+        var viewport = hud.Viewport;
+        _batch.Begin(hud.Transform);
         var center = new Vector2(viewport.Width - Margin - RadiusX, Margin + LabelSpace + RadiusY);
 
         Span<Vector2> rim = stackalloc Vector2[32];

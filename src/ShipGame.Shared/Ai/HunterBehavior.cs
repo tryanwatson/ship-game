@@ -228,12 +228,15 @@ public sealed class HunterBehavior : INpcBehavior
         for (var slot = 0; slot < Ship.AbilitySlotCount; slot++)
         {
             var ability = ship.Abilities[slot];
-            if (ability is { IsReady: true, Definition: BroadsideVolley volley }
-                && volley.Covers(ship, predicted, target.Stats.Radius * AimTightness)
+            if (ability is not { Definition: BroadsideVolley })
+                continue;
+
+            // Aim at the predicted position: the broadside fires whichever side that's on, if that side is loaded.
+            var side = BroadsideVolley.SideCovering(ship, predicted, target.Stats.Radius * AimTightness);
+            if (side != BroadsideSide.None
+                && ability.IsChannelReady(BroadsideVolley.ChannelOf(side))
                 && !Navigation.LineBlockedByLand(world, ship.Position, predicted))
-            {
-                world.TryCastAbility(ship, (AbilitySlot)slot, target.Position);
-            }
+                world.TryCastAbility(ship, (AbilitySlot)slot, predicted);
         }
     }
 

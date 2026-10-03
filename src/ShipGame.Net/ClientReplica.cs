@@ -49,6 +49,7 @@ public sealed class ClientReplica
     public void Reset(RunStart start)
     {
         World = CreateWorld(start.WorldSize, start.Wind);
+        World.FriendlyFire = start.FriendlyFire;
         World.SetTick(start.Tick);
         _snapshots.Clear();
         _pendingEvents.Clear();
@@ -143,7 +144,7 @@ public sealed class ClientReplica
                     break;
                 case ProjectileSpawned spawned:
                     _projectiles[spawned.ProjectileId] = spawned;
-                    World.AddProjectile(new Projectile(spawned.ProjectileId, spawned.OwnerShipId, spawned.Team, spawned.Damage)
+                    World.AddProjectile(new Projectile(spawned.ProjectileId, spawned.OwnerShipId, spawned.Team, spawned.Damage, spawned.Radius)
                     {
                         Position = spawned.Position,
                         PreviousPosition = spawned.Position,
@@ -154,6 +155,23 @@ public sealed class ClientReplica
                 case ProjectileImpact impact:
                     _projectiles.Remove(impact.ProjectileId);
                     World.RemoveProjectile(impact.ProjectileId);
+                    break;
+                case AreaStrikeLaunched launched:
+                    World.AddStrike(new AreaStrike
+                    {
+                        Id = launched.StrikeId,
+                        OwnerShipId = launched.OwnerShipId,
+                        Team = launched.Team,
+                        Origin = launched.Origin,
+                        Target = launched.Target,
+                        Radius = launched.Radius,
+                        Damage = launched.Damage,
+                        LaunchTick = launched.Tick,
+                        ImpactTick = launched.ImpactTick,
+                    });
+                    break;
+                case AreaStrikeImpact impact:
+                    World.RemoveStrike(impact.StrikeId);
                     break;
                 case RunEnded:
                     World.EndRun();
@@ -231,7 +249,13 @@ public sealed class ClientReplica
         ship.Stance = state.Stance;
         ship.MoveTarget = state.MoveTarget;
         for (var i = 0; i < Ship.AbilitySlotCount; i++)
-            ship.Abilities[i]?.Restore(state.Cooldowns[i].Remaining, state.Cooldowns[i].Duration);
+        {
+            var channels = state.Cooldowns[i];
+            if (ship.Abilities[i] is not { } ability || channels is null)
+                continue;
+            for (var c = 0; c < channels.Length; c++)
+                ability.Restore(c, channels[c].Remaining, channels[c].Duration);
+        }
     }
 
     private void FlyProjectiles()

@@ -99,6 +99,16 @@ public sealed class LoopbackTests : IDisposable
     }
 
     [Fact]
+    public void FriendlyFire_IsAnnouncedInTheLobby_AndAppliedToTheRun()
+    {
+        var (a, _) = StartTwoPlayerRun();
+
+        Assert.True(a.Lobby!.FriendlyFire);          // the server's default
+        Assert.True(_server.World!.FriendlyFire);
+        Assert.True(a.Replica.World.FriendlyFire);   // so the client can light up other players in its lanes
+    }
+
+    [Fact]
     public void Run_StartsOnlyWhenEveryoneIsReady()
     {
         var a = Connect();
@@ -162,6 +172,48 @@ public sealed class LoopbackTests : IDisposable
 
         PumpUntil(() => b.Replica.World.Projectiles.Count == 0, "the balls to run out of range");
         Assert.Contains(b.TakeEvents(), e => e is AbilityCast cast && cast.ShipId == shooter.Id);
+    }
+
+    [Fact]
+    public void MortarShells_AreVisibleToEveryone_WhileInTheAir()
+    {
+        var (a, b) = StartTwoPlayerRun();
+        var aim = _server.World!.GetPlayerShip(a.LocalPlayerId)!.Position + new Vector2(20, 0);
+
+        a.Send(new CastAbilityCommand(0, AbilitySlot.Three, aim));
+        PumpUntil(() => b.Replica.World.Strikes.Count == 1, "b to see a's shell in the air");
+
+        var shell = b.Replica.World.Strikes[0];
+        Assert.Equal(aim, shell.Target);
+        Assert.Equal(Mortar.BlastRadius, shell.Radius);
+        PumpUntil(() => b.Replica.World.Strikes.Count == 0, "the shell to land");
+        Assert.Contains(b.TakeEvents(), e => e is AreaStrikeImpact impact && impact.Target == aim);
+    }
+
+    [Fact]
+    public void LongGunShots_KeepTheirSizeOnOtherClients()
+    {
+        var (a, b) = StartTwoPlayerRun();
+        var ship = _server.World!.GetPlayerShip(a.LocalPlayerId)!;
+
+        a.Send(new CastAbilityCommand(0, AbilitySlot.Two, ship.Position + new Vector2(0, -10)));
+        PumpUntil(() => b.Replica.World.Projectiles.Count == 1, "b to see the long gun shot");
+
+        Assert.Equal(LongGun.ShotRadius, b.Replica.World.Projectiles[0].Radius);
+    }
+
+    [Fact]
+    public void BroadsideDecks_ReloadSeparately_OnTheClientToo()
+    {
+        var (a, _) = StartTwoPlayerRun();
+        var ship = _server.World!.GetPlayerShip(a.LocalPlayerId)!;
+
+        a.Send(new CastAbilityCommand(0, AbilitySlot.One, ship.Position + new Vector2(0, 5))); // starboard
+        var mirrored = a.Replica.World.FindShip(ship.Id)!;
+        PumpUntil(() => !mirrored.GetAbility(AbilitySlot.One)!.IsChannelReady(BroadsideVolley.StarboardChannel),
+            "a's client to show the starboard deck reloading");
+
+        Assert.True(mirrored.GetAbility(AbilitySlot.One)!.IsChannelReady(BroadsideVolley.PortChannel));
     }
 
     [Fact]

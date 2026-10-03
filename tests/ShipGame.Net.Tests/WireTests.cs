@@ -18,7 +18,7 @@ public class WireTests
         new object[] { new StopCommand(9) },
         new object[] { new AdjustThrottleCommand(9, -2) },
         new object[] { new SetRudderCommand(9, 1) },
-        new object[] { new CastAbilityCommand(9, AbilitySlot.Two, new Vector2(1, 2)) },
+        new object[] { new CastAbilityCommand(9, AbilitySlot.Three, new Vector2(1, 2)) },
         new object[] { new ToggleAnchorCommand(9) },
         new object[] { new ChoosePlunderCommand(9) },
         new object[] { new PurchaseUpgradeCommand(9, "shot-speed") },
@@ -51,9 +51,13 @@ public class WireTests
         new object[] { new ShipSunk(10, 3, 7) },
         new object[] { new ShipSunk(10, 3, null) },
         new object[] { new ProjectileSpawned(10, 40, 3, Team.Pirates, new Vector2(1, 2), new Vector2(-14, 0.5f), 12.5f, 18) },
+        new object[] { new ProjectileSpawned(10, 41, 3, Team.Players, new Vector2(1, 2), new Vector2(20, -5), 22f, 19, 0.3f) },
+        new object[] { new AreaStrikeLaunched(10, 50, 3, Team.Players, new Vector2(60, 60), new Vector2(75, 61), 2.5f, 35f, 42) },
+        new object[] { new AreaStrikeImpact(42, 50, new Vector2(75, 61), 2.5f) },
         new object[] { new ProjectileImpact(10, 40, 5) },
         new object[] { new ProjectileImpact(10, 40, null) },
-        new object[] { new AbilityCast(10, 3, AbilitySlot.One, 71) },
+        new object[] { new AbilityCast(10, 3, AbilitySlot.One, 71, 1) },
+        new object[] { new AbilityCast(10, 3, AbilitySlot.Three, 360) },
         new object[] { new ShipGrounded(10, 3) },
         new object[] { new GoldChanged(10, 2, 35, -15) },
         new object[] { new IslandPlundered(10, 4, 2, 10, 1800) },
@@ -75,12 +79,30 @@ public class WireTests
         Assert.Equal(worldEvent, ReaderFor(writer).GetEvent());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void LobbyAndRunStart_CarryTheFriendlyFireSetting(bool friendlyFire)
+    {
+        var writer = new NetDataWriter();
+        writer.PutLobby(new LobbyState(false, new[] { new LobbyPlayer(1, true), new LobbyPlayer(2, false) }, friendlyFire));
+        writer.PutRunStart(new RunStart(42, new Vector2(192, 192), new Vector2(0, 0.75f), friendlyFire));
+
+        var reader = ReaderFor(writer);
+        var lobby = reader.GetLobby();
+        var start = reader.GetRunStart();
+
+        Assert.Equal(friendlyFire, lobby.FriendlyFire);
+        Assert.Equal(new[] { new LobbyPlayer(1, true), new LobbyPlayer(2, false) }, lobby.Players);
+        Assert.Equal(new RunStart(42, new Vector2(192, 192), new Vector2(0, 0.75f), friendlyFire), start);
+    }
+
     [Fact]
     public void ShipInfo_RoundTrips()
     {
         var info = new ShipInfo(
             123, 7, 2, Team.Players, ShipStats.Sloop with { WeaponRange = 1.3f },
-            new[] { "volley-port", "volley-starboard", null, null },
+            new[] { "broadside", null, "long-gun", "mortar" },
             new[] { new StatModifier(StatId.MaxHealth, ModifierKind.Flat, 20, "upgrade:hull") },
             new Vector2(96, 90), 1.25f);
         var writer = new NetDataWriter();
@@ -125,6 +147,10 @@ public class WireTests
         }
 
         Assert.Equal(snapshot.Ships.Select(s => (s.ShipId, s.Position, s.Heading)), ships.Select(s => (s.ShipId, s.Position, s.Heading)));
+        // Per-slot, per-channel cooldowns survive: the player's broadside has two decks, empty pirate slots none.
+        Assert.Equal(2, ships[0].Cooldowns[0].Length);           // the player's broadside: one per deck
+        Assert.Single(ships[0].Cooldowns[1]);                    // the player's long gun: one cooldown
+        Assert.Empty(ships[1].Cooldowns[1]);                     // a pirate's empty slot 2
         Assert.Equal(25, Assert.Single(header!.Players).Gold);
     }
 }

@@ -117,6 +117,8 @@ public static class Wire
         PlayerSunk = 12,
         PlayerRespawned = 13,
         RunEnded = 14,
+        AreaStrikeLaunched = 15,
+        AreaStrikeImpact = 16,
     }
 
     public static void PutEvent(this NetDataWriter w, WorldEvent e)
@@ -132,13 +134,21 @@ public static class Wire
             case ProjectileSpawned x:
                 Begin(w, EventTag.ProjectileSpawned, x);
                 w.Put(x.ProjectileId); w.Put(x.OwnerShipId); w.Put((byte)x.Team);
-                w.Put(x.Position); w.Put(x.Velocity); w.Put(x.Damage); w.Put(x.LifetimeTicks);
+                w.Put(x.Position); w.Put(x.Velocity); w.Put(x.Damage); w.Put(x.LifetimeTicks); w.Put(x.Radius);
+                break;
+            case AreaStrikeLaunched x:
+                Begin(w, EventTag.AreaStrikeLaunched, x);
+                w.Put(x.StrikeId); w.Put(x.OwnerShipId); w.Put((byte)x.Team);
+                w.Put(x.Origin); w.Put(x.Target); w.Put(x.Radius); w.Put(x.Damage); w.Put(x.ImpactTick);
+                break;
+            case AreaStrikeImpact x:
+                Begin(w, EventTag.AreaStrikeImpact, x); w.Put(x.StrikeId); w.Put(x.Target); w.Put(x.Radius);
                 break;
             case ProjectileImpact x:
                 Begin(w, EventTag.ProjectileImpact, x); w.Put(x.ProjectileId); w.PutOptional(x.ShipId);
                 break;
             case AbilityCast x:
-                Begin(w, EventTag.AbilityCast, x); w.Put(x.ShipId); w.Put((byte)x.Slot); w.Put(x.CooldownTicks);
+                Begin(w, EventTag.AbilityCast, x); w.Put(x.ShipId); w.Put((byte)x.Slot); w.Put(x.CooldownTicks); w.Put((byte)x.Channel);
                 break;
             case ShipGrounded x:
                 Begin(w, EventTag.ShipGrounded, x); w.Put(x.ShipId);
@@ -187,9 +197,13 @@ public static class Wire
             case EventTag.ShipSpawned: return new ShipSpawned(tick, r.GetInt());
             case EventTag.ShipSunk: return new ShipSunk(tick, r.GetInt(), r.GetOptionalInt());
             case EventTag.ProjectileSpawned:
-                return new ProjectileSpawned(tick, r.GetInt(), r.GetInt(), (Team)r.GetByte(), r.GetVector2(), r.GetVector2(), r.GetFloat(), r.GetInt());
+                return new ProjectileSpawned(tick, r.GetInt(), r.GetInt(), (Team)r.GetByte(), r.GetVector2(), r.GetVector2(), r.GetFloat(), r.GetInt(), r.GetFloat());
+            case EventTag.AreaStrikeLaunched:
+                return new AreaStrikeLaunched(tick, r.GetInt(), r.GetInt(), (Team)r.GetByte(), r.GetVector2(), r.GetVector2(), r.GetFloat(), r.GetFloat(), r.GetLong());
+            case EventTag.AreaStrikeImpact:
+                return new AreaStrikeImpact(tick, r.GetInt(), r.GetVector2(), r.GetFloat());
             case EventTag.ProjectileImpact: return new ProjectileImpact(tick, r.GetInt(), r.GetOptionalInt());
-            case EventTag.AbilityCast: return new AbilityCast(tick, r.GetInt(), (AbilitySlot)r.GetByte(), r.GetInt());
+            case EventTag.AbilityCast: return new AbilityCast(tick, r.GetInt(), (AbilitySlot)r.GetByte(), r.GetInt(), r.GetByte());
             case EventTag.ShipGrounded: return new ShipGrounded(tick, r.GetInt());
             case EventTag.GoldChanged: return new GoldChanged(tick, r.GetInt(), r.GetInt(), r.GetInt());
             case EventTag.IslandPlundered: return new IslandPlundered(tick, r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt());
@@ -213,6 +227,7 @@ public static class Wire
     public static void PutLobby(this NetDataWriter w, LobbyState lobby)
     {
         w.Put(lobby.RunInProgress);
+        w.Put(lobby.FriendlyFire);
         w.Put((byte)lobby.Players.Count);
         foreach (var player in lobby.Players)
         {
@@ -224,11 +239,12 @@ public static class Wire
     public static LobbyState GetLobby(this NetDataReader r)
     {
         var running = r.GetBool();
+        var friendlyFire = r.GetBool();
         var count = r.GetByte();
         var players = new List<LobbyPlayer>(count);
         for (var i = 0; i < count; i++)
             players.Add(new LobbyPlayer(r.GetInt(), r.GetBool()));
-        return new LobbyState(running, players);
+        return new LobbyState(running, players, friendlyFire);
     }
 
     public static void PutRunStart(this NetDataWriter w, RunStart start)
@@ -236,9 +252,10 @@ public static class Wire
         w.Put(start.Tick);
         w.Put(start.WorldSize);
         w.Put(start.Wind);
+        w.Put(start.FriendlyFire);
     }
 
-    public static RunStart GetRunStart(this NetDataReader r) => new(r.GetLong(), r.GetVector2(), r.GetVector2());
+    public static RunStart GetRunStart(this NetDataReader r) => new(r.GetLong(), r.GetVector2(), r.GetVector2(), r.GetBool());
 
     // ---- Ship info --------------------------------------------------------------------------------------
 
@@ -392,10 +409,15 @@ public static class Wire
         w.Put(s.MoveTarget.HasValue);
         if (s.MoveTarget is { } target)
             w.Put(target);
-        foreach (var (remaining, duration) in s.Cooldowns)
+        foreach (var channels in s.Cooldowns)
         {
-            w.Put((ushort)Math.Clamp(remaining, 0, ushort.MaxValue));
-            w.Put((ushort)Math.Clamp(duration, 0, ushort.MaxValue));
+            var count = channels?.Length ?? 0;
+            w.Put((byte)count);
+            for (var c = 0; c < count; c++)
+            {
+                w.Put((ushort)Math.Clamp(channels![c].Remaining, 0, ushort.MaxValue));
+                w.Put((ushort)Math.Clamp(channels[c].Duration, 0, ushort.MaxValue));
+            }
         }
     }
 
@@ -419,7 +441,13 @@ public static class Wire
         if (r.GetBool())
             s.MoveTarget = r.GetVector2();
         for (var i = 0; i < s.Cooldowns.Length; i++)
-            s.Cooldowns[i] = (r.GetUShort(), r.GetUShort());
+        {
+            var count = r.GetByte();
+            var channels = new (int, int)[count];
+            for (var c = 0; c < count; c++)
+                channels[c] = (r.GetUShort(), r.GetUShort());
+            s.Cooldowns[i] = channels;
+        }
         return s;
     }
 }

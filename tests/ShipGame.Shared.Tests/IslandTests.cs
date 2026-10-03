@@ -148,7 +148,7 @@ public class IslandTests
         var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.Sloop);
         var target = world.SpawnShip(new Vector2(30, 37), 0f, ShipStats.Sloop); // behind the strip of land
 
-        world.TryCastAbility(shooter, AbilitySlot.Two, Vector2.Zero);
+        world.TryCastAbility(shooter, AbilitySlot.One, shooter.Position + new Vector2(0, 5));
         RunTicks(world, SimConstants.TickRate);
 
         Assert.Equal(target.Stats.MaxHealth, target.Health);

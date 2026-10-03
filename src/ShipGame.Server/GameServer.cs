@@ -35,8 +35,9 @@ public sealed class GameServer : IDisposable
     private int _nextPlayerId = 1;
     private int _runSeed = Environment.TickCount;
 
-    public GameServer(int port = Protocol.DefaultPort, Action<string>? log = null)
+    public GameServer(int port = Protocol.DefaultPort, Action<string>? log = null, bool friendlyFire = true)
     {
+        FriendlyFire = friendlyFire;
         _log = log ?? (_ => { });
         _net = new NetManager(_listener) { DisconnectTimeout = 10_000 };
         _listener.ConnectionRequestEvent += OnConnectionRequest;
@@ -49,6 +50,9 @@ public sealed class GameServer : IDisposable
     }
 
     public int Port { get; }
+
+    /// <summary>PvP: players' shots hurt other players. Applies from the next run.</summary>
+    public bool FriendlyFire { get; set; }
 
     /// <summary>The run in progress, or null in the lobby.</summary>
     public World? World { get; private set; }
@@ -148,7 +152,8 @@ public sealed class GameServer : IDisposable
     private void BroadcastLobby()
     {
         var lobby = new LobbyState(World is not null,
-            _byPeerId.Values.OrderBy(p => p.PlayerId).Select(p => new LobbyPlayer(p.PlayerId, p.Ready)).ToList());
+            _byPeerId.Values.OrderBy(p => p.PlayerId).Select(p => new LobbyPlayer(p.PlayerId, p.Ready)).ToList(),
+            FriendlyFire);
         _writer.Reset();
         _writer.Put((byte)MessageType.Lobby);
         _writer.PutLobby(lobby);
@@ -159,7 +164,7 @@ public sealed class GameServer : IDisposable
 
     private void StartRun()
     {
-        var world = new World(Archipelago.Size) { Waves = new WaveDirector(_runSeed++) };
+        var world = new World(Archipelago.Size) { Waves = new WaveDirector(_runSeed++), FriendlyFire = FriendlyFire };
         foreach (var island in Archipelago.CreateIslands())
             world.AddIsland(island);
 
@@ -174,11 +179,11 @@ public sealed class GameServer : IDisposable
 
         World = world;
         _sentStatsVersions.Clear();
-        _log($"Run started with {players.Count} player(s)");
+        _log($"Run started with {players.Count} player(s), friendly fire {(FriendlyFire ? "on" : "off")}");
 
         _writer.Reset();
         _writer.Put((byte)MessageType.RunStarted);
-        _writer.PutRunStart(new RunStart(world.Tick, world.WorldSize, world.Wind));
+        _writer.PutRunStart(new RunStart(world.Tick, world.WorldSize, world.Wind, world.FriendlyFire));
         SendToAll(_writer, DeliveryMethod.ReliableOrdered);
         BroadcastLobby();
         SendWorldOutput(world); // the starting ships, before the first snapshot

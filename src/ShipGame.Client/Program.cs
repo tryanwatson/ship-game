@@ -1,11 +1,13 @@
+using System.Linq;
 using ShipGame.Net;
 
 // Single-player:  dotnet run --project src/ShipGame.Client
-// Host a game:    dotnet run --project src/ShipGame.Client -- --host [7777]
+// Host a game:    dotnet run --project src/ShipGame.Client -- --host [7777] [--no-friendly-fire]
 // Join a game:    dotnet run --project src/ShipGame.Client -- --connect 127.0.0.1[:7777]
 string? host = null;
 var port = Protocol.DefaultPort;
 var hosting = false;
+var friendlyFire = !args.Contains("--no-friendly-fire");
 for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
@@ -34,5 +36,5 @@ for (var i = 0; i < args.Length; i++)
     }
 }
 
-using var game = new ShipGame.Client.GameClient(host, port, hosting);
+using var game = new ShipGame.Client.GameClient(host, port, hosting, friendlyFire);
 game.Run();

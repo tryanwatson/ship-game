@@ -4,17 +4,22 @@ namespace ShipGame.Shared.Simulation;
 
 public sealed class Projectile
 {
-    public const float Radius = 0.15f;
+    /// <summary>Size of an ordinary cannonball.</summary>
+    public const float DefaultRadius = 0.15f;
 
-    public Projectile(int id, int ownerShipId, Team team, float damage)
+    public Projectile(int id, int ownerShipId, Team team, float damage, float radius = DefaultRadius)
     {
         Id = id;
+        Radius = radius;
         OwnerShipId = ownerShipId;
         Team = team;
         Damage = damage;
     }
 
     public int Id { get; }
+
+    /// <summary>How close to a hull (or shore) the shot has to pass to hit it.</summary>
+    public float Radius { get; }
 
     /// <summary>The ship that fired it; projectiles never hit their own ship.</summary>
     public int OwnerShipId { get; }

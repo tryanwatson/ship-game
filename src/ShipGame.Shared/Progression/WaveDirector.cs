@@ -100,7 +100,7 @@ public sealed class WaveDirector
             placed.Add(position);
             var toCenter = center - position;
 
-            var pirate = world.SpawnShip(position, MathF.Atan2(toCenter.Y, toCenter.X), ShipStats.Sloop, abilities: Loadouts.Sloop);
+            var pirate = world.SpawnShip(position, MathF.Atan2(toCenter.Y, toCenter.X), ShipStats.Sloop, abilities: Loadouts.Pirate);
             pirate.Behavior = new HunterBehavior(home: position);
             pirate.Stance = NpcStance.Guarding;
             pirate.IsAnchored = true; // guarding: rides at anchor until something comes in range

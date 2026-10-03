@@ -19,7 +19,7 @@ public class HullHitTests
         // Walk the ball across in tick-sized steps, as the simulation does.
         for (var s = -3f; s < 3f; s += stepLength)
         {
-            if (HullShape.SegmentHits(ship, crossing + side * s, crossing + side * (s + stepLength), Projectile.Radius))
+            if (HullShape.SegmentHits(ship, crossing + side * s, crossing + side * (s + stepLength), Projectile.DefaultRadius))
                 return true;
         }
         return false;
@@ -48,7 +48,7 @@ public class HullHitTests
     {
         // Running fore-and-aft 0.8 off the centerline: inside the old circle, clear of the 0.9-wide hull.
         var ship = ShipAt();
-        Assert.False(HullShape.SegmentHits(ship, ship.Position + new Vector2(-3f, 0.8f), ship.Position + new Vector2(3f, 0.8f), Projectile.Radius));
+        Assert.False(HullShape.SegmentHits(ship, ship.Position + new Vector2(-3f, 0.8f), ship.Position + new Vector2(3f, 0.8f), Projectile.DefaultRadius));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public class HullHitTests
     {
         // One long step that starts in front of the narrow bow tip and ends beyond it.
         var ship = ShipAt();
-        Assert.True(HullShape.SegmentHits(ship, ship.Position + new Vector2(1.1f, -2f), ship.Position + new Vector2(1.1f, 2f), Projectile.Radius));
+        Assert.True(HullShape.SegmentHits(ship, ship.Position + new Vector2(1.1f, -2f), ship.Position + new Vector2(1.1f, 2f), Projectile.DefaultRadius));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class HullHitTests
         // Outermost cannon fires along x = 30 + HalfSpan (0.72). Target points at it from ahead, bow tip at x ~ 30.8.
         var target = world.SpawnShip(new Vector2(32f, 34f), MathF.PI, ShipStats.Sloop);
 
-        world.TryCastAbility(shooter, ShipGame.Shared.Abilities.AbilitySlot.Two, Vector2.Zero);
+        world.TryCastAbility(shooter, ShipGame.Shared.Abilities.AbilitySlot.One, shooter.Position + new Vector2(0, 5));
         for (var t = 0; t < SimConstants.TickRate; t++)
             world.Step();
 

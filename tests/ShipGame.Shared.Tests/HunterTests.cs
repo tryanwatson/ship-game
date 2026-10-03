@@ -68,8 +68,10 @@ public class HunterTests
         world.Step();
 
         Assert.Contains(world.Projectiles, p => p.OwnerShipId == hunter.Id);
-        Assert.False(hunter.GetAbility(AbilitySlot.Two)!.IsReady); // starboard volley spent
-        Assert.True(hunter.GetAbility(AbilitySlot.One)!.IsReady);  // port held
+        var broadside = hunter.GetAbility(AbilitySlot.One)!;
+        Assert.False(broadside.IsChannelReady(BroadsideVolley.StarboardChannel)); // starboard deck spent...
+        Assert.True(broadside.IsChannelReady(BroadsideVolley.PortChannel));       // port still loaded
+        Assert.All(world.Projectiles, p => Assert.True(p.Velocity.Y > 0f)); // ...out of the starboard side, toward the player
     }
 
     [Fact]
@@ -172,7 +174,7 @@ public class HunterTests
         var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, abilities: Loadouts.Sloop);
         var friend = world.SpawnShip(new Vector2(30, 34), 0f, ShipStats.Sloop);
 
-        world.TryCastAbility(shooter, AbilitySlot.Two, Vector2.Zero);
+        world.TryCastAbility(shooter, AbilitySlot.One, shooter.Position + new Vector2(0, 5));
         RunTicks(world, SimConstants.TickRate);
 
         Assert.Equal(Team.Pirates, friend.Team);

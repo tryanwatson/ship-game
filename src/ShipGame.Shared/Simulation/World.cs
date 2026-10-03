@@ -14,6 +14,7 @@ public sealed class World
 {
     private readonly List<Ship> _ships = new();
     private readonly List<Projectile> _projectiles = new();
+    private readonly List<AreaStrike> _strikes = new();
     private readonly List<Island> _islands = new();
     private readonly Dictionary<int, int> _plunderCooldowns = new();
     private readonly List<WorldEvent> _events = new();
@@ -52,6 +53,34 @@ public sealed class World
 
     public IReadOnlyList<Island> Islands => _islands;
 
+    /// <summary>Shells in the air.</summary>
+    public IReadOnlyList<AreaStrike> Strikes => _strikes;
+
+    /// <summary>Lobs a shell from <paramref name="owner"/> that lands on <paramref name="target"/> after <paramref name="flightTicks"/>.</summary>
+    public AreaStrike LaunchStrike(Ship owner, Vector2 target, float radius, float damage, int flightTicks)
+    {
+        var strike = new AreaStrike
+        {
+            Id = _nextEntityId++,
+            OwnerShipId = owner.Id,
+            Team = owner.Team,
+            Origin = owner.Position,
+            Target = target,
+            Radius = radius,
+            Damage = damage,
+            LaunchTick = Tick,
+            ImpactTick = Tick + flightTicks,
+        };
+        _strikes.Add(strike);
+        Emit(new AreaStrikeLaunched(Tick, strike.Id, strike.OwnerShipId, strike.Team, strike.Origin, strike.Target, radius, damage, strike.ImpactTick));
+        return strike;
+    }
+
+    /// <summary>Adds an already-launched strike, for a client mirroring the server's shells.</summary>
+    public void AddStrike(AreaStrike strike) => _strikes.Add(strike);
+
+    public bool RemoveStrike(int id) => _strikes.RemoveAll(s => s.Id == id) > 0;
+
     public void AddIsland(Island island) => _islands.Add(island);
 
     /// <summary>Ticks until <paramref name="island"/> can be plundered again; 0 when it's ripe.</summary>
@@ -76,6 +105,17 @@ public sealed class World
 
     /// <summary>Sends pirates in waves when set; null for worlds that place their own ships (tests, sandboxes).</summary>
     public WaveDirector? Waves { get; set; }
+
+    /// <summary>
+    /// Whether players' shots hurt other players (PvP). Pirates never hurt each other either way, and no ship
+    /// ever hurts itself.
+    /// </summary>
+    public bool FriendlyFire { get; set; }
+
+    /// <summary>Whether a shot from <paramref name="attacker"/> (of <paramref name="attackerTeam"/>) can damage <paramref name="target"/>.</summary>
+    public bool CanDamage(int attackerShipId, Team attackerTeam, Ship target) =>
+        target.Id != attackerShipId
+        && (target.Team != attackerTeam || (FriendlyFire && attackerTeam == Team.Players));
 
     /// <summary>True once every player was sunk at the same time. Nothing respawns and no more waves come.</summary>
     public bool IsRunOver { get; private set; }
@@ -182,9 +222,10 @@ public sealed class World
     /// <summary>Sets the tick counter, for a client mirroring the server's clock.</summary>
     public void SetTick(long tick) => Tick = tick;
 
-    public Projectile SpawnProjectile(Ship owner, Vector2 position, Vector2 velocity, float damage, int lifetimeTicks)
+    public Projectile SpawnProjectile(Ship owner, Vector2 position, Vector2 velocity, float damage, int lifetimeTicks,
+        float radius = Projectile.DefaultRadius)
     {
-        var projectile = new Projectile(_nextEntityId++, owner.Id, owner.Team, damage)
+        var projectile = new Projectile(_nextEntityId++, owner.Id, owner.Team, damage, radius)
         {
             Position = position,
             PreviousPosition = position,
@@ -192,7 +233,7 @@ public sealed class World
             RemainingTicks = lifetimeTicks,
         };
         _projectiles.Add(projectile);
-        Emit(new ProjectileSpawned(Tick, projectile.Id, owner.Id, owner.Team, position, velocity, damage, lifetimeTicks));
+        Emit(new ProjectileSpawned(Tick, projectile.Id, owner.Id, owner.Team, position, velocity, damage, lifetimeTicks, radius));
         return projectile;
     }
 
@@ -245,6 +286,7 @@ public sealed class World
             ShipMovement.ClampToBounds(ship, new Vector2(-OutOfBoundsMargin), WorldSize + new Vector2(OutOfBoundsMargin));
 
         StepProjectiles(dt);
+        StepStrikes();
 
         Plundering.Step(this);
 
@@ -265,7 +307,7 @@ public sealed class World
 
             // Credit the kill even if the killer went down in the same exchange.
             var killer = _ships.Find(s => s.Id == killerId);
-            if (killer is not null && killer.Team != victim.Team)
+            if (killer is not null && CanDamage(killer.Id, killer.Team, victim))
                 KillRewards.Grant(this, killer);
         }
 
@@ -281,6 +323,30 @@ public sealed class World
         _ships.RemoveAll(s => s.IsSunk);
     }
 
+    /// <summary>Bursts every shell that's due: hurts each hostile hull within its blast radius.</summary>
+    private void StepStrikes()
+    {
+        Span<Vector2> hull = stackalloc Vector2[HullShape.PointCount];
+        foreach (var strike in _strikes)
+        {
+            if (strike.ImpactTick > Tick)
+                continue;
+
+            foreach (var ship in _ships)
+            {
+                if (ship.IsSunk || !CanDamage(strike.OwnerShipId, strike.Team, ship))
+                    continue;
+                HullShape.GetWorldOutline(ship.Position, ship.Heading, ship.Stats, hull);
+                if (Geometry.DistanceToConvex(hull, strike.Target) > strike.Radius)
+                    continue;
+                ship.Health = MathF.Max(0f, ship.Health - strike.Damage);
+                ship.LastHitByShipId = strike.OwnerShipId;
+            }
+            Emit(new AreaStrikeImpact(Tick, strike.Id, strike.Target, strike.Radius));
+        }
+        _strikes.RemoveAll(s => s.ImpactTick <= Tick);
+    }
+
     private void StepProjectiles(float dt)
     {
         foreach (var projectile in _projectiles)
@@ -289,7 +355,7 @@ public sealed class World
             projectile.Position += projectile.Velocity * dt;
             projectile.RemainingTicks--;
 
-            if (LineHitsLand(from, projectile.Position, Projectile.Radius))
+            if (LineHitsLand(from, projectile.Position, projectile.Radius))
             {
                 projectile.RemainingTicks = 0;
                 Emit(new ProjectileImpact(Tick, projectile.Id, null));
@@ -298,10 +364,10 @@ public sealed class World
 
             foreach (var ship in _ships)
             {
-                if (ship.Team == projectile.Team || ship.IsSunk)
+                if (ship.IsSunk || !CanDamage(projectile.OwnerShipId, projectile.Team, ship))
                     continue;
 
-                if (HullShape.SegmentHits(ship, from, projectile.Position, Projectile.Radius))
+                if (HullShape.SegmentHits(ship, from, projectile.Position, projectile.Radius))
                 {
                     ship.Health = MathF.Max(0f, ship.Health - projectile.Damage);
                     ship.LastHitByShipId = projectile.OwnerShipId;
@@ -400,14 +466,15 @@ public sealed class World
         var ability = ship.GetAbility(slot);
         if (ability is null)
             return RejectionReason.EmptySlot;
-        if (!ability.IsReady)
+        var channel = ability.Definition.ChannelFor(ship, target);
+        if (!ability.IsChannelReady(channel))
             return RejectionReason.OnCooldown;
 
         if (!ability.Definition.Cast(this, ship, target))
             return RejectionReason.CastFailed;
 
-        ability.StartCooldown(ship.Stats.CooldownSpeed);
-        Emit(new AbilityCast(Tick, ship.Id, slot, ability.CooldownDurationTicks));
+        ability.StartCooldown(channel, ship.Stats.CooldownSpeed);
+        Emit(new AbilityCast(Tick, ship.Id, slot, ability.DurationTicks(channel), channel));
         return null;
     }
 

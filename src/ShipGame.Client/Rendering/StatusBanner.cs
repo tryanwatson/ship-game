@@ -22,9 +22,10 @@ public sealed class StatusBanner
         _batch = batch;
     }
 
-    public void Draw(string title, string subtitle, Viewport viewport)
+    public void Draw(string title, string subtitle, HudView hud)
     {
-        _batch.Begin(Matrix.Identity);
+        var viewport = hud.Viewport;
+        _batch.Begin(hud.Transform);
 
         var titleWidth = PixelFont.Measure(title, TitleScale);
         var subtitleWidth = PixelFont.Measure(subtitle, SubtitleScale);

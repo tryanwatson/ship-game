@@ -18,13 +18,23 @@ public sealed record ShipSunk(long Tick, int ShipId, int? KillerShipId) : WorldE
 
 /// <summary>Everything a client needs to fly the ball itself: it moves in a straight line until it expires or the server reports an impact.</summary>
 public sealed record ProjectileSpawned(
-    long Tick, int ProjectileId, int OwnerShipId, Team Team, Vector2 Position, Vector2 Velocity, float Damage, int LifetimeTicks)
+    long Tick, int ProjectileId, int OwnerShipId, Team Team, Vector2 Position, Vector2 Velocity, float Damage, int LifetimeTicks,
+    float Radius = Projectile.DefaultRadius)
     : WorldEvent(Tick);
+
+/// <summary>A shell is in the air: everyone can see where (<paramref name="Target"/>) and when (<paramref name="ImpactTick"/>) it lands.</summary>
+public sealed record AreaStrikeLaunched(
+    long Tick, int StrikeId, int OwnerShipId, Team Team, Vector2 Origin, Vector2 Target, float Radius, float Damage, long ImpactTick)
+    : WorldEvent(Tick);
+
+/// <summary>A shell burst. Damage arrives via ship health; this is for the explosion.</summary>
+public sealed record AreaStrikeImpact(long Tick, int StrikeId, Vector2 Target, float Radius) : WorldEvent(Tick);
 
 /// <param name="ShipId">The ship it struck, or null if it hit land.</param>
 public sealed record ProjectileImpact(long Tick, int ProjectileId, int? ShipId) : WorldEvent(Tick);
 
-public sealed record AbilityCast(long Tick, int ShipId, AbilitySlot Slot, int CooldownTicks) : WorldEvent(Tick);
+/// <param name="Channel">Which of the ability's cooldowns it used (the broadside's side; 0 for most).</param>
+public sealed record AbilityCast(long Tick, int ShipId, AbilitySlot Slot, int CooldownTicks, int Channel = 0) : WorldEvent(Tick);
 
 public sealed record ShipGrounded(long Tick, int ShipId) : WorldEvent(Tick);
 

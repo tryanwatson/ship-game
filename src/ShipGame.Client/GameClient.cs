@@ -25,6 +25,7 @@ public sealed class GameClient : Game
     private readonly string? _connectHost;
     private readonly int _connectPort;
     private readonly bool _hosting;
+    private readonly bool _hostFriendlyFire;
     private HostedServer? _hostedServer;
     private string? _hostError;
 
@@ -60,14 +61,39 @@ public sealed class GameClient : Game
 
     private bool _cameraLocked = true;
     private NVector2 _lastMoveOrder;
+
+    // Quick-cast for aimed abilities: a tap (released within AimHoldSeconds) fires at the cursor on release with no
+    // indicator; holding longer brings up the targeting indicator and releasing fires; any click while the key is
+    // down cancels.
+    private const double AimHoldSeconds = 0.15;
+    private AbilitySlot? _aimKeyDown;
+    private double _aimHeldSeconds;
+    private NVector2 _aimCursor;
+
+    // Dropping anchor takes holding X this long (raising is still a press, then the 10 s haul). After it drops,
+    // X must be released before it does anything else, so the same hold doesn't start raising it again.
+    private const double AnchorHoldSeconds = 2.0;
+    private double _anchorHeldSeconds;
+    private bool _anchorKeyLatched;
+
+    /// <summary>0..1 while X is being held to drop anchor; 0 otherwise.</summary>
+    private float AnchorDropProgress => (float)Math.Clamp(_anchorHeldSeconds / AnchorHoldSeconds, 0, 1);
+
+    // A right-click that cancelled targeting doesn't turn into drag-to-move while the button stays down.
+    private bool _ignoreRightDrag;
+
+    /// <summary>The ability whose targeting indicator is showing (held past the tap threshold).</summary>
+    private AbilitySlot? ShowingAim => _aimKeyDown is { } slot && _aimHeldSeconds >= AimHoldSeconds ? slot : null;
     private int _sentRudder;
     private double _titleTimer;
     private int _framesSinceTitle;
 
     /// <param name="connectHost">Server to join; null for single-player.</param>
     /// <param name="host">Run a server in this process on <paramref name="connectPort"/> and join it.</param>
-    public GameClient(string? connectHost = null, int connectPort = Protocol.DefaultPort, bool host = false)
+    /// <param name="friendlyFire">When hosting: whether players' shots hurt each other.</param>
+    public GameClient(string? connectHost = null, int connectPort = Protocol.DefaultPort, bool host = false, bool friendlyFire = true)
     {
+        _hostFriendlyFire = friendlyFire;
         _connectHost = connectHost;
         _connectPort = connectPort;
         _hosting = host;
@@ -85,6 +111,9 @@ public sealed class GameClient : Game
 
     private int LocalPlayerId => _session.LocalPlayerId;
 
+    /// <summary>HUD layout space for the current window size (see <see cref="HudView"/>).</summary>
+    private HudView Hud => new(GraphicsDevice.Viewport);
+
     private NetworkGameSession? Online => _session as NetworkGameSession;
 
     protected override void Initialize()
@@ -93,7 +122,7 @@ public sealed class GameClient : Game
         {
             try
             {
-                _hostedServer = new HostedServer(_connectPort);
+                _hostedServer = new HostedServer(_connectPort, _hostFriendlyFire);
             }
             catch (InvalidOperationException)
             {
@@ -168,15 +197,28 @@ public sealed class GameClient : Game
                 StartRun();
         }
 
+        if (!IsActive)
+        {
+            _aimKeyDown = null; // keys released while unfocused are never seen: don't leave an indicator stuck on
+            _anchorHeldSeconds = 0;
+        }
+
         if (IsActive)
         {
-            _shipyardPanel.Update(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _input, GraphicsDevice.Viewport, _session.Send);
-            HandleOrders();
+            // While an aimed key is down, clicks belong to targeting (they cancel it), not to the shipyard panel.
+            if (_aimKeyDown is null)
+                _shipyardPanel.Update(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _input, Hud, _session.Send);
+            HandleOrders(dt);
         }
         UpdateRudder();
 
         _session.Update(dt);
-        _session.TakeEvents(); // nothing listens yet; drained so they don't pile up (effects and sounds will)
+        foreach (var worldEvent in _session.TakeEvents())
+        {
+            if (worldEvent is AreaStrikeImpact impact)
+                _worldRenderer.AddBlast(impact.Target, impact.Radius);
+        }
+        _worldRenderer.UpdateEffects((float)dt);
 
         if (IsActive)
             HandleCamera((float)dt);
@@ -189,25 +231,25 @@ public sealed class GameClient : Game
     {
         GraphicsDevice.Clear(new Color(10, 22, 40));
         var view = _camera.GetView(GraphicsDevice.Viewport);
-        _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
-        _islandOverlays.Draw(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _session.InterpolationAlpha, view, GraphicsDevice.Viewport);
-        _offscreenMarkers.Draw(_session.World, _session.InterpolationAlpha, view, GraphicsDevice.Viewport);
+        var aim = ShowingAim is { } slot ? new AimPreview(slot, _aimCursor) : (AimPreview?)null;
+        _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view, aim);
+        _islandOverlays.Draw(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _session.InterpolationAlpha, view, Hud, AnchorDropProgress);
+        _offscreenMarkers.Draw(_session.World, _session.InterpolationAlpha, view, Hud);
         var localShip = _session.World.GetPlayerShip(LocalPlayerId);
         var plunderReady = localShip is not null && Plundering.PlunderableFrom(_session.World, localShip.Position) is not null;
         var shipyardReady = localShip is not null && Shipyards.ShipyardFrom(_session.World, localShip.Position) is not null;
-        _abilityBar.Draw(localShip, plunderReady, shipyardReady, GraphicsDevice.Viewport);
-        _compass.Draw(_session.World.Wind, GraphicsDevice.Viewport);
+        _abilityBar.Draw(localShip, plunderReady, shipyardReady, Hud, AnchorDropProgress);
+        _compass.Draw(_session.World.Wind, Hud);
         var gold = _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
-        _hudCounters.Draw(gold, _session.World.Waves?.Wave ?? 0, GraphicsDevice.Viewport);
-        _shipyardPanel.Draw(_session.World, localShip, _input, GraphicsDevice.Viewport);
+        _hudCounters.Draw(gold, _session.World.Waves?.Wave ?? 0, Hud);
+        _shipyardPanel.Draw(_session.World, localShip, _input, Hud);
         DrawStatusBanner();
         base.Draw(gameTime);
     }
 
-    private void HandleOrders()
+    private void HandleOrders(double dt)
     {
-        if (_input.WasKeyPressed(Keys.X))
-            _session.Send(new ToggleAnchorCommand(LocalPlayerId));
+        UpdateAnchorKey(dt);
 
         if (_input.WasKeyPressed(Keys.W) || _input.WasKeyPressed(Keys.Space))
             _session.Send(new AdjustThrottleCommand(LocalPlayerId, +1));
@@ -216,12 +258,44 @@ public sealed class GameClient : Game
 
         var mouseWorld = IsoProjection.IsoToWorld(_camera.ScreenToIso(_input.MousePosition, GraphicsDevice.Viewport));
 
-        // Quick-cast: abilities fire on key press, sending the cursor position for any that need a target.
+        // Abilities. Broadsides fire on key-down. Aimed ones are quick-cast: tap fires at the cursor (on release,
+        // no indicator), hold shows the targeting indicator and releasing fires, any click while down cancels.
+        var ship = _session.World.GetPlayerShip(LocalPlayerId);
+        _aimCursor = mouseWorld;
+        if (_aimKeyDown is not null)
+            _aimHeldSeconds += dt;
+
         foreach (var (key, slot) in AbilityKeys)
         {
-            if (_input.WasKeyPressed(key))
+            var aimed = ship?.GetAbility(slot)?.Definition.IsAimed == true;
+            if (!aimed)
+            {
+                if (_input.WasKeyPressed(key))
+                    _session.Send(new CastAbilityCommand(LocalPlayerId, slot, mouseWorld));
+            }
+            else if (_input.WasKeyPressed(key))
+            {
+                _aimKeyDown = slot; // pressing another aimed key switches to it
+                _aimHeldSeconds = 0;
+            }
+            else if (_aimKeyDown == slot && _input.WasKeyReleased(key))
+            {
                 _session.Send(new CastAbilityCommand(LocalPlayerId, slot, mouseWorld));
+                _aimKeyDown = null;
+            }
         }
+
+        if (_aimKeyDown is not null && (_input.WasLeftMousePressed || _input.WasRightMousePressed))
+        {
+            _aimKeyDown = null; // cancelled: this click doesn't also move the ship, and releasing the key won't fire
+            _ignoreRightDrag = _input.WasRightMousePressed;
+            return;
+        }
+
+        if (!_input.IsRightMouseDown)
+            _ignoreRightDrag = false;
+        if (_ignoreRightDrag)
+            return;
 
         if (!GraphicsDevice.Viewport.Bounds.Contains(_input.Mouse.Position))
             return;
@@ -274,7 +348,41 @@ public sealed class GameClient : Game
         if (_input.IsKeyDown(Keys.Right)) pan.X += 1;
         if (_input.IsKeyDown(Keys.Up)) pan.Y -= 1;
         if (_input.IsKeyDown(Keys.Down)) pan.Y += 1;
-        _camera.Position += pan * (CameraPanSpeed / _camera.Zoom * dt);
+        // Pan at a steady speed across the screen, whatever the zoom or window size.
+        _camera.Position += pan * (CameraPanSpeed / _camera.EffectiveScale(GraphicsDevice.Viewport) * dt);
+    }
+
+    /// <summary>
+    /// X: with the anchor up, hold it for <see cref="AnchorHoldSeconds"/> to let go; with it down, a press starts
+    /// hauling it in. Mid-haul it does nothing.
+    /// </summary>
+    private void UpdateAnchorKey(double dt)
+    {
+        var anchor = _session.World.GetPlayerShip(LocalPlayerId)?.Anchor;
+        if (!_input.IsKeyDown(Keys.X))
+        {
+            _anchorKeyLatched = false;
+            _anchorHeldSeconds = 0;
+            return;
+        }
+        if (_anchorKeyLatched || anchor is null)
+            return;
+
+        if (anchor == AnchorState.Down)
+        {
+            _session.Send(new ToggleAnchorCommand(LocalPlayerId)); // start raising
+            _anchorKeyLatched = true;
+            return;
+        }
+        if (anchor != AnchorState.Weighed)
+            return;
+
+        _anchorHeldSeconds += dt;
+        if (_anchorHeldSeconds < AnchorHoldSeconds)
+            return;
+        _session.Send(new ToggleAnchorCommand(LocalPlayerId)); // let go
+        _anchorHeldSeconds = 0;
+        _anchorKeyLatched = true;
     }
 
     private bool IsLocallyReady(NetworkGameSession online) =>
@@ -285,7 +393,7 @@ public sealed class GameClient : Game
         var world = _session.World;
         if (_hostError is not null)
         {
-            _statusBanner.Draw("COULD NOT HOST", _hostError, GraphicsDevice.Viewport);
+            _statusBanner.Draw("COULD NOT HOST", _hostError, Hud);
             return;
         }
         if (Online is { } online && DrawConnectionBanner(online))
@@ -294,12 +402,12 @@ public sealed class GameClient : Game
         if (world.IsRunOver)
         {
             var wave = world.Waves?.Wave ?? 0;
-            _statusBanner.Draw("RUN OVER", $"SUNK ON WAVE {wave}  -  PRESS ENTER FOR A NEW RUN", GraphicsDevice.Viewport);
+            _statusBanner.Draw("RUN OVER", $"SUNK ON WAVE {wave}  -  PRESS ENTER FOR A NEW RUN", Hud);
         }
         else if (world.Players.TryGetValue(LocalPlayerId, out var player) && player.IsAwaitingRespawn)
         {
             var seconds = (int)Math.Ceiling(player.RespawnTicksRemaining / (double)SimConstants.TickRate);
-            _statusBanner.Draw("SUNK", $"RESPAWNING IN {seconds}", GraphicsDevice.Viewport);
+            _statusBanner.Draw("SUNK", $"RESPAWNING IN {seconds}", Hud);
         }
     }
 
@@ -310,10 +418,10 @@ public sealed class GameClient : Game
         switch (connection.Status)
         {
             case ConnectionStatus.Connecting:
-                _statusBanner.Draw("CONNECTING", $"{online.Host}:{online.Port}", GraphicsDevice.Viewport);
+                _statusBanner.Draw("CONNECTING", $"{online.Host}:{online.Port}", Hud);
                 return true;
             case ConnectionStatus.Disconnected:
-                _statusBanner.Draw("DISCONNECTED", connection.DisconnectReason ?? "", GraphicsDevice.Viewport);
+                _statusBanner.Draw("DISCONNECTED", connection.DisconnectReason ?? "", Hud);
                 return true;
             case ConnectionStatus.Lobby:
             {
@@ -321,7 +429,8 @@ public sealed class GameClient : Game
                 var ready = players.Count(p => p.Ready);
                 var prompt = IsLocallyReady(online) ? "READY - WAITING FOR THE CREW" : "PRESS ENTER WHEN READY";
                 var title = _session.World.IsRunOver ? $"RUN OVER - WAVE {_session.World.Waves?.Wave ?? 0}" : "LOBBY";
-                _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {prompt}", GraphicsDevice.Viewport);
+                var mode = connection.Lobby?.FriendlyFire == true ? "FRIENDLY FIRE ON" : "CO-OP";
+                _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {mode}  -  {prompt}", Hud);
                 return true;
             }
             default:

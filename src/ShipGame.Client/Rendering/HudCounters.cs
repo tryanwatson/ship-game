@@ -32,9 +32,10 @@ public sealed class HudCounters
         _batch = batch;
     }
 
-    public void Draw(int gold, int wave, Viewport viewport)
+    public void Draw(int gold, int wave, HudView hud)
     {
-        _batch.Begin(Matrix.Identity);
+        var viewport = hud.Viewport;
+        _batch.Begin(hud.Transform);
         var right = viewport.Width - RightMargin;
 
         DrawCounter(right, FirstTop, gold, GoldDigits, DrawCoin);

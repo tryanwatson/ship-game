@@ -49,12 +49,13 @@ public class WorldEventTests
     {
         var (world, ship) = CreateWorld();
 
-        world.Enqueue(new CastAbilityCommand(PlayerId, AbilitySlot.Two, Vector2.Zero));
+        world.Enqueue(new CastAbilityCommand(PlayerId, AbilitySlot.One, ship.Position + new Vector2(0, 5)));
         var events = StepAndDrain(world);
 
         var cast = Assert.Single(events.OfType<AbilityCast>());
         Assert.Equal(ship.Id, cast.ShipId);
-        Assert.Equal(ship.GetAbility(AbilitySlot.Two)!.CooldownDurationTicks, cast.CooldownTicks);
+        Assert.Equal(BroadsideVolley.StarboardChannel, cast.Channel);
+        Assert.Equal(ship.GetAbility(AbilitySlot.One)!.DurationTicks(cast.Channel), cast.CooldownTicks);
 
         var spawned = events.OfType<ProjectileSpawned>().ToList();
         Assert.Equal(BroadsideVolley.CannonCount, spawned.Count);
@@ -74,7 +75,7 @@ public class WorldEventTests
         var (world, ship) = CreateWorld();
         var target = world.SpawnShip(new Vector2(30, 34), 0f, ShipStats.Sloop);
 
-        world.Enqueue(new CastAbilityCommand(PlayerId, AbilitySlot.Two, Vector2.Zero));
+        world.Enqueue(new CastAbilityCommand(PlayerId, AbilitySlot.One, ship.Position + new Vector2(0, 5)));
         var events = StepAndDrain(world, SimConstants.TickRate);
 
         Assert.Contains(events.OfType<ProjectileImpact>(), e => e.ShipId == target.Id);
@@ -87,7 +88,7 @@ public class WorldEventTests
         var target = world.SpawnShip(new Vector2(30, 34), 0f, ShipStats.Sloop);
         target.Health = 1f;
 
-        world.Enqueue(new CastAbilityCommand(PlayerId, AbilitySlot.Two, Vector2.Zero));
+        world.Enqueue(new CastAbilityCommand(PlayerId, AbilitySlot.One, ship.Position + new Vector2(0, 5)));
         var events = StepAndDrain(world, SimConstants.TickRate);
 
         var sunk = Assert.Single(events.OfType<ShipSunk>());
@@ -183,12 +184,23 @@ public class WorldEventTests
         new object[] { "sunk", (Func<World, Ship, Command>)((w, s) => { s.Health = 0; w.Step(); return new MoveCommand(PlayerId, Vector2.One); }), RejectionReason.NoShip },
         new object[] { "move at anchor", (Func<World, Ship, Command>)((w, s) => { s.IsAnchored = true; return new MoveCommand(PlayerId, Vector2.One); }), RejectionReason.Anchored },
         new object[] { "anchor mid-raise", (Func<World, Ship, Command>)((w, s) => { s.IsAnchored = true; Anchoring.Toggle(s); return new ToggleAnchorCommand(PlayerId); }), RejectionReason.AnchorBusy },
-        new object[] { "empty slot", (Func<World, Ship, Command>)((w, s) => new CastAbilityCommand(PlayerId, AbilitySlot.Three, Vector2.Zero)), RejectionReason.EmptySlot },
         new object[] { "bad slot", (Func<World, Ship, Command>)((w, s) => new CastAbilityCommand(PlayerId, (AbilitySlot)42, Vector2.Zero)), RejectionReason.InvalidSlot },
         new object[] { "on cooldown", (Func<World, Ship, Command>)((w, s) => { w.TryCastAbility(s, AbilitySlot.One, Vector2.Zero); return new CastAbilityCommand(PlayerId, AbilitySlot.One, Vector2.Zero); }), RejectionReason.OnCooldown },
         new object[] { "shop at sea", (Func<World, Ship, Command>)((w, s) => new PurchaseUpgradeCommand(PlayerId, "speed")), RejectionReason.NotAtShipyard },
         new object[] { "plunder at sea", (Func<World, Ship, Command>)((w, s) => new ChoosePlunderCommand(PlayerId)), RejectionReason.NotAtShipyard },
     };
+
+    [Fact]
+    public void CastingAnEmptySlot_SaysWhy()
+    {
+        var world = new World(new Vector2(128, 128)) { Wind = Vector2.Zero };
+        world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.Pirate); // pirate loadout: slots 2-4 empty
+
+        world.Enqueue(new CastAbilityCommand(PlayerId, AbilitySlot.Three, Vector2.Zero));
+        var rejected = Assert.Single(StepAndDrain(world).OfType<CommandRejected>());
+
+        Assert.Equal(RejectionReason.EmptySlot, rejected.Reason);
+    }
 
     [Fact]
     public void ShipyardRejections_SayWhy()

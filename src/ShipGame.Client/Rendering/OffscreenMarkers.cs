@@ -26,9 +26,10 @@ public sealed class OffscreenMarkers
         _batch = batch;
     }
 
-    public void Draw(World world, float alpha, Matrix view, Viewport viewport)
+    public void Draw(World world, float alpha, Matrix view, HudView hud)
     {
-        _batch.Begin(Matrix.Identity);
+        var viewport = hud.Viewport;
+        _batch.Begin(hud.Transform);
         var center = new Vector2(viewport.Width / 2f, viewport.Height / 2f);
         var halfExtent = center - new Vector2(EdgeMargin);
         Span<Vector2> arrow = stackalloc Vector2[3];
@@ -39,7 +40,7 @@ public sealed class OffscreenMarkers
                 continue;
 
             var world2D = NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha);
-            var screen = Vector2.Transform(IsoProjection.WorldToIso(world2D), view);
+            var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(world2D), view));
             if (viewport.Bounds.Contains(screen.ToPoint()))
                 continue;
 

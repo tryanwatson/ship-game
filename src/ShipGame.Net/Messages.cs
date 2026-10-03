@@ -5,12 +5,12 @@ using ShipGame.Shared.Stats;
 namespace ShipGame.Net;
 
 /// <summary>Who's connected and who's ready, plus whether a run is underway (no joining mid-run).</summary>
-public sealed record LobbyState(bool RunInProgress, IReadOnlyList<LobbyPlayer> Players);
+public sealed record LobbyState(bool RunInProgress, IReadOnlyList<LobbyPlayer> Players, bool FriendlyFire = false);
 
 public sealed record LobbyPlayer(int PlayerId, bool Ready);
 
 /// <summary>A run is starting: clients rebuild their world. The islands come from the map, not the wire.</summary>
-public sealed record RunStart(long Tick, Vector2 WorldSize, Vector2 Wind);
+public sealed record RunStart(long Tick, Vector2 WorldSize, Vector2 Wind, bool FriendlyFire = false);
 
 /// <summary>
 /// Everything about a ship that rarely changes: identity, hull, guns, and upgrades. Sent reliably when the
@@ -44,7 +44,8 @@ public sealed class ShipState
     public int PlunderTicks;
     public NpcStance Stance;
     public Vector2? MoveTarget;
-    public (int Remaining, int Duration)[] Cooldowns = new (int, int)[Ship.AbilitySlotCount];
+    /// <summary>Per ability slot, per cooldown channel: (remaining, duration) ticks. Empty for an empty slot.</summary>
+    public (int Remaining, int Duration)[][] Cooldowns = new (int, int)[Ship.AbilitySlotCount][];
 }
 
 public sealed record PlayerSnapshot(int PlayerId, int Gold, int Kills, int RespawnTicks);
@@ -103,7 +104,9 @@ public sealed class Snapshot
         for (var i = 0; i < Ship.AbilitySlotCount; i++)
         {
             var ability = ship.Abilities[i];
-            state.Cooldowns[i] = ability is null ? (0, 0) : (ability.CooldownRemainingTicks, ability.CooldownDurationTicks);
+            state.Cooldowns[i] = ability is null
+                ? Array.Empty<(int, int)>()
+                : Enumerable.Range(0, ability.Channels).Select(c => (ability.RemainingTicks(c), ability.DurationTicks(c))).ToArray();
         }
         return state;
     }

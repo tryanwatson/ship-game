@@ -25,6 +25,8 @@ public sealed class InputState
 
     public bool WasKeyPressed(Keys key) => Keyboard.IsKeyDown(key) && PreviousKeyboard.IsKeyUp(key);
 
+    public bool WasKeyReleased(Keys key) => Keyboard.IsKeyUp(key) && PreviousKeyboard.IsKeyDown(key);
+
     public bool WasLeftMousePressed =>
         Mouse.LeftButton == ButtonState.Pressed && PreviousMouse.LeftButton == ButtonState.Released;
 

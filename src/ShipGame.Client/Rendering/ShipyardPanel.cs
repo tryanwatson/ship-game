@@ -53,8 +53,9 @@ public sealed class ShipyardPanel
         _batch = batch;
     }
 
-    public void Update(World world, Ship? ship, InputState input, Viewport viewport, Action<Command> send)
+    public void Update(World world, Ship? ship, InputState input, HudView hud, Action<Command> send)
     {
+        var viewport = hud.Viewport;
         var shipyard = ship is null ? null : Shipyards.DockedAt(world, ship);
         if (shipyard is null || ship is null)
         {
@@ -72,7 +73,7 @@ public sealed class ShipyardPanel
         if (!input.WasLeftMousePressed)
             return;
 
-        var mouse = input.Mouse.Position;
+        var mouse = hud.FromScreen(input.Mouse.Position);
         foreach (var button in Layout(world, ship, shipyard, viewport, out _))
         {
             if (!button.Enabled || !button.Bounds.Contains(mouse))
@@ -85,13 +86,14 @@ public sealed class ShipyardPanel
         }
     }
 
-    public void Draw(World world, Ship? ship, InputState input, Viewport viewport)
+    public void Draw(World world, Ship? ship, InputState input, HudView hud)
     {
+        var viewport = hud.Viewport;
         var shipyard = ship is null ? null : Shipyards.DockedAt(world, ship);
         if (shipyard is null || ship is null)
             return;
 
-        _batch.Begin(Matrix.Identity);
+        _batch.Begin(hud.Transform);
         var buttons = Layout(world, ship, shipyard, viewport, out var panel);
 
         FillRect(panel, PanelBack);
@@ -115,7 +117,7 @@ public sealed class ShipyardPanel
             DrawUpgradeRows(ship, panel);
         }
 
-        var mouse = input.Mouse.Position;
+        var mouse = hud.FromScreen(input.Mouse.Position);
         foreach (var button in buttons)
             DrawButton(button, button.Enabled && button.Bounds.Contains(mouse));
 

@@ -36,15 +36,16 @@ public sealed class IslandOverlays
         _batch = batch;
     }
 
-    public void Draw(World world, Ship? localShip, float alpha, Matrix view, Viewport viewport)
+    /// <param name="anchorDropProgress">0..1 while the player is holding X to drop anchor.</param>
+    public void Draw(World world, Ship? localShip, float alpha, Matrix view, HudView hud, float anchorDropProgress = 0f)
     {
-        _batch.Begin(Matrix.Identity);
-        var bounds = viewport.Bounds;
+        _batch.Begin(hud.Transform);
+        var bounds = hud.Viewport.Bounds;
         bounds.Inflate(60, 60);
 
         foreach (var island in world.Islands)
         {
-            var screen = Vector2.Transform(IsoProjection.WorldToIso(island.Center), view);
+            var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(island.Center), view));
             if (!bounds.Contains(screen.ToPoint()))
                 continue;
 
@@ -58,10 +59,15 @@ public sealed class IslandOverlays
         if (localShip is not null)
         {
             var position = NVector2.Lerp(localShip.PreviousPosition, localShip.Position, alpha);
-            var above = Vector2.Transform(IsoProjection.WorldToIso(position) - new Vector2(0, 62f), view);
+            var above = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(position) - new Vector2(0, 62f), view));
 
-            // Raising cancels plundering, so at most one of these shows.
-            if (localShip.Anchor == AnchorState.Raising)
+            // Raising cancels plundering, and dropping only happens under way, so at most one of these shows.
+            if (anchorDropProgress > 0f && localShip.Anchor == AnchorState.Weighed)
+            {
+                DrawProgressBar(above, anchorDropProgress, AnchorFill);
+                DrawAnchorMark(above + new Vector2(-29f, 0f));
+            }
+            else if (localShip.Anchor == AnchorState.Raising)
             {
                 DrawProgressBar(above, Anchoring.RaiseProgress(localShip), AnchorFill);
                 DrawAnchorMark(above + new Vector2(-29f, 0f));

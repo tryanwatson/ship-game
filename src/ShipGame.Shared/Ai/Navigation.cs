@@ -67,7 +67,7 @@ public static class Navigation
     }
 
     /// <summary>Whether a straight line between two points is blocked by land (for line-of-fire checks).</summary>
-    public static bool LineBlockedByLand(World world, Vector2 from, Vector2 to) => world.LineHitsLand(from, to, Projectile.Radius);
+    public static bool LineBlockedByLand(World world, Vector2 from, Vector2 to) => world.LineHitsLand(from, to, Projectile.DefaultRadius);
 
     /// <summary>
     /// Seconds of the preview before the ship would come within <see cref="Clearance"/> of land: turning onto

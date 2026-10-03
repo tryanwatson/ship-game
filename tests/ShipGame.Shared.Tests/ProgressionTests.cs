@@ -23,9 +23,9 @@ public class ProgressionTests
         var enemy = world.SpawnShip(player.Position + new Vector2(0, 4), 0f, ShipStats.Sloop);
         enemy.Health = 1f;
         // Wait out any cooldown left from a previous kill.
-        for (var t = 0; t < SimConstants.TickRate * 5 && !player.GetAbility(AbilitySlot.Two)!.IsReady; t++)
+        for (var t = 0; t < SimConstants.TickRate * 5 && !player.GetAbility(AbilitySlot.One)!.IsReady; t++)
             world.Step();
-        world.TryCastAbility(player, AbilitySlot.Two, Vector2.Zero);
+        world.TryCastAbility(player, AbilitySlot.One, player.Position + new Vector2(0, 5));
         for (var t = 0; t < SimConstants.TickRate && world.Ships.Contains(enemy); t++)
             world.Step();
         Assert.DoesNotContain(enemy, world.Ships);
@@ -110,10 +110,10 @@ public class ProgressionTests
 
         var expected = (int)MathF.Round(volley.Definition.CooldownTicks / 1.25f);
         Assert.Equal(expected, volley.CooldownDurationTicks);
-        Assert.Equal(1f, volley.CooldownFraction);
+        Assert.Equal(1f, volley.CooldownFraction(BroadsideVolley.PortChannel));
         for (var t = 0; t < expected; t++)
             world.Step();
-        Assert.True(volley.IsReady);
+        Assert.True(volley.IsChannelReady(BroadsideVolley.PortChannel));
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public class ProgressionTests
         var player = world.SpawnShip(new Vector2(30, 34), 0f, ShipStats.Sloop, PlayerId);
         player.Health = 1f;
 
-        world.TryCastAbility(pirate, AbilitySlot.Two, Vector2.Zero);
+        world.TryCastAbility(pirate, AbilitySlot.One, pirate.Position + new Vector2(0, 5));
         for (var t = 0; t < SimConstants.TickRate; t++)
             world.Step();
 
