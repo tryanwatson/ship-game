@@ -106,6 +106,17 @@ public sealed class ClientConnection : IDisposable
         SendToServer(_writer, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>In the lobby: the weapon to start the next run with (one of <c>WeaponCatalog</c>). Required before readying up.</summary>
+    public void ChooseStartingWeapon(string abilityId)
+    {
+        if (_server is null)
+            return;
+        _writer.Reset();
+        _writer.Put((byte)MessageType.ChooseStartingWeapon);
+        _writer.Put(abilityId);
+        SendToServer(_writer, DeliveryMethod.ReliableOrdered);
+    }
+
     public IReadOnlyList<WorldEvent> TakeEvents() => Replica.TakeEvents();
 
     public void Dispose() => _net.Stop();

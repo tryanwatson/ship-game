@@ -18,7 +18,7 @@ public class WorldEventTests
     private static (World world, Ship ship) CreateWorld()
     {
         var world = new World(new Vector2(128, 128)) { Wind = Vector2.Zero };
-        var ship = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.Sloop);
+        var ship = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.FullArsenal);
         world.DrainEvents(); // discard setup
         return (world, ship);
     }
@@ -237,7 +237,7 @@ public class WorldEventTests
     {
         var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
         var player = world.SpawnShip(new Vector2(100, 100), 0f, ShipStats.Sloop, PlayerId);
-        var pirate = world.SpawnShip(new Vector2(115, 100), MathF.PI, ShipStats.Sloop, abilities: Loadouts.Sloop); // inside aggro range
+        var pirate = world.SpawnShip(new Vector2(115, 100), MathF.PI, ShipStats.Sloop, abilities: Loadouts.FullArsenal); // inside aggro range
         var hunter = new HunterBehavior(new Vector2(130, 100));
         pirate.Behavior = hunter;
         player.IsAnchored = true;

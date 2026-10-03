@@ -15,7 +15,7 @@ public class AimedWeaponTests
     private static (World world, Ship ship) CreateWorld()
     {
         var world = new World(new Vector2(128, 128)) { Wind = Vector2.Zero };
-        var ship = world.SpawnShip(new Vector2(60, 60), 0f, ShipStats.Sloop, PlayerId, Loadouts.Sloop);
+        var ship = world.SpawnShip(new Vector2(60, 60), 0f, ShipStats.Sloop, PlayerId, Loadouts.FullArsenal);
         world.DrainEvents();
         return (world, ship);
     }
@@ -35,10 +35,10 @@ public class AimedWeaponTests
     [Fact]
     public void PlayerSloop_CarriesBothNewWeapons_PiratesDoNot()
     {
-        Assert.IsType<LongGun>(Loadouts.Sloop[(int)AbilitySlot.Two]);
-        Assert.IsType<Mortar>(Loadouts.Sloop[(int)AbilitySlot.Three]);
-        Assert.IsType<BroadsideVolley>(Loadouts.Sloop[(int)AbilitySlot.One]);
-        Assert.Null(Loadouts.Sloop[(int)AbilitySlot.Four]);
+        Assert.IsType<LongGun>(Loadouts.FullArsenal[(int)AbilitySlot.Two]);
+        Assert.IsType<Mortar>(Loadouts.FullArsenal[(int)AbilitySlot.Three]);
+        Assert.IsType<BroadsideVolley>(Loadouts.FullArsenal[(int)AbilitySlot.One]);
+        Assert.Null(Loadouts.FullArsenal[(int)AbilitySlot.Four]);
         Assert.IsType<BroadsideVolley>(Loadouts.Pirate[(int)AbilitySlot.One]); // pirates: broadside only
         Assert.All(Loadouts.Pirate.Skip(1), Assert.Null);
         Assert.NotNull(AbilityRegistry.Find("long-gun"));

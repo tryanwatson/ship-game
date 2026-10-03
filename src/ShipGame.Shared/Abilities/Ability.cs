@@ -23,7 +23,14 @@ public abstract class Ability
 
     public abstract string Name { get; }
 
+    /// <summary>One line for the shipyard and the loadout picker.</summary>
+    public virtual string Description => "";
+
+    /// <summary>Base cooldown, before skills and the ship's reload speed.</summary>
     public abstract int CooldownTicks { get; }
+
+    /// <summary>This ship's cooldown for the ability: the base, changed by its skills (not yet by its reload speed).</summary>
+    public float CooldownTicksFor(Ship ship) => ship.AbilityValue(Id, AbilityStat.Cooldown, CooldownTicks);
 
     /// <summary>
     /// Aimed at a point: the client shows a targeting indicator while the key is held and casts on release.
@@ -83,11 +90,14 @@ public sealed class AbilityState
     public int CooldownDurationTicks => DurationTicks(0);
 
     /// <summary>Starts a channel's cooldown, shortened by <paramref name="cooldownSpeed"/> (1 = normal).</summary>
-    public void StartCooldown(int channel, float cooldownSpeed)
+    public void StartCooldown(int channel, float cooldownSpeed) => StartCooldown(channel, Definition.CooldownTicks, cooldownSpeed);
+
+    /// <summary>Starts a channel's cooldown of <paramref name="baseTicks"/>, shortened by <paramref name="cooldownSpeed"/>.</summary>
+    public void StartCooldown(int channel, float baseTicks, float cooldownSpeed)
     {
         if (!InRange(channel))
             return;
-        var duration = Definition.CooldownTicks / MathF.Max(cooldownSpeed, 0.01f);
+        var duration = baseTicks / MathF.Max(cooldownSpeed, 0.01f);
         _duration[channel] = Math.Max(1, (int)MathF.Round(duration));
         _remaining[channel] = _duration[channel];
     }
@@ -99,6 +109,13 @@ public sealed class AbilityState
             return;
         _remaining[channel] = Math.Max(0, remainingTicks);
         _duration[channel] = Math.Max(0, durationTicks);
+    }
+
+    /// <summary>Takes <paramref name="fraction"/> of each reloading channel's full cooldown off what's left.</summary>
+    public void Refund(float fraction)
+    {
+        for (var i = 0; i < _remaining.Length; i++)
+            _remaining[i] = Math.Max(0, _remaining[i] - (int)MathF.Round(_duration[i] * fraction));
     }
 
     public void TickCooldown()

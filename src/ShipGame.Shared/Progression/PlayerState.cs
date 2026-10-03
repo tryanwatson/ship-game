@@ -20,6 +20,6 @@ public sealed class PlayerState
 
     public bool IsAwaitingRespawn => RespawnTicksRemaining > 0;
 
-    /// <summary>The ship that went down, kept so the replacement can inherit its hull, guns, and upgrades. Server-side only.</summary>
+    /// <summary>The ship that went down, kept so the replacement can inherit its hull, guns, skills, and upgrades. Server-side only.</summary>
     public Simulation.Ship? LostShip { get; set; }
 }

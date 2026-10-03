@@ -104,7 +104,7 @@ public sealed class ServerSecurityTests : IDisposable
         StartServer();
         var flooder = Connect();
         PumpUntil(() => flooder.Status == ConnectionStatus.Lobby, "the lobby");
-        flooder.SetReady();
+        flooder.ReadyUp();
         PumpUntil(() => flooder.Status == ConnectionStatus.InRun, "the run");
 
         for (var i = 0; i < 1000; i++)
@@ -127,7 +127,7 @@ public sealed class ServerSecurityTests : IDisposable
         StartServer();
         var client = Connect();
         PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
-        client.SetReady();
+        client.ReadyUp();
         PumpUntil(() => client.Status == ConnectionStatus.InRun, "the run");
 
         // What the client sends while right-drag steering: one order per tick, plus the odd key press.

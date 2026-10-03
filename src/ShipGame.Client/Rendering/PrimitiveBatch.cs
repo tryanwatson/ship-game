@@ -14,6 +14,7 @@ public sealed class PrimitiveBatch : IDisposable
     private readonly List<VertexPositionColor> _lines = new();
     private VertexPositionColor[] _triangleBuffer = Array.Empty<VertexPositionColor>();
     private VertexPositionColor[] _lineBuffer = Array.Empty<VertexPositionColor>();
+    private float _opacity = 1f;
 
     public Viewport Viewport => _device.Viewport;
 
@@ -23,8 +24,9 @@ public sealed class PrimitiveBatch : IDisposable
         _effect = new BasicEffect(device) { VertexColorEnabled = true };
     }
 
-    public void Begin(Matrix view)
+    public void Begin(Matrix view, float opacity = 1f)
     {
+        _opacity = Math.Clamp(opacity, 0f, 1f);
         var viewport = _device.Viewport;
         _effect.View = view;
         _effect.Projection = Matrix.CreateOrthographicOffCenter(0, viewport.Width, viewport.Height, 0, 0, 1);
@@ -113,6 +115,6 @@ public sealed class PrimitiveBatch : IDisposable
         vertices.CopyTo(buffer);
     }
 
-    private static void Add(List<VertexPositionColor> list, Vector2 p, Color color) =>
-        list.Add(new VertexPositionColor(new Vector3(p, 0f), color));
+    private void Add(List<VertexPositionColor> list, Vector2 p, Color color) =>
+        list.Add(new VertexPositionColor(new Vector3(p, 0f), color * _opacity));
 }

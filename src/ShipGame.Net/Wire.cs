@@ -62,6 +62,8 @@ public static class Wire
         ChoosePlunder = 7,
         PurchaseUpgrade = 8,
         PurchaseContract = 9,
+        UnlockAbility = 10,
+        PurchaseSkill = 11,
     }
 
     public static void PutCommand(this NetDataWriter w, Command command)
@@ -103,6 +105,14 @@ public static class Wire
                 w.Put((byte)CommandTag.PurchaseContract);
                 w.Put(contract.ContractId);
                 break;
+            case UnlockAbilityCommand unlock:
+                w.Put((byte)CommandTag.UnlockAbility);
+                w.Put(unlock.AbilityId);
+                break;
+            case PurchaseSkillCommand skill:
+                w.Put((byte)CommandTag.PurchaseSkill);
+                w.Put(skill.SkillId);
+                break;
             default:
                 throw new ArgumentException($"No wire format for {command.GetType().Name}.");
         }
@@ -120,6 +130,8 @@ public static class Wire
         CommandTag.ChoosePlunder => new ChoosePlunderCommand(playerId),
         CommandTag.PurchaseUpgrade => new PurchaseUpgradeCommand(playerId, r.GetString(64)),
         CommandTag.PurchaseContract => new PurchaseContractCommand(playerId, r.GetInt()),
+        CommandTag.UnlockAbility => new UnlockAbilityCommand(playerId, r.GetString(64)),
+        CommandTag.PurchaseSkill => new PurchaseSkillCommand(playerId, r.GetString(64)),
         var tag => throw new InvalidDataException($"Unknown command tag {tag}."),
     };
 
@@ -150,6 +162,8 @@ public static class Wire
         CargoDropped = 21,
         CargoRecovered = 22,
         CargoLost = 23,
+        AbilityUnlocked = 24,
+        SkillPurchased = 25,
     }
 
     public static void PutEvent(this NetDataWriter w, WorldEvent e)
@@ -183,7 +197,7 @@ public static class Wire
                     w.Put((ushort)cell);
                 break;
             case ProjectileImpact x:
-                Begin(w, EventTag.ProjectileImpact, x); w.Put(x.ProjectileId); w.PutOptional(x.ShipId);
+                Begin(w, EventTag.ProjectileImpact, x); w.Put(x.ProjectileId); w.PutOptional(x.ShipId); w.Put(x.PassedThrough);
                 break;
             case AbilityCast x:
                 Begin(w, EventTag.AbilityCast, x); w.Put(x.ShipId); w.Put((byte)x.Slot); w.Put(x.CooldownTicks); w.Put((byte)x.Channel);
@@ -199,6 +213,12 @@ public static class Wire
                 break;
             case UpgradePurchased x:
                 Begin(w, EventTag.UpgradePurchased, x); w.Put(x.ShipId); w.Put(x.UpgradeId); w.Put(x.Level);
+                break;
+            case AbilityUnlocked x:
+                Begin(w, EventTag.AbilityUnlocked, x); w.Put(x.ShipId); w.Put(x.AbilityId); w.Put((byte)x.Slot);
+                break;
+            case SkillPurchased x:
+                Begin(w, EventTag.SkillPurchased, x); w.Put(x.ShipId); w.Put(x.SkillId);
                 break;
             case WaveStarted x:
                 Begin(w, EventTag.WaveStarted, x); w.Put(x.Wave); w.Put(x.Pirates);
@@ -271,12 +291,14 @@ public static class Wire
                     cells[i] = r.GetUShort();
                 return new AreaDiscovered(tick, team, cells);
             }
-            case EventTag.ProjectileImpact: return new ProjectileImpact(tick, r.GetInt(), r.GetOptionalInt());
+            case EventTag.ProjectileImpact: return new ProjectileImpact(tick, r.GetInt(), r.GetOptionalInt(), r.GetBool());
             case EventTag.AbilityCast: return new AbilityCast(tick, r.GetInt(), (AbilitySlot)r.GetByte(), r.GetInt(), r.GetByte());
             case EventTag.ShipGrounded: return new ShipGrounded(tick, r.GetInt());
             case EventTag.GoldChanged: return new GoldChanged(tick, r.GetInt(), r.GetInt(), r.GetInt());
             case EventTag.IslandPlundered: return new IslandPlundered(tick, r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt());
             case EventTag.UpgradePurchased: return new UpgradePurchased(tick, r.GetInt(), r.GetString(64), r.GetInt());
+            case EventTag.AbilityUnlocked: return new AbilityUnlocked(tick, r.GetInt(), r.GetString(64), (AbilitySlot)r.GetByte());
+            case EventTag.SkillPurchased: return new SkillPurchased(tick, r.GetInt(), r.GetString(64));
             case EventTag.WaveStarted: return new WaveStarted(tick, r.GetInt(), r.GetInt());
             case EventTag.CommandRejected:
             {
@@ -316,6 +338,7 @@ public static class Wire
         {
             w.Put(player.PlayerId);
             w.Put(player.Ready);
+            w.Put(player.StartingWeaponId ?? "");
         }
     }
 
@@ -326,7 +349,12 @@ public static class Wire
         var count = r.GetByte();
         var players = new List<LobbyPlayer>(count);
         for (var i = 0; i < count; i++)
-            players.Add(new LobbyPlayer(r.GetInt(), r.GetBool()));
+        {
+            var id = r.GetInt();
+            var ready = r.GetBool();
+            var weapon = r.GetString(64);
+            players.Add(new LobbyPlayer(id, ready, weapon.Length == 0 ? null : weapon));
+        }
         return new LobbyState(running, players, friendlyFire);
     }
 
@@ -362,6 +390,10 @@ public static class Wire
         }
         w.Put(info.Position);
         w.Put(info.Heading);
+        var skills = info.SkillIds ?? Array.Empty<string>();
+        w.Put((byte)skills.Count);
+        foreach (var id in skills)
+            w.Put(id);
     }
 
     public static ShipInfo GetShipInfo(this NetDataReader r)
@@ -382,7 +414,13 @@ public static class Wire
         var modifiers = new List<StatModifier>(modifierCount);
         for (var i = 0; i < modifierCount; i++)
             modifiers.Add(new StatModifier((StatId)r.GetByte(), (ModifierKind)r.GetByte(), r.GetFloat(), r.GetString(64)));
-        return new ShipInfo(tick, shipId, owner, team, stats, abilities, modifiers, r.GetVector2(), r.GetFloat());
+        var position = r.GetVector2();
+        var heading = r.GetFloat();
+        var skillCount = r.GetByte();
+        var skills = new List<string>(skillCount);
+        for (var i = 0; i < skillCount; i++)
+            skills.Add(r.GetString(64));
+        return new ShipInfo(tick, shipId, owner, team, stats, abilities, modifiers, position, heading, skills);
     }
 
     private static void PutStats(NetDataWriter w, ShipStats s)

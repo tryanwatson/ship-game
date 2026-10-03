@@ -64,7 +64,7 @@ public class HullHitTests
     {
         // End to end: a target lying bow-on across the lane, nose just inside the outermost cannon's line.
         var world = new World(new Vector2(64, 64)) { Wind = Vector2.Zero };
-        var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, 1, ShipGame.Shared.Abilities.Loadouts.Sloop);
+        var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, 1, ShipGame.Shared.Abilities.Loadouts.FullArsenal);
         // Outermost cannon fires along x = 30 + HalfSpan (0.72). Target points at it from ahead, bow tip at x ~ 30.8.
         var target = world.SpawnShip(new Vector2(32f, 34f), MathF.PI, ShipStats.Sloop);
 

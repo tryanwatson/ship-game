@@ -21,7 +21,7 @@ public sealed class ShipVisuals
 
     public ShipVisuals(PrimitiveBatch batch) => _batch = batch;
 
-    public void Draw(Ship ship, NVector2 position, float heading, bool isLocal, bool targeted, float time)
+    public void Draw(Ship ship, NVector2 position, float heading, bool isLocal, bool targeted, float time, float hitFlash = 0f)
     {
         var forward = new NVector2(MathF.Cos(heading), MathF.Sin(heading));
         var side = new NVector2(-forward.Y, forward.X);
@@ -31,6 +31,8 @@ public sealed class ShipVisuals
         var pirate = ship.Team == Team.Pirates;
         var hullColor = pirate ? new Color(108, 69, 53) : new Color(154, 96, 53);
         var deckColor = pirate ? new Color(174, 142, 95) : new Color(212, 177, 116);
+        hullColor = Color.Lerp(hullColor, new Color(255, 226, 173), hitFlash * 0.75f);
+        deckColor = Color.Lerp(deckColor, new Color(255, 247, 209), hitFlash);
         var flagColor = pirate ? new Color(213, 85, 64)
             : isLocal ? new Color(242, 195, 78) : new Color(77, 208, 192);
         Span<NVector2> outline = stackalloc NVector2[HullShape.PointCount];

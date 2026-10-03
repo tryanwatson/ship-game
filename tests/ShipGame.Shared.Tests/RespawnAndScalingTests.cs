@@ -13,7 +13,7 @@ public class RespawnAndScalingTests
     {
         var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
         for (var id = 1; id <= players; id++)
-            world.SpawnShip(new Vector2(80 + id * 6, 96), 0f, ShipStats.Sloop, id, Loadouts.Sloop);
+            world.SpawnShip(new Vector2(80 + id * 6, 96), 0f, ShipStats.Sloop, id, Loadouts.FullArsenal);
         world.DrainEvents();
         return world;
     }

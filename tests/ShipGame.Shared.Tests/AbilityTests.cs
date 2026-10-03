@@ -12,7 +12,7 @@ public class AbilityTests
     private static (World world, Ship ship) CreateWorld()
     {
         var world = new World(new Vector2(64, 64)) { Wind = Vector2.Zero };
-        var ship = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.Sloop);
+        var ship = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.FullArsenal);
         return (world, ship);
     }
 

@@ -65,7 +65,11 @@ public sealed class GameClient : Game
     private StatusBanner _statusBanner = null!;
     private MapView _mapView = null!;
     private MainMenu _menu = null!;
+    private WeaponPicker _weaponPicker = null!;
     private bool _mapOpen;
+
+    // Solo: choosing the starting weapon, before the run starts (online, the lobby does this).
+    private bool _pickingSoloWeapon;
 
     private bool _cameraLocked = true;
     private NVector2 _lastMoveOrder;
@@ -152,6 +156,7 @@ public sealed class GameClient : Game
     private void OpenMenu(string? message = null, bool onJoinPage = false)
     {
         LeaveSession();
+        _pickingSoloWeapon = false;
         _session = new LocalGameSession(EmptySea(), SoloPlayerId);
         _camera.Position = IsoProjection.WorldToIso(Archipelago.Size / 2f);
         _menu.Open(message, onJoinPage);
@@ -196,15 +201,15 @@ public sealed class GameClient : Game
         return world;
     }
 
-    /// <summary>A fresh run: the player's ship at the center, pirates arriving in waves.</summary>
-    private void StartRun()
+    /// <summary>A fresh run: the player's ship at the center carrying <paramref name="weapon"/>, pirates arriving in waves.</summary>
+    private void StartRun(WeaponOffer weapon)
     {
         var seed = Environment.TickCount;
         var world = new World(Archipelago.Size) { Waves = new WaveDirector(seed) };
         foreach (var island in Archipelago.CreateIslands())
             world.AddIsland(island);
         Contracts.OpenMarkets(world, seed);
-        world.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, SoloPlayerId, Loadouts.Sloop);
+        world.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, SoloPlayerId, Loadouts.Starting(weapon.Ability));
 
         _session = new LocalGameSession(world, SoloPlayerId);
         ResetControls();
@@ -236,6 +241,7 @@ public sealed class GameClient : Game
         _statusBanner = new StatusBanner(_primitives);
         _mapView = new MapView(_primitives);
         _menu = new MainMenu(_primitives);
+        _weaponPicker = new WeaponPicker(_primitives);
     }
 
     protected override void UnloadContent()
@@ -273,13 +279,31 @@ public sealed class GameClient : Game
             return;
         }
 
-        // Enter: online, ready up in the lobby; offline, start a new run once this one is over.
+        if (_pickingSoloWeapon)
+        {
+            _session.Update(dt); // the sea (or the last run's wreckage) behind the choice
+            if (IsActive && _weaponPicker.Update(_input, Hud) is { } weapon)
+            {
+                _pickingSoloWeapon = false;
+                StartRun(weapon);
+            }
+            UpdateTitle(dt);
+            base.Update(gameTime);
+            return;
+        }
+
+        // In the lobby: choose a starting weapon (clicks or 1-3), then Enter to ready up.
+        if (IsActive && Online is { Connection.Status: ConnectionStatus.Lobby } inLobby && _weaponPicker.Update(_input, Hud) is { } choice)
+            inLobby.Connection.ChooseStartingWeapon(choice.Id);
+
+        // Enter: online, ready up in the lobby (once a weapon is chosen); offline, choose a weapon for a new run once
+        // this one is over.
         if (IsActive && _input.WasKeyPressed(Keys.Enter))
         {
-            if (Online is { Connection.Status: ConnectionStatus.Lobby } online)
+            if (Online is { Connection.Status: ConnectionStatus.Lobby } online && LocalStartingWeapon(online) is not null)
                 online.Connection.SetReady(!IsLocallyReady(online));
             else if (Online is null && _session.World.IsRunOver)
-                StartRun();
+                _pickingSoloWeapon = true;
         }
 
         if (!IsActive)
@@ -297,13 +321,10 @@ public sealed class GameClient : Game
         }
         UpdateRudder();
 
-        _session.Update(dt);
-        foreach (var worldEvent in _session.TakeEvents())
-        {
-            if (worldEvent is AreaStrikeImpact impact)
-                _worldRenderer.AddBlast(impact.Target, impact.Radius);
-        }
+        _worldRenderer.CaptureEffects(_session.World, _session.InterpolationAlpha);
         _worldRenderer.UpdateEffects((float)dt);
+        _session.Update(dt);
+        _worldRenderer.ProcessEffects(_session.World, _session.TakeEvents());
 
         if (IsActive)
             HandleCamera((float)dt);
@@ -322,7 +343,7 @@ public sealed class GameClient : Game
         {
             case MenuAction.PlaySolo:
                 _menu.Close();
-                StartRun();
+                _pickingSoloWeapon = true;
                 break;
             case MenuAction.Host:
                 SaveSettings();
@@ -355,6 +376,15 @@ public sealed class GameClient : Game
         {
             _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
             _menu.Draw(Hud);
+            base.Draw(gameTime);
+            return;
+        }
+
+        if (_pickingSoloWeapon)
+        {
+            _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
+            _statusBanner.Draw("CHOOSE YOUR WEAPON", "THE OTHERS CAN BE BOUGHT AT SHIPYARDS  -  ESC FOR THE MENU", Hud);
+            _weaponPicker.Draw(_input, Hud, null);
             base.Draw(gameTime);
             return;
         }
@@ -528,6 +558,10 @@ public sealed class GameClient : Game
     private bool IsLocallyReady(NetworkGameSession online) =>
         online.Connection.Lobby?.Players.Any(p => p.PlayerId == online.LocalPlayerId && p.Ready) == true;
 
+    /// <summary>The starting weapon the server has us down for, if we've chosen one.</summary>
+    private static string? LocalStartingWeapon(NetworkGameSession online) =>
+        online.Connection.Lobby?.Players.FirstOrDefault(p => p.PlayerId == online.LocalPlayerId)?.StartingWeaponId;
+
     private void DrawStatusBanner()
     {
         var world = _session.World;
@@ -559,10 +593,14 @@ public sealed class GameClient : Game
             {
                 var players = connection.Lobby?.Players ?? Array.Empty<LobbyPlayer>();
                 var ready = players.Count(p => p.Ready);
-                var prompt = IsLocallyReady(online) ? "READY - WAITING FOR THE CREW" : "PRESS ENTER WHEN READY";
+                var weapon = LocalStartingWeapon(online);
+                var prompt = weapon is null ? "CHOOSE YOUR STARTING WEAPON"
+                    : IsLocallyReady(online) ? "READY - WAITING FOR THE CREW"
+                    : "PRESS ENTER WHEN READY";
                 var title = _session.World.IsRunOver ? $"RUN OVER - WAVE {_session.World.Waves?.Wave ?? 0}" : "LOBBY";
                 var mode = connection.Lobby?.FriendlyFire == true ? "FRIENDLY FIRE ON" : "CO-OP";
                 _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {mode}  -  {prompt}", Hud);
+                _weaponPicker.Draw(_input, Hud, weapon);
                 return true;
             }
             default:

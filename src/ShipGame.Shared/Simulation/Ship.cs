@@ -3,6 +3,7 @@ using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Ai;
 using ShipGame.Shared.Stats;
 using ShipGame.Shared.Trading;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Simulation;
 
@@ -79,7 +80,9 @@ public sealed class Ship
             RecalculateStats();
     }
 
-    /// <summary>Bumped whenever <see cref="Stats"/> changes, so replication can tell when to resend modifiers.</summary>
+    /// <summary>
+    /// Bumped whenever <see cref="Stats"/>, the guns, or the skills change, so replication can tell when to resend them.
+    /// </summary>
     public int StatsVersion { get; private set; }
 
     private void RecalculateStats()
@@ -199,6 +202,84 @@ public sealed class Ship
     public IReadOnlyList<AbilityState?> Abilities => _abilities;
 
     public AbilityState? GetAbility(AbilitySlot slot) => _abilities[(int)slot];
+
+    /// <summary>The ability with this <see cref="Ability.Id"/>, if the ship has it.</summary>
+    public AbilityState? FindAbility(string abilityId) => _abilities.FirstOrDefault(a => a?.Definition.Id == abilityId);
+
+    public bool HasAbility(string abilityId) => FindAbility(abilityId) is not null;
+
+    /// <summary>The first empty slot, if any.</summary>
+    public AbilitySlot? FreeAbilitySlot
+    {
+        get
+        {
+            var index = Array.IndexOf(_abilities, null);
+            return index < 0 ? null : (AbilitySlot)index;
+        }
+    }
+
+    /// <summary>
+    /// Puts <paramref name="ability"/> in <paramref name="slot"/> (null empties it). A slot that already holds the same
+    /// ability keeps its cooldowns.
+    /// </summary>
+    public void SetAbility(AbilitySlot slot, Ability? ability)
+    {
+        var index = (int)slot;
+        if (_abilities[index]?.Definition == ability)
+            return;
+        _abilities[index] = ability is null ? null : new AbilityState(ability);
+        StatsVersion++;
+    }
+
+    private readonly List<SkillDefinition> _skills = new();
+    private readonly List<AbilityModifier> _abilityModifiers = new();
+
+    /// <summary>Skills bought for this ship's weapons, in the order they were bought. Change through <see cref="AddSkill"/>.</summary>
+    public IReadOnlyList<SkillDefinition> Skills => _skills;
+
+    /// <summary>Every ability modifier the skills grant, tagged with the skill's source.</summary>
+    public IReadOnlyList<AbilityModifier> AbilityModifiers => _abilityModifiers;
+
+    public bool HasSkill(string skillId) => _skills.Any(s => s.Id == skillId);
+
+    public void AddSkill(SkillDefinition skill)
+    {
+        if (HasSkill(skill.Id))
+            return;
+        _skills.Add(skill);
+        _abilityModifiers.AddRange(skill.Modifiers);
+        StatsVersion++;
+    }
+
+    /// <summary>Replaces every skill at once, for a client mirroring the server's ship.</summary>
+    public void ReplaceSkills(IEnumerable<SkillDefinition> skills)
+    {
+        _skills.Clear();
+        _abilityModifiers.Clear();
+        foreach (var skill in skills)
+            AddSkill(skill);
+        StatsVersion++;
+    }
+
+    /// <summary>
+    /// One of an ability's numbers on this ship: <paramref name="baseValue"/> with the ship's skills for that ability
+    /// applied, (base + flat) * (1 + percent) like <see cref="StatModifiers"/>.
+    /// </summary>
+    public float AbilityValue(string abilityId, AbilityStat stat, float baseValue)
+    {
+        var flat = 0f;
+        var percent = 0f;
+        foreach (var modifier in _abilityModifiers)
+        {
+            if (modifier.Stat != stat || modifier.AbilityId != abilityId)
+                continue;
+            if (modifier.Kind == ModifierKind.Flat)
+                flat += modifier.Value;
+            else
+                percent += modifier.Value;
+        }
+        return MathF.Max(0f, (baseValue + flat) * (1f + percent));
+    }
 
     // State at the start of the most recent tick, used to interpolate between ticks when rendering.
     public Vector2 PreviousPosition { get; set; }

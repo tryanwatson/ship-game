@@ -13,7 +13,7 @@ public class ProgressionTests
     private static (World world, Ship player) CreateWorld()
     {
         var world = new World(new Vector2(64, 64)) { Wind = Vector2.Zero };
-        var player = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.Sloop);
+        var player = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.FullArsenal);
         return (world, player);
     }
 
@@ -120,7 +120,7 @@ public class ProgressionTests
     public void NpcKills_EarnNothing()
     {
         var world = new World(new Vector2(64, 64)) { Wind = Vector2.Zero };
-        var pirate = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, abilities: Loadouts.Sloop);
+        var pirate = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, abilities: Loadouts.FullArsenal);
         var player = world.SpawnShip(new Vector2(30, 34), 0f, ShipStats.Sloop, PlayerId);
         player.Health = 1f;
 

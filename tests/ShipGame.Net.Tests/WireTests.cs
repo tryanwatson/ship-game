@@ -25,6 +25,8 @@ public class WireTests
         new object[] { new ChoosePlunderCommand(9) },
         new object[] { new PurchaseUpgradeCommand(9, "shot-speed") },
         new object[] { new PurchaseContractCommand(9, 123) },
+        new object[] { new UnlockAbilityCommand(9, "mortar") },
+        new object[] { new PurchaseSkillCommand(9, "heavy-volley") },
     };
 
     [Theory]
@@ -60,6 +62,10 @@ public class WireTests
         new object[] { new AreaDiscovered(10, Team.Players, new[] { 0, 47, 1200, 2303 }) },
         new object[] { new ProjectileImpact(10, 40, 5) },
         new object[] { new ProjectileImpact(10, 40, null) },
+        new object[] { new ProjectileImpact(10, 40, 5, PassedThrough: true) },
+        new object[] { new AbilityUnlocked(10, 3, "long-gun", AbilitySlot.Two) },
+        new object[] { new SkillPurchased(10, 3, "piercing-shot") },
+        new object[] { new CommandRejected(10, 2, new PurchaseSkillCommand(2, "deadeye"), RejectionReason.MissingPrerequisite) },
         new object[] { new AbilityCast(10, 3, AbilitySlot.One, 71, 1) },
         new object[] { new AbilityCast(10, 3, AbilitySlot.Three, 360) },
         new object[] { new ShipGrounded(10, 3) },
@@ -110,13 +116,23 @@ public class WireTests
     }
 
     [Fact]
+    public void Lobby_CarriesEachPlayersStartingWeapon()
+    {
+        var players = new[] { new LobbyPlayer(1, true, "mortar"), new LobbyPlayer(2, false) };
+        var writer = new NetDataWriter();
+        writer.PutLobby(new LobbyState(false, players));
+
+        Assert.Equal(players, ReaderFor(writer).GetLobby().Players);
+    }
+
+    [Fact]
     public void ShipInfo_RoundTrips()
     {
         var info = new ShipInfo(
             123, 7, 2, Team.Players, ShipStats.Sloop with { WeaponRange = 1.3f, CargoCapacity = 16f },
             new[] { "broadside", null, "long-gun", "mortar" },
             new[] { new StatModifier(StatId.MaxHealth, ModifierKind.Flat, 20, "upgrade:hull") },
-            new Vector2(96, 90), 1.25f);
+            new Vector2(96, 90), 1.25f, new[] { "heavy-volley", "point-blank" });
         var writer = new NetDataWriter();
         writer.PutShipInfo(info);
 
@@ -129,13 +145,14 @@ public class WireTests
         Assert.Equal(info.AbilityIds, read.AbilityIds);
         Assert.Equal(info.Modifiers, read.Modifiers);
         Assert.Equal((info.Position, info.Heading), (read.Position, read.Heading));
+        Assert.Equal(info.SkillIds, read.SkillIds);
     }
 
     [Fact]
     public void Snapshots_SplitIntoChunks_AndReassemble()
     {
         var world = new World(new Vector2(192, 192));
-        var player = world.SpawnShip(new Vector2(10, 10), 0.5f, ShipStats.Sloop, 1, Loadouts.Sloop);
+        var player = world.SpawnShip(new Vector2(10, 10), 0.5f, ShipStats.Sloop, 1, Loadouts.FullArsenal);
         player.IsHoldingCourse = true;
         player.WindDrift = new Vector2(0.25f, -0.5f);
         player.AnchorDropTicksRemaining = 17;
@@ -175,7 +192,7 @@ public class WireTests
         }
         for (var i = 0; i < 52; i++)
         {
-            var ship = world.SpawnShip(new Vector2(10 + i, 10 + i), 0f, ShipStats.Sloop, i < 12 ? i + 1 : null, Loadouts.Sloop);
+            var ship = world.SpawnShip(new Vector2(10 + i, 10 + i), 0f, ShipStats.Sloop, i < 12 ? i + 1 : null, Loadouts.FullArsenal);
             ship.MoveTarget = new Vector2(100, 100);
             ship.PlunderIslandId = 1;
         }

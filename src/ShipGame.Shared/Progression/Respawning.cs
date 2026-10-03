@@ -4,8 +4,8 @@ using ShipGame.Shared.Simulation;
 namespace ShipGame.Shared.Progression;
 
 /// <summary>
-/// Sunk players come back after <see cref="DelaySeconds"/>, near a living teammate, keeping their gold, upgrades,
-/// and kill bonuses. If every player is down at once there's no one left to come back to: the run is over.
+/// Sunk players come back after <see cref="DelaySeconds"/>, near a living teammate, keeping their gold, weapons,
+/// skills, upgrades, and kill bonuses. If every player is down at once there's no one left to come back to: the run is over.
 /// </summary>
 public static class Respawning
 {
@@ -57,11 +57,13 @@ public static class Respawning
         var toCenter = world.WorldSize / 2f - position;
         var ship = world.SpawnShip(position, MathF.Atan2(toCenter.Y, toCenter.X), stats, player.PlayerId, abilities);
 
-        // Upgrades and kill bonuses carry over; re-applying them also tops health up to the new maximum.
+        // Upgrades, kill bonuses, and skills carry over; re-applying them also tops health up to the new maximum.
         if (lost is not null)
         {
             foreach (var modifier in lost.Modifiers)
                 ship.AddModifier(modifier);
+            foreach (var skill in lost.Skills)
+                ship.AddSkill(skill);
         }
 
         player.LostShip = null;

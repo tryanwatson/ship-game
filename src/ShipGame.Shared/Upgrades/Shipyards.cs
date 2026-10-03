@@ -65,6 +65,71 @@ public static class Shipyards
         return PurchaseResult.Purchased;
     }
 
+    /// <summary>
+    /// Buys a locked weapon from <see cref="WeaponCatalog"/>: it goes on the next free slot's key for the rest of the
+    /// run. Null on success.
+    /// </summary>
+    public static RejectionReason? TryUnlockAbility(World world, Ship ship, string abilityId)
+    {
+        if (ship.OwnerPlayerId is not { } playerId || DockedAt(world, ship) is null)
+            return RejectionReason.NotAtShipyard;
+        if (WeaponCatalog.Find(abilityId) is not { } weapon)
+            return RejectionReason.UnknownUpgrade;
+        if (ship.HasAbility(abilityId))
+            return RejectionReason.AlreadyOwned;
+        if (ship.FreeAbilitySlot is not { } slot)
+            return RejectionReason.NoFreeSlot;
+        if (world.GetOrAddPlayer(playerId).Gold < weapon.UnlockCost)
+            return RejectionReason.NotEnoughGold;
+
+        world.AddGold(playerId, -weapon.UnlockCost);
+        ship.SetAbility(slot, weapon.Ability);
+        world.Emit(new AbilityUnlocked(world.Tick, ship.Id, abilityId, slot));
+        return null;
+    }
+
+    /// <summary>Where <paramref name="skill"/> stands for <paramref name="ship"/>: owned, buyable, or why not.</summary>
+    public static SkillStatus StatusOf(Ship ship, SkillDefinition skill)
+    {
+        if (ship.HasSkill(skill.Id))
+            return SkillStatus.Owned;
+        if (!ship.HasAbility(skill.AbilityId))
+            return SkillStatus.WeaponLocked;
+        if (IsClosedOff(ship, skill))
+            return SkillStatus.Excluded;
+        var hasAll = skill.Requires.All(ship.HasSkill);
+        var hasAny = skill.RequiresAny.Count == 0 || skill.RequiresAny.Any(ship.HasSkill);
+        return hasAll && hasAny ? SkillStatus.Available : SkillStatus.NeedsPrerequisite;
+    }
+
+    /// <summary>Whether the ship's choices so far rule a skill out for good (see <see cref="SkillTrees.IsClosedOff"/>).</summary>
+    public static bool IsClosedOff(Ship ship, SkillDefinition skill) =>
+        SkillTrees.IsClosedOff(ship.Skills.Select(s => s.Id).ToList(), skill);
+
+    /// <summary>Buys a skill from one of the ship's weapons' trees (see <see cref="SkillTrees"/>). Null on success.</summary>
+    public static RejectionReason? TryPurchaseSkill(World world, Ship ship, string skillId)
+    {
+        if (ship.OwnerPlayerId is not { } playerId || DockedAt(world, ship) is null)
+            return RejectionReason.NotAtShipyard;
+        if (SkillTrees.Find(skillId) is not { } skill)
+            return RejectionReason.UnknownUpgrade;
+
+        switch (StatusOf(ship, skill))
+        {
+            case SkillStatus.Owned: return RejectionReason.AlreadyOwned;
+            case SkillStatus.WeaponLocked: return RejectionReason.AbilityLocked;
+            case SkillStatus.Excluded: return RejectionReason.ExcludedByChoice;
+            case SkillStatus.NeedsPrerequisite: return RejectionReason.MissingPrerequisite;
+        }
+        if (world.GetOrAddPlayer(playerId).Gold < skill.Cost)
+            return RejectionReason.NotEnoughGold;
+
+        world.AddGold(playerId, -skill.Cost);
+        ship.AddSkill(skill);
+        world.Emit(new SkillPurchased(world.Tick, ship.Id, skill.Id));
+        return null;
+    }
+
     /// <summary>Asks to plunder the shipyard we're anchored at (shipyards don't plunder unless asked). Null on success.</summary>
     public static RejectionReason? TryChoosePlunder(World world, Ship ship)
     {

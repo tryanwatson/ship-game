@@ -5,6 +5,7 @@ using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Trading;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Net;
 
@@ -113,17 +114,24 @@ public sealed class ClientReplica
     /// <summary>Queues ship info to take effect when the render clock reaches its tick.</summary>
     public void EnqueueShipInfo(ShipInfo info) => _pendingShipInfos.Add(info);
 
-    /// <summary>Creates the ship, or refreshes its hull, guns, and upgrades if it already exists.</summary>
+    /// <summary>Creates the ship, or refreshes its hull, guns, skills, and upgrades if it already exists.</summary>
     private void ApplyShipInfo(ShipInfo info)
     {
+        var abilities = info.AbilityIds.Select(id => id is null ? null : AbilityRegistry.Find(id)).ToList();
         var ship = World.FindShip(info.ShipId);
         if (ship is null)
         {
-            var abilities = info.AbilityIds.Select(id => id is null ? null : AbilityRegistry.Find(id)).ToList();
             ship = World.SpawnShip(info.Position, info.Heading, info.BaseStats, info.OwnerPlayerId, abilities, info.ShipId);
             ship.Team = info.Team;
         }
+        else
+        {
+            // Weapons bought since: a slot holding the same weapon keeps its cooldowns.
+            for (var i = 0; i < Math.Min(abilities.Count, Ship.AbilitySlotCount); i++)
+                ship.SetAbility((AbilitySlot)i, abilities[i]);
+        }
 
+        ship.ReplaceSkills((info.SkillIds ?? Array.Empty<string>()).Select(SkillTrees.Find).OfType<SkillDefinition>());
         var health = ship.Health;
         ship.ReplaceModifiers(info.Modifiers);
         ship.Health = health; // health comes from snapshots; don't let re-applying upgrades top it up
@@ -253,6 +261,8 @@ public sealed class ClientReplica
                         RemainingTicks = spawned.LifetimeTicks,
                     });
                     break;
+                case ProjectileImpact { PassedThrough: true }:
+                    break; // a piercing shot flies on
                 case ProjectileImpact impact:
                     _projectiles.Remove(impact.ProjectileId);
                     _shotOffsets.Remove(impact.ProjectileId);

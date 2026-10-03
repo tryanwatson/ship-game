@@ -11,8 +11,8 @@ public class FriendlyFireTests
     private static (World world, Ship shooter, Ship other) TwoPlayers(bool friendlyFire)
     {
         var world = new World(new Vector2(128, 128)) { Wind = Vector2.Zero, FriendlyFire = friendlyFire };
-        var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, 1, Loadouts.Sloop);
-        var other = world.SpawnShip(new Vector2(30, 34), 0f, ShipStats.Sloop, 2, Loadouts.Sloop);
+        var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, 1, Loadouts.FullArsenal);
+        var other = world.SpawnShip(new Vector2(30, 34), 0f, ShipStats.Sloop, 2, Loadouts.FullArsenal);
         return (world, shooter, other);
     }
 
@@ -49,7 +49,7 @@ public class FriendlyFireTests
     public void PiratesNeverHurtEachOther_EvenWithFriendlyFire()
     {
         var world = new World(new Vector2(128, 128)) { Wind = Vector2.Zero, FriendlyFire = true };
-        var pirate = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, abilities: Loadouts.Sloop);
+        var pirate = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, abilities: Loadouts.FullArsenal);
         var crewmate = world.SpawnShip(new Vector2(30, 34), 0f, ShipStats.Sloop);
 
         FireStarboardAndWait(world, pirate);

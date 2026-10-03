@@ -42,7 +42,8 @@ public sealed record AreaDiscovered(long Tick, Team Team, IReadOnlyList<int> Cel
 public sealed record AreaStrikeImpact(long Tick, int StrikeId, Vector2 Target, float Radius) : WorldEvent(Tick);
 
 /// <param name="ShipId">The ship it struck, or null if it hit land.</param>
-public sealed record ProjectileImpact(long Tick, int ProjectileId, int? ShipId) : WorldEvent(Tick);
+/// <param name="PassedThrough">A piercing shot that carries on past the ship it struck.</param>
+public sealed record ProjectileImpact(long Tick, int ProjectileId, int? ShipId, bool PassedThrough = false) : WorldEvent(Tick);
 
 /// <param name="Channel">Which of the ability's cooldowns it used (the broadside's side; 0 for most).</param>
 public sealed record AbilityCast(long Tick, int ShipId, AbilitySlot Slot, int CooldownTicks, int Channel = 0) : WorldEvent(Tick);
@@ -54,6 +55,12 @@ public sealed record GoldChanged(long Tick, int PlayerId, int Gold, int Delta) :
 public sealed record IslandPlundered(long Tick, int IslandId, int PlayerId, int Gold, int CooldownTicks) : WorldEvent(Tick);
 
 public sealed record UpgradePurchased(long Tick, int ShipId, string UpgradeId, int Level) : WorldEvent(Tick);
+
+/// <summary>A ship bought (or started the run with) a weapon; it's on <paramref name="Slot"/>'s key from now on.</summary>
+public sealed record AbilityUnlocked(long Tick, int ShipId, string AbilityId, AbilitySlot Slot) : WorldEvent(Tick);
+
+/// <summary>A ship bought a skill from one of its weapons' trees.</summary>
+public sealed record SkillPurchased(long Tick, int ShipId, string SkillId) : WorldEvent(Tick);
 
 /// <summary>A trading post's full list of contracts on offer, sent when the markets open and whenever it changes.</summary>
 public sealed record ContractsOffered(long Tick, int IslandId, IReadOnlyList<TradeContract> Offers) : WorldEvent(Tick)
@@ -114,6 +121,21 @@ public enum RejectionReason
     UnknownUpgrade,
     MaxLevel,
     NotEnoughGold,
+
+    /// <summary>The weapon or skill is already owned.</summary>
+    AlreadyOwned,
+
+    /// <summary>Every ability slot is taken.</summary>
+    NoFreeSlot,
+
+    /// <summary>A skill for a weapon the ship hasn't unlocked.</summary>
+    AbilityLocked,
+
+    /// <summary>The skill builds on one the ship doesn't have yet.</summary>
+    MissingPrerequisite,
+
+    /// <summary>The skill is on a branch closed off by a choice already made.</summary>
+    ExcludedByChoice,
 
     /// <summary>That contract isn't on offer here (anymore).</summary>
     UnknownContract,

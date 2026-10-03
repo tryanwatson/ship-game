@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Xna.Framework;
 using ShipGame.Shared.Abilities;
@@ -25,8 +26,6 @@ public sealed class WorldRenderer
     private static readonly Color Shoreline = new(120, 100, 60);
     private static readonly Color HutWallLit = new(170, 120, 70);
     private static readonly Color HutWallShade = new(120, 82, 48);
-    private static readonly Color HutRoof = new(170, 60, 50);
-    private static readonly Color HutRoofShade = new(125, 42, 36);
     private static readonly Color AggroRing = new Color(230, 80, 60) * 0.35f;
     private static readonly Color MoveMarker = new Color(120, 255, 140) * 0.8f;
     private static readonly Color Cannonball = new(20, 20, 24);
@@ -52,28 +51,8 @@ public sealed class WorldRenderer
     private static readonly Color StrikeEdge = new Color(240, 110, 80) * 0.8f;
     private static readonly Color Shell = new(25, 25, 30);
     private static readonly Color LongGunShot = new(60, 50, 40);
-    private static readonly Color ShotTrail = new Color(230, 230, 235) * 0.35f;
-    private static readonly Color Blast = new(255, 190, 90);
+    private static readonly Color ShotTrail = new Color(235, 219, 177) * 0.5f;
     private const float ShellArcHeight = 60f;
-    private const float BlastSeconds = 0.45f;
-
-    private readonly System.Collections.Generic.List<(NVector2 Center, float Radius, float Age)> _blasts = new();
-
-    /// <summary>A shell burst at <paramref name="center"/>: drawn as a ring expanding to the blast radius.</summary>
-    public void AddBlast(NVector2 center, float radius) => _blasts.Add((center, radius, 0f));
-
-    public void UpdateEffects(float elapsedSeconds)
-    {
-        for (var i = _blasts.Count - 1; i >= 0; i--)
-        {
-            var blast = _blasts[i];
-            blast.Age += elapsedSeconds;
-            if (blast.Age >= BlastSeconds)
-                _blasts.RemoveAt(i);
-            else
-                _blasts[i] = blast;
-        }
-    }
 
     private static readonly Color HealthBack = new Color(0, 0, 0) * 0.6f;
     private static readonly Color HealthOwn = new(90, 200, 90);
@@ -83,6 +62,15 @@ public sealed class WorldRenderer
     private readonly PrimitiveBatch _batch;
     private readonly SeaVisuals _sea;
     private readonly ShipVisuals _ships;
+    private readonly IslandScenery _scenery;
+    private readonly CombatVisuals _combat;
+    private readonly List<DrawItem> _drawItems = new();
+    private readonly record struct DrawItem(NVector2 Position, Ship? Ship = null, float Heading = 0f,
+        IslandScenery.Item? Scenery = null, CombatVisuals.Wreck? Wreck = null);
+
+    public void CaptureEffects(World world, float alpha) => _combat.Capture(world, alpha);
+    public void ProcessEffects(World world, IReadOnlyList<WorldEvent> events) => _combat.HandleEvents(world, events);
+    public void UpdateEffects(float elapsedSeconds) => _combat.Update(elapsedSeconds);
 
     /// <summary>Optional collision/navigation grid for debugging; normal play shows waves instead.</summary>
     public bool ShowWaterGrid { get; set; }
@@ -92,6 +80,8 @@ public sealed class WorldRenderer
         _batch = batch;
         _sea = new SeaVisuals(batch);
         _ships = new ShipVisuals(batch);
+        _scenery = new IslandScenery(batch);
+        _combat = new CombatVisuals(batch);
     }
 
     public void Draw(World world, float alpha, int localPlayerId, Matrix view, AimPreview? aim = null)
@@ -99,6 +89,8 @@ public sealed class WorldRenderer
         // Shells and warnings run on ticks; alpha is how far we are into the latest one.
         var renderTick = world.Tick - 1 + alpha;
         var time = (world.Tick + alpha) / SimConstants.TickRate;
+        _combat.EnsureWorld(world);
+        _scenery.EnsureWorld(world);
         _batch.Begin(view);
 
         DrawWater(world.WorldSize);
@@ -108,10 +100,13 @@ public sealed class WorldRenderer
         foreach (var island in world.Islands)
         {
             DrawIsland(island);
+            _scenery.DrawGround(island);
             _batch.Flush();
             _sea.DrawShoreFoam(island, time);
             _batch.Flush();
         }
+
+        _combat.DrawGround();
 
         // Guarding pirates show how close you can get before they come for you.
         foreach (var ship in world.Ships)
@@ -136,13 +131,48 @@ public sealed class WorldRenderer
         }
         _batch.Flush();
 
-        var drawOrder = world.Ships
-            .Select(ship => (ship, pos: NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha)))
-            .OrderBy(x => IsoProjection.Depth(x.pos));
-
-        foreach (var (ship, pos) in drawOrder)
+        // Raised scenery, ships, and sinking hulls share a painter's depth order.
+        _drawItems.Clear();
+        var visible = _batch.Viewport.Bounds;
+        visible.Inflate((int)(120f * MathF.Abs(view.M11)), (int)(120f * MathF.Abs(view.M22)));
+        bool InView(NVector2 point) => visible.Contains(Vector2.Transform(IsoProjection.WorldToIso(point), view).ToPoint());
+        foreach (var ship in world.Ships)
         {
-            var heading = Angles.Lerp(ship.PreviousHeading, ship.Heading, alpha);
+            var position = NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha);
+            if (InView(position))
+                _drawItems.Add(new DrawItem(position, ship, Angles.Lerp(ship.PreviousHeading, ship.Heading, alpha)));
+        }
+        foreach (var item in _scenery.Items)
+            if (InView(item.Position)) _drawItems.Add(new DrawItem(item.Position, Scenery: item));
+        foreach (var wreck in _combat.Wrecks)
+            if (InView(wreck.Position)) _drawItems.Add(new DrawItem(wreck.Position, Wreck: wreck));
+        _drawItems.Sort((a, b) => IsoProjection.Depth(a.Position).CompareTo(IsoProjection.Depth(b.Position)));
+
+        foreach (var item in _drawItems)
+        {
+            if (item.Scenery is { } scenery)
+            {
+                _scenery.Draw(scenery, time);
+                _batch.Flush();
+                continue;
+            }
+            if (item.Wreck is { } wreck)
+            {
+                var center = IsoProjection.WorldToIso(wreck.Position);
+                var t = wreck.Progress;
+                var sinkView = Matrix.CreateTranslation(-center.X, -center.Y, 0)
+                    * Matrix.CreateScale(1f - t * 0.15f, 1f - t * 0.72f, 1f)
+                    * Matrix.CreateRotationZ(MathF.Sin(t * MathF.PI) * 0.18f)
+                    * Matrix.CreateTranslation(center.X, center.Y + t * 15f, 0) * view;
+                _batch.Begin(sinkView, 1f - Math.Clamp((t - 0.3f) / 0.7f, 0f, 1f));
+                _ships.Draw(wreck.Ship, wreck.Position, wreck.Heading, wreck.Ship.OwnerPlayerId == localPlayerId, false, time);
+                _batch.Flush();
+                _batch.Begin(view);
+                continue;
+            }
+            var ship = item.Ship!;
+            var pos = item.Position;
+            var heading = item.Heading;
             // Anything our shots can hurt (pirates, and other players with friendly fire on) lights up in our lanes.
             var targetable = localShip is not null && world.CanDamage(localShip.Id, localShip.Team, ship);
             var targeted = targetable && IsInFiringLane(localShip, ship);
@@ -152,7 +182,7 @@ public sealed class WorldRenderer
             if (ship == localShip)
                 DrawBroadsideRing(ship, pos, heading);
             _batch.Flush();
-            _ships.Draw(ship, pos, heading, ship == localShip, targeted, time);
+            _ships.Draw(ship, pos, heading, ship == localShip, targeted, time, _combat.HitFlash(ship.Id));
             _batch.Flush(); // Flush per ship so nearer hulls overlap farther ones.
         }
 
@@ -161,8 +191,9 @@ public sealed class WorldRenderer
             DrawCannonball(projectile, NVector2.Lerp(projectile.PreviousPosition, projectile.Position, alpha));
         foreach (var strike in world.Strikes)
             DrawShell(strike, strike.Progress(renderTick));
-        foreach (var blast in _blasts)
-            DrawBlast(blast.Center, blast.Radius, blast.Age / BlastSeconds);
+        _batch.Flush();
+        _combat.DrawAir();
+        _batch.Flush();
 
         // Health bars float above everything, League-style.
         foreach (var ship in world.Ships)
@@ -279,36 +310,6 @@ public sealed class WorldRenderer
         ScaledOutline(island, outline, 0.72f, layer);
         _batch.FillConvex(layer, Grass);
 
-        if (island.HasShipyard)
-            DrawShipyardHut(island.Center);
-    }
-
-    /// <summary>A little isometric boathouse marking a shipyard: two lit/shaded walls and a pyramid roof.</summary>
-    private void DrawShipyardHut(NVector2 center)
-    {
-        const float half = 1.2f;
-        const float wallHeight = 16f;
-        const float roofHeight = 14f;
-        var top = IsoProjection.WorldToIso(center + new NVector2(-half, -half));
-        var right = IsoProjection.WorldToIso(center + new NVector2(half, -half));
-        var bottom = IsoProjection.WorldToIso(center + new NVector2(half, half));
-        var left = IsoProjection.WorldToIso(center + new NVector2(-half, half));
-        var up = new Vector2(0, -wallHeight);
-        var apex = IsoProjection.WorldToIso(center) + up - new Vector2(0, roofHeight);
-
-        Span<Vector2> face = stackalloc Vector2[4];
-        face[0] = left; face[1] = bottom; face[2] = bottom + up; face[3] = left + up;
-        _batch.FillConvex(face, HutWallLit);
-        face[0] = bottom; face[1] = right; face[2] = right + up; face[3] = bottom + up;
-        _batch.FillConvex(face, HutWallShade);
-
-        Span<Vector2> roof = stackalloc Vector2[3];
-        roof[0] = left + up; roof[1] = bottom + up; roof[2] = apex;
-        _batch.FillConvex(roof, HutRoof);
-        roof[0] = bottom + up; roof[1] = right + up; roof[2] = apex;
-        _batch.FillConvex(roof, HutRoofShade);
-        roof[0] = top + up; roof[1] = left + up; roof[2] = apex;
-        _batch.FillConvex(roof, HutRoof);
     }
 
     private static void ScaledOutline(Island island, ReadOnlySpan<NVector2> outline, float scale, Span<Vector2> projected)
@@ -402,13 +403,11 @@ public sealed class WorldRenderer
         var scale = projectile.Radius / Projectile.DefaultRadius;
         var ground = IsoProjection.WorldToIso(pos);
         var ball = ground - new Vector2(0, CannonballHeight);
-        if (scale > 1.2f)
-        {
-            var tail = IsoProjection.WorldToIso(pos - projectile.Velocity * 0.06f) - new Vector2(0, CannonballHeight);
-            _batch.Line(tail, ball, ShotTrail);
-        }
+        var tail = IsoProjection.WorldToIso(pos - projectile.Velocity * (scale > 1.2f ? 0.05f : 0.025f)) - new Vector2(0, CannonballHeight);
+        _batch.Stroke(tail, ball, scale > 1.2f ? 2f : 1.2f, ShotTrail);
         FillOctagon(ground, 4f * scale, 2f * scale, Shadow);
         FillOctagon(ball, 3f * scale, 3f * scale, scale > 1.2f ? LongGunShot : Cannonball);
+        _batch.FillEllipse(ball + new Vector2(-scale, -scale), new Vector2(1.1f * scale), new Color(230, 215, 161));
     }
 
     /// <summary>The landing zone of a shell in the air: a red circle that fills in as impact nears.</summary>
@@ -427,13 +426,7 @@ public sealed class WorldRenderer
         var height = 4f * ShellArcHeight * progress * (1f - progress);
         FillOctagon(groundIso, 4f, 2f, Shadow);
         FillOctagon(groundIso - new Vector2(0, height + CannonballHeight), 4f, 4f, Shell);
-    }
-
-    private void DrawBlast(NVector2 center, float radius, float t)
-    {
-        var fade = 1f - t;
-        FillGroundCircle(center, radius * (0.3f + 0.7f * t), Blast * (0.35f * fade));
-        DrawGroundCircle(center, radius * (0.5f + 0.6f * t), Blast * fade);
+        _batch.FillEllipse(groundIso - new Vector2(1, height + CannonballHeight + 1), new Vector2(1.5f), new Color(242, 212, 140));
     }
 
     /// <summary>Targeting indicator for a held aimed ability: the long gun's path, or the mortar's reach and blast.</summary>
@@ -455,7 +448,7 @@ public sealed class WorldRenderer
                 var direction = LongGun.AimDirection(ship, aim.Cursor);
                 var side = new NVector2(-direction.Y, direction.X) * (LongGun.ShotRadius + 0.15f);
                 var start = pos + direction * (ship.Stats.Beam / 2f);
-                var end = pos + direction * LongGun.RangeFor(ship);
+                var end = start + direction * LongGun.RangeFor(ship);
                 Span<Vector2> path = stackalloc Vector2[]
                 {
                     IsoProjection.WorldToIso(start + side), IsoProjection.WorldToIso(end + side),
@@ -476,9 +469,24 @@ public sealed class WorldRenderer
             case Mortar:
             {
                 DrawGroundCircle(pos, Mortar.RangeFor(ship), ready ? AimEdge * 0.5f : AimCooling);
-                var landing = Mortar.LandingPoint(ship, aim.Cursor) + (pos - ship.Position);
-                FillGroundCircle(landing, Mortar.BlastRadius, ready ? AimFill : AimCooling);
-                DrawGroundCircle(landing, Mortar.BlastRadius, ready ? AimEdge : AimCooling);
+                var blast = Mortar.BlastRadiusFor(ship);
+                var shells = Mortar.ShellCountFor(ship);
+                var clusters = ship.AbilityValue(Mortar.AbilityId, AbilityStat.ClusterCount, 0f) >= 0.5f;
+                for (var i = 0; i < shells; i++)
+                {
+                    var landing = Mortar.ShellLandingPoint(ship, aim.Cursor, i) + (pos - ship.Position);
+                    FillGroundCircle(landing, blast, ready ? AimFill : AimCooling);
+                    DrawGroundCircle(landing, blast, ready ? AimEdge : AimCooling);
+                    if (clusters)
+                    {
+                        // Bomblets rotate with the eventual strike ID; show their possible footprint as a band.
+                        var spread = blast * Mortar.ClusterSpreadFraction;
+                        var radius = blast * Mortar.ClusterRadiusFraction;
+                        var color = (ready ? AimEdge : AimCooling) * 0.45f;
+                        DrawGroundCircle(landing, spread - radius, color);
+                        DrawGroundCircle(landing, spread + radius, color);
+                    }
+                }
                 break;
             }
         }

@@ -46,7 +46,7 @@ public sealed class IslandOverlays
 
         foreach (var island in world.Islands)
         {
-            var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(island.Center), view));
+            var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(island.Center) - new Vector2(0, IslandScenery.MarkerHeight(island)), view));
             if (!bounds.Contains(screen.ToPoint()))
                 continue;
 
@@ -64,7 +64,7 @@ public sealed class IslandOverlays
             {
                 if (world.FindIsland(lot.Contract.DestinationIslandId) is not { } destination)
                     continue;
-                var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(destination.Center), view));
+                var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(destination.Center) - new Vector2(0, IslandScenery.MarkerHeight(destination)), view));
                 if (bounds.Contains(screen.ToPoint()))
                     TradeMarkers.DrawCrate(_batch, screen - new Vector2(0f, 26f), 16f, TradeMarkers.Cargo);
             }

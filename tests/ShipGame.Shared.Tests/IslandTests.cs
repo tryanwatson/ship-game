@@ -145,7 +145,7 @@ public class IslandTests
     public void Cannonballs_AreStoppedByLand()
     {
         var world = CreateWorld(new Island(1, new[] { new Vector2(28, 33), new Vector2(32, 33), new Vector2(32, 34), new Vector2(28, 34) }));
-        var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.Sloop);
+        var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.FullArsenal);
         var target = world.SpawnShip(new Vector2(30, 37), 0f, ShipStats.Sloop); // behind the strip of land
 
         world.TryCastAbility(shooter, AbilitySlot.One, shooter.Position + new Vector2(0, 5));

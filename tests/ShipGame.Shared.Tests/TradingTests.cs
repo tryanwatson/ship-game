@@ -28,7 +28,7 @@ public class TradingTests
         world.AddIsland(Square(1, 40, shipyard: true));
         world.AddIsland(Square(2, 100, shipyard: false));
         Contracts.OpenMarkets(world, seed: 7);
-        var ship = world.SpawnShip(PostAnchorage, 0f, ShipStats.Sloop, Trader, Loadouts.Sloop);
+        var ship = world.SpawnShip(PostAnchorage, 0f, ShipStats.Sloop, Trader, Loadouts.FullArsenal);
         world.Players[Trader].Gold = gold;
         Anchor(world, ship);
         return world;
@@ -244,7 +244,7 @@ public class TradingTests
         Sink(world, trader);
         var lot = world.Trade.Crates.Single().Cargo;
 
-        var rival = world.SpawnShip(OpenSea + new Vector2(2, 0), 0f, ShipStats.Sloop, Rival, Loadouts.Sloop);
+        var rival = world.SpawnShip(OpenSea + new Vector2(2, 0), 0f, ShipStats.Sloop, Rival, Loadouts.FullArsenal);
         world.DrainEvents();
         Anchor(world, rival);
 
@@ -267,7 +267,7 @@ public class TradingTests
         MoveTo(world, trader, OpenSea);
         Sink(world, trader);
 
-        var rival = world.SpawnShip(OpenSea + new Vector2(2, 0), 0f, ShipStats.Sloop, Rival, Loadouts.Sloop);
+        var rival = world.SpawnShip(OpenSea + new Vector2(2, 0), 0f, ShipStats.Sloop, Rival, Loadouts.FullArsenal);
         rival.AddModifier(new StatModifier(StatId.CargoCapacity, ModifierKind.Flat, -rival.CargoCapacity + 1, "test"));
         Anchor(world, rival);
 
@@ -304,7 +304,7 @@ public class TradingTests
             Assert.Equal(contract, lot.Contract);
 
             // Someone new picks it up each time.
-            var next = world.SpawnShip(OpenSea + new Vector2(1, 0), 0f, ShipStats.Sloop, 10 + round, Loadouts.Sloop);
+            var next = world.SpawnShip(OpenSea + new Vector2(1, 0), 0f, ShipStats.Sloop, 10 + round, Loadouts.FullArsenal);
             Anchor(world, next);
             Assert.Single(next.Cargo);
             carrier = next;

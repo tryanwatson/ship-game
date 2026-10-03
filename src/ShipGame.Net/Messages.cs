@@ -7,13 +7,14 @@ namespace ShipGame.Net;
 /// <summary>Who's connected and who's ready, plus whether a run is underway (no joining mid-run).</summary>
 public sealed record LobbyState(bool RunInProgress, IReadOnlyList<LobbyPlayer> Players, bool FriendlyFire = false);
 
-public sealed record LobbyPlayer(int PlayerId, bool Ready);
+/// <param name="StartingWeaponId">The weapon they've chosen to start the run with; null until they choose.</param>
+public sealed record LobbyPlayer(int PlayerId, bool Ready, string? StartingWeaponId = null);
 
 /// <summary>A run is starting: clients rebuild their world. The islands come from the map, not the wire.</summary>
 public sealed record RunStart(long Tick, Vector2 WorldSize, Vector2 Wind, bool FriendlyFire = false);
 
 /// <summary>
-/// Everything about a ship that rarely changes: identity, hull, guns, and upgrades. Sent reliably when the
+/// Everything about a ship that rarely changes: identity, hull, guns, skills, and upgrades. Sent reliably when the
 /// ship appears and again whenever its stats change; snapshots carry the fast-moving rest. Stamped with the
 /// server tick so clients apply it on the same timeline as events and snapshots.
 /// </summary>
@@ -26,7 +27,8 @@ public sealed record ShipInfo(
     IReadOnlyList<string?> AbilityIds,
     IReadOnlyList<StatModifier> Modifiers,
     Vector2 Position,
-    float Heading);
+    float Heading,
+    IReadOnlyList<string>? SkillIds = null);
 
 /// <summary>A ship's fast-changing state at one tick.</summary>
 public sealed class ShipState
@@ -140,5 +142,6 @@ public sealed class Snapshot
         ship.Abilities.Select(a => a?.Definition.Id).ToList(),
         ship.Modifiers.ToList(),
         ship.Position,
-        ship.Heading);
+        ship.Heading,
+        ship.Skills.Select(s => s.Id).ToList());
 }

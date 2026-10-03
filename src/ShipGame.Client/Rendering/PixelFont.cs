@@ -59,6 +59,7 @@ public static class PixelFont
         ['%'] = Rows("11000", "11001", "00010", "00100", "01000", "10011", "00011"),
         [':'] = Rows("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
         ['.'] = Rows("00000", "00000", "00000", "00000", "00000", "01100", "01100"),
+        [','] = Rows("00000", "00000", "00000", "00000", "01100", "00100", "01000"),
         ['*'] = Rows("00000", "10101", "01110", "11111", "01110", "10101", "00000"),
         ['['] = Rows("01110", "01000", "01000", "01000", "01000", "01000", "01110"),
         [']'] = Rows("01110", "00010", "00010", "00010", "00010", "00010", "01110"),
@@ -69,6 +70,29 @@ public static class PixelFont
         text.Length == 0 ? 0f : (text.Length * Advance - 1) * scale;
 
     public static float Height(float scale) => GlyphHeight * scale;
+
+    /// <summary>Breaks <paramref name="text"/> into lines no wider than <paramref name="maxWidth"/>, at spaces where it can.</summary>
+    public static List<string> Wrap(string text, float scale, float maxWidth)
+    {
+        var lines = new List<string>();
+        var line = "";
+        foreach (var word in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = line.Length == 0 ? word : line + " " + word;
+            if (line.Length > 0 && Measure(candidate, scale) > maxWidth)
+            {
+                lines.Add(line);
+                line = word;
+            }
+            else
+            {
+                line = candidate;
+            }
+        }
+        if (line.Length > 0)
+            lines.Add(line);
+        return lines;
+    }
 
     public static void Draw(PrimitiveBatch batch, string text, Vector2 topLeft, float scale, Color color)
     {

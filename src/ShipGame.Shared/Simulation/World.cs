@@ -68,19 +68,24 @@ public sealed class World
     public IReadOnlyList<AreaStrike> Strikes => _strikes;
 
     /// <summary>Lobs a shell from <paramref name="owner"/> that lands on <paramref name="target"/> after <paramref name="flightTicks"/>.</summary>
-    public AreaStrike LaunchStrike(Ship owner, Vector2 target, float radius, float damage, int flightTicks)
+    public AreaStrike LaunchStrike(Ship owner, Vector2 target, float radius, float damage, int flightTicks, ClusterEffect? cluster = null) =>
+        LaunchStrike(owner.Id, owner.Team, owner.Position, target, radius, damage, flightTicks, cluster);
+
+    private AreaStrike LaunchStrike(int ownerShipId, Team team, Vector2 origin, Vector2 target, float radius, float damage, int flightTicks,
+        ClusterEffect? cluster)
     {
         var strike = new AreaStrike
         {
             Id = _nextEntityId++,
-            OwnerShipId = owner.Id,
-            Team = owner.Team,
-            Origin = owner.Position,
+            OwnerShipId = ownerShipId,
+            Team = team,
+            Origin = origin,
             Target = target,
             Radius = radius,
             Damage = damage,
             LaunchTick = Tick,
-            ImpactTick = Tick + flightTicks,
+            ImpactTick = Tick + Math.Max(1, flightTicks),
+            Cluster = cluster,
         };
         _strikes.Add(strike);
         Emit(new AreaStrikeLaunched(Tick, strike.Id, strike.OwnerShipId, strike.Team, strike.Origin, strike.Target, radius, damage, strike.ImpactTick));
@@ -239,14 +244,18 @@ public sealed class World
     public void SetTick(long tick) => Tick = tick;
 
     public Projectile SpawnProjectile(Ship owner, Vector2 position, Vector2 velocity, float damage, int lifetimeTicks,
-        float radius = Projectile.DefaultRadius)
+        float radius = Projectile.DefaultRadius, ShotEffects? effects = null)
     {
+        effects ??= ShotEffects.None;
         var projectile = new Projectile(_nextEntityId++, owner.Id, owner.Team, damage, radius)
         {
             Position = position,
             PreviousPosition = position,
             Velocity = velocity,
             RemainingTicks = lifetimeTicks,
+            Origin = position,
+            Effects = effects,
+            PierceRemaining = effects.Pierce,
         };
         _projectiles.Add(projectile);
         Emit(new ProjectileSpawned(Tick, projectile.Id, owner.Id, owner.Team, position, velocity, damage, lifetimeTicks, radius));
@@ -379,11 +388,11 @@ public sealed class World
             Emit(new AreaDiscovered(Tick, team, cells));
     }
 
-    /// <summary>Bursts every shell that's due: hurts each hostile hull within its blast radius.</summary>
+    /// <summary>Bursts every shell that's due: hurts each hostile hull within its blast radius, and scatters any bomblets.</summary>
     private void StepStrikes()
     {
         Span<Vector2> hull = stackalloc Vector2[HullShape.PointCount];
-        foreach (var strike in _strikes)
+        foreach (var strike in _strikes.ToList()) // bomblets join the list as we go
         {
             if (strike.ImpactTick > Tick)
                 continue;
@@ -399,6 +408,19 @@ public sealed class World
                 ship.LastHitByShipId = strike.OwnerShipId;
             }
             Emit(new AreaStrikeImpact(Tick, strike.Id, strike.Target, strike.Radius));
+
+            if (strike.Cluster is { Count: > 0 } cluster)
+            {
+                // Evenly round a ring, turned by the shell's id so salvos don't all scatter the same way.
+                var turn = strike.Id * 0.7f;
+                for (var i = 0; i < cluster.Count; i++)
+                {
+                    var angle = turn + MathF.Tau * i / cluster.Count;
+                    var point = strike.Target + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * cluster.Spread;
+                    LaunchStrike(strike.OwnerShipId, strike.Team, strike.Target, point, cluster.Radius,
+                        strike.Damage * cluster.DamageFraction, cluster.DelayTicks, cluster: null);
+                }
+            }
         }
         _strikes.RemoveAll(s => s.ImpactTick <= Tick);
     }
@@ -420,17 +442,29 @@ public sealed class World
 
             foreach (var ship in _ships)
             {
-                if (ship.IsSunk || !CanDamage(projectile.OwnerShipId, projectile.Team, ship))
+                if (ship.IsSunk || projectile.HasHit(ship.Id) || !CanDamage(projectile.OwnerShipId, projectile.Team, ship))
+                    continue;
+                if (!HullShape.SegmentHits(ship, from, projectile.Position, projectile.Radius))
                     continue;
 
-                if (HullShape.SegmentHits(ship, from, projectile.Position, projectile.Radius))
+                var effects = projectile.Effects;
+                var distance = Vector2.Distance(projectile.Origin, projectile.Position);
+                ship.Health = MathF.Max(0f, ship.Health - projectile.Damage * effects.DamageMultiplier(distance));
+                ship.LastHitByShipId = projectile.OwnerShipId;
+                projectile.RecordHit(ship.Id);
+
+                if (effects.LongRangeRefund > 0f && effects.IsLongRange(distance) && effects.AbilityId is { } abilityId)
+                    FindShip(projectile.OwnerShipId)?.FindAbility(abilityId)?.Refund(effects.LongRangeRefund);
+
+                var passesThrough = projectile.PierceRemaining > 0;
+                Emit(new ProjectileImpact(Tick, projectile.Id, ship.Id, passesThrough));
+                if (passesThrough)
                 {
-                    ship.Health = MathF.Max(0f, ship.Health - projectile.Damage);
-                    ship.LastHitByShipId = projectile.OwnerShipId;
-                    projectile.RemainingTicks = 0;
-                    Emit(new ProjectileImpact(Tick, projectile.Id, ship.Id));
-                    break;
+                    projectile.PierceRemaining--;
+                    continue;
                 }
+                projectile.RemainingTicks = 0;
+                break;
             }
         }
 
@@ -496,6 +530,10 @@ public sealed class World
                 return Shipyards.TryChoosePlunder(this, ship);
             case PurchaseUpgradeCommand purchase:
                 return Shipyards.ToRejection(Shipyards.TryPurchase(this, ship, purchase.UpgradeId));
+            case UnlockAbilityCommand unlock:
+                return Shipyards.TryUnlockAbility(this, ship, unlock.AbilityId);
+            case PurchaseSkillCommand skill:
+                return Shipyards.TryPurchaseSkill(this, ship, skill.SkillId);
             case PurchaseContractCommand contract:
                 return Contracts.TryPurchase(this, ship, contract.ContractId);
             case SetRudderCommand rudder:
@@ -534,7 +572,7 @@ public sealed class World
         if (!ability.Definition.Cast(this, ship, target))
             return RejectionReason.CastFailed;
 
-        ability.StartCooldown(channel, ship.Stats.CooldownSpeed);
+        ability.StartCooldown(channel, ability.Definition.CooldownTicksFor(ship), ship.Stats.CooldownSpeed);
         Emit(new AbilityCast(Tick, ship.Id, slot, ability.DurationTicks(channel), channel));
         return null;
     }

@@ -9,6 +9,7 @@ using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Trading;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Server;
 
@@ -25,6 +26,9 @@ public sealed class GameServer : IDisposable
         public required NetPeer Peer { get; init; }
         public required int PlayerId { get; init; }
         public bool Ready { get; set; }
+
+        /// <summary>The weapon chosen for the next run; it has to be chosen before readying up, and anew each run.</summary>
+        public WeaponOffer? StartingWeapon { get; set; }
 
         /// <summary>Messages this player may still send right now; refills every tick (a token bucket).</summary>
         public float MessageBudget { get; set; } = MessageBurst;
@@ -184,7 +188,7 @@ public sealed class GameServer : IDisposable
     private void BroadcastLobby()
     {
         var lobby = new LobbyState(World is not null,
-            _byPeerId.Values.OrderBy(p => p.PlayerId).Select(p => new LobbyPlayer(p.PlayerId, p.Ready)).ToList(),
+            _byPeerId.Values.OrderBy(p => p.PlayerId).Select(p => new LobbyPlayer(p.PlayerId, p.Ready, p.StartingWeapon?.Id)).ToList(),
             FriendlyFire);
         _writer.Reset();
         _writer.Put((byte)MessageType.Lobby);
@@ -207,8 +211,11 @@ public sealed class GameServer : IDisposable
         for (var i = 0; i < players.Count; i++)
         {
             var offset = (i - (players.Count - 1) / 2f) * StartSpacing;
-            world.SpawnShip(Archipelago.Size / 2f + new Vector2(offset, -offset), 0f, ShipStats.Sloop, players[i].PlayerId, Loadouts.Sloop);
+            var weapon = players[i].StartingWeapon ?? WeaponCatalog.Broadside; // everyone ready means everyone chose
+            world.SpawnShip(Archipelago.Size / 2f + new Vector2(offset, -offset), 0f, ShipStats.Sloop, players[i].PlayerId,
+                Loadouts.Starting(weapon.Ability));
             players[i].Ready = false;
+            players[i].StartingWeapon = null; // next run is a fresh choice
         }
 
         World = world;
@@ -323,8 +330,16 @@ public sealed class GameServer : IDisposable
                     break;
                 }
                 case MessageType.Ready when World is null:
-                    player.Ready = reader.GetBool();
+                    // No readying up without a starting weapon.
+                    player.Ready = reader.GetBool() && player.StartingWeapon is not null;
                     BroadcastLobby();
+                    break;
+                case MessageType.ChooseStartingWeapon when World is null:
+                    if (WeaponCatalog.Find(reader.GetString(64)) is { } chosen)
+                    {
+                        player.StartingWeapon = chosen;
+                        BroadcastLobby();
+                    }
                     break;
             }
         }

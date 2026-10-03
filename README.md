@@ -30,12 +30,12 @@ progress.
 | Right-click (hold to steer) | Sail to a point |
 | W / S | More / less sail |
 | A / D | Helm to port / starboard |
-| 1 | Broadside (fires the side the cursor is on) |
-| 2, 3 | Long gun, mortar: tap to fire at the cursor, hold to aim |
+| 1-4 | Your weapons, in the order you got them. Broadside fires the side the cursor is on; long gun and mortar: tap to fire at the cursor, hold to aim |
 | X | Hold to drop anchor, press to raise it |
 | M | Map |
 | Mouse wheel | Zoom |
 | Y / C / arrow keys | Toggle camera lock / center on ship / pan |
+| 1-3 / click (lobby, new run) | Choose your starting weapon: broadside, long gun, or mortar. Buy the others, and each weapon's skills, at shipyards |
 | Enter | Ready up (lobby), new run (solo, after sinking) |
 | Esc | Back to the menu |
 

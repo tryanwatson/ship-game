@@ -2,6 +2,11 @@ using System.Numerics;
 
 namespace ShipGame.Shared.Simulation;
 
+/// <summary>Smaller blasts a shell throws out around its impact: <paramref name="Count"/> of them, evenly round a ring.</summary>
+/// <param name="DamageFraction">Each bomblet's damage, as a fraction of the shell's.</param>
+/// <param name="DelayTicks">How long after the main burst the bomblets go off.</param>
+public sealed record ClusterEffect(int Count, float Spread, float Radius, float DamageFraction, int DelayTicks);
+
 /// <summary>A shell in the air: lands on <see cref="Target"/> at <see cref="ImpactTick"/> and hurts every hostile ship in <see cref="Radius"/>.</summary>
 public sealed class AreaStrike
 {
@@ -14,6 +19,9 @@ public sealed class AreaStrike
     public required float Damage { get; init; }
     public required long LaunchTick { get; init; }
     public required long ImpactTick { get; init; }
+
+    /// <summary>Bomblets to scatter on impact. Server-side only: clients see them as strikes of their own.</summary>
+    public ClusterEffect? Cluster { get; init; }
 
     /// <summary>0 at launch, 1 at impact.</summary>
     public float Progress(double tick) =>

@@ -27,6 +27,12 @@ public sealed record ChoosePlunderCommand(int PlayerId) : Command(PlayerId);
 /// <summary>At a shipyard: buy the next level of an upgrade from <c>UpgradeCatalog</c>.</summary>
 public sealed record PurchaseUpgradeCommand(int PlayerId, string UpgradeId) : Command(PlayerId);
 
+/// <summary>At a shipyard: buy a locked weapon from <c>WeaponCatalog</c>; it takes the next free ability slot.</summary>
+public sealed record UnlockAbilityCommand(int PlayerId, string AbilityId) : Command(PlayerId);
+
+/// <summary>At a shipyard: buy a skill from one of the ship's weapons' trees (see <c>SkillTrees</c>).</summary>
+public sealed record PurchaseSkillCommand(int PlayerId, string SkillId) : Command(PlayerId);
+
 /// <summary>At a trading post (shipyard): buy one of the contracts it has on offer, by <c>TradeContract.Id</c>.</summary>
 public sealed record PurchaseContractCommand(int PlayerId, int ContractId) : Command(PlayerId);
 

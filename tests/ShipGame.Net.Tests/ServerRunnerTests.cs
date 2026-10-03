@@ -30,7 +30,7 @@ public class ServerRunnerTests
         }
 
         PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
-        client.SetReady();
+        client.ReadyUp();
         PumpUntil(() => client.Replica.World.GetPlayerShip(client.LocalPlayerId) is not null, "our ship to appear");
         var startTick = client.Replica.LatestSnapshotTick;
         PumpUntil(() => client.Replica.LatestSnapshotTick >= startTick + 30, "a second of play");

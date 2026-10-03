@@ -12,7 +12,7 @@ public class HunterTests
 
     private static (Ship ship, HunterBehavior behavior) SpawnHunter(World world, Vector2 position, float heading, Vector2? home = null)
     {
-        var hunter = world.SpawnShip(position, heading, ShipStats.Sloop, abilities: Loadouts.Sloop);
+        var hunter = world.SpawnShip(position, heading, ShipStats.Sloop, abilities: Loadouts.FullArsenal);
         var behavior = new HunterBehavior(home ?? position);
         hunter.Behavior = behavior;
         hunter.IsAnchored = true;
@@ -171,7 +171,7 @@ public class HunterTests
     public void Volleys_DoNotHitFriendlyShips()
     {
         var world = new World(new Vector2(64, 64)) { Wind = Vector2.Zero };
-        var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, abilities: Loadouts.Sloop);
+        var shooter = world.SpawnShip(new Vector2(30, 30), 0f, ShipStats.Sloop, abilities: Loadouts.FullArsenal);
         var friend = world.SpawnShip(new Vector2(30, 34), 0f, ShipStats.Sloop);
 
         world.TryCastAbility(shooter, AbilitySlot.One, shooter.Position + new Vector2(0, 5));

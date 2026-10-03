@@ -26,7 +26,7 @@ public class PredictionTests
         _server = new World(Archipelago.Size);
         foreach (var island in Archipelago.CreateIslands())
             _server.AddIsland(island);
-        _serverShip = _server.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, PlayerId, Loadouts.Sloop);
+        _serverShip = _server.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, PlayerId, Loadouts.FullArsenal);
         _server.Enqueue(new AdjustThrottleCommand(PlayerId, 3));
         Step(10);
     }

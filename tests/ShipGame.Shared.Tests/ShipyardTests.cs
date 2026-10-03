@@ -20,7 +20,7 @@ public class ShipyardTests
     {
         var world = new World(new Vector2(128, 128)) { Wind = Vector2.Zero };
         world.AddIsland(Isle(shipyard));
-        var ship = world.SpawnShip(new Vector2(37, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.Sloop);
+        var ship = world.SpawnShip(new Vector2(37, 30), 0f, ShipStats.Sloop, PlayerId, Loadouts.FullArsenal);
         world.Players[PlayerId].Gold = gold;
         if (anchored)
         {

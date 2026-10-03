@@ -5,6 +5,7 @@ using ShipGame.Server;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Simulation;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Net.Tests;
 
@@ -72,13 +73,14 @@ public sealed class LoopbackTests : IDisposable
         Thread.Sleep(1);
     }
 
-    private (ClientConnection A, ClientConnection B) StartTwoPlayerRun()
+    /// <param name="weaponA">The weapon a starts with (on slot 1); b always starts with the broadside.</param>
+    private (ClientConnection A, ClientConnection B) StartTwoPlayerRun(string weaponA = BroadsideVolley.AbilityId)
     {
         var a = Connect();
         var b = Connect();
         PumpUntil(() => a.Status == ConnectionStatus.Lobby && b.Status == ConnectionStatus.Lobby, "both in the lobby");
-        a.SetReady();
-        b.SetReady();
+        a.ReadyUp(weaponA);
+        b.ReadyUp();
         PumpUntil(() => a.Status == ConnectionStatus.InRun && b.Status == ConnectionStatus.InRun, "run to start");
         PumpUntil(() => a.Replica.World.Ships.Count(s => s.OwnerPlayerId is not null) == 2
                         && b.Replica.World.Ships.Count(s => s.OwnerPlayerId is not null) == 2, "both ships on both clients");
@@ -115,13 +117,51 @@ public sealed class LoopbackTests : IDisposable
         var b = Connect();
         PumpUntil(() => a.Status == ConnectionStatus.Lobby && b.Status == ConnectionStatus.Lobby, "both in the lobby");
 
-        a.SetReady();
+        a.ReadyUp();
         PumpFor(0.3);
         Assert.Null(_server.World);
 
-        b.SetReady();
+        b.ReadyUp();
         PumpUntil(() => _server.World is not null, "run to start");
         Assert.Equal(2, _server.World!.Ships.Count(s => s.OwnerPlayerId is not null));
+    }
+
+    [Fact]
+    public void ReadyingUp_IsRefused_UntilAStartingWeaponIsChosen()
+    {
+        var client = Connect();
+        PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
+
+        client.SetReady();
+        PumpFor(0.3);
+        Assert.Null(_server.World);
+        Assert.False(client.Lobby!.Players.Single().Ready);
+
+        client.ChooseStartingWeapon(Mortar.AbilityId);
+        PumpUntil(() => client.Lobby!.Players.Single().StartingWeaponId == Mortar.AbilityId, "the choice to show in the lobby");
+        client.SetReady();
+        PumpUntil(() => _server.World is not null, "run to start");
+
+        // Only the chosen weapon, on 1; the rest are bought later.
+        var ship = _server.World!.GetPlayerShip(client.LocalPlayerId)!;
+        Assert.IsType<Mortar>(ship.GetAbility(AbilitySlot.One)!.Definition);
+        Assert.All(ship.Abilities.Skip(1), Assert.Null);
+    }
+
+    [Fact]
+    public void BoughtWeaponsAndSkills_ReachTheClients()
+    {
+        var (a, b) = StartTwoPlayerRun();
+        var ship = _server.World!.GetPlayerShip(a.LocalPlayerId)!;
+
+        ship.SetAbility(AbilitySlot.Two, WeaponCatalog.LongGun.Ability);
+        ship.AddSkill(SkillTrees.Find("heavy-volley")!);
+        var mirrored = b.Replica.World.FindShip(ship.Id)!;
+        PumpUntil(() => mirrored.HasAbility(LongGun.AbilityId) && mirrored.HasSkill("heavy-volley"), "b to see a's new gun and skill");
+
+        // The skill changes the volley everyone sees.
+        a.Send(new CastAbilityCommand(0, AbilitySlot.One, ship.Position + new Vector2(0, 5)));
+        PumpUntil(() => b.Replica.World.Projectiles.Count == BroadsideVolley.CannonCount + 2, "b to see a's heavier volley");
     }
 
     [Fact]
@@ -177,10 +217,10 @@ public sealed class LoopbackTests : IDisposable
     [Fact]
     public void MortarShells_AreVisibleToEveryone_WhileInTheAir()
     {
-        var (a, b) = StartTwoPlayerRun();
+        var (a, b) = StartTwoPlayerRun(Mortar.AbilityId);
         var aim = _server.World!.GetPlayerShip(a.LocalPlayerId)!.Position + new Vector2(20, 0);
 
-        a.Send(new CastAbilityCommand(0, AbilitySlot.Three, aim));
+        a.Send(new CastAbilityCommand(0, AbilitySlot.One, aim));
         PumpUntil(() => b.Replica.World.Strikes.Count == 1, "b to see a's shell in the air");
 
         var shell = b.Replica.World.Strikes[0];
@@ -193,10 +233,10 @@ public sealed class LoopbackTests : IDisposable
     [Fact]
     public void LongGunShots_KeepTheirSizeOnOtherClients()
     {
-        var (a, b) = StartTwoPlayerRun();
+        var (a, b) = StartTwoPlayerRun(LongGun.AbilityId);
         var ship = _server.World!.GetPlayerShip(a.LocalPlayerId)!;
 
-        a.Send(new CastAbilityCommand(0, AbilitySlot.Two, ship.Position + new Vector2(0, -10)));
+        a.Send(new CastAbilityCommand(0, AbilitySlot.One, ship.Position + new Vector2(0, -10)));
         PumpUntil(() => b.Replica.World.Projectiles.Count == 1, "b to see the long gun shot");
 
         Assert.Equal(LongGun.ShotRadius, b.Replica.World.Projectiles[0].Radius);
@@ -226,7 +266,7 @@ public sealed class LoopbackTests : IDisposable
 
         // Readying up goes out after 200 ms, the run starts on the server, and the news takes another 200 ms back.
         started = _clock.Elapsed.TotalSeconds;
-        lagged.SetReady();
+        lagged.ReadyUp();
         PumpUntil(() => _server.World is not null, "the server to start the run");
         Assert.True(_clock.Elapsed.TotalSeconds - started >= 0.2, "the ready should be held for half the lag");
         PumpUntil(() => lagged.Status == ConnectionStatus.InRun, "the client to hear the run started");
@@ -239,7 +279,7 @@ public sealed class LoopbackTests : IDisposable
     {
         var client = Connect(new NetworkConditions(LagMs: 300));
         PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
-        client.SetReady();
+        client.ReadyUp();
         PumpUntil(() => client.Replica.World.GetPlayerShip(client.LocalPlayerId) is not null, "our ship");
         client.Send(new AdjustThrottleCommand(0, 3));
         PumpFor(2.0);
@@ -267,7 +307,7 @@ public sealed class LoopbackTests : IDisposable
     {
         var client = Connect(new NetworkConditions(LagMs: 300));
         PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
-        client.SetReady();
+        client.ReadyUp();
         PumpUntil(() => client.Replica.World.GetPlayerShip(client.LocalPlayerId) is not null, "our ship");
         client.Send(new AdjustThrottleCommand(0, 5));
         PumpFor(3.0); // up to full speed, so the predicted ship is well ahead of the server's timeline
@@ -313,7 +353,7 @@ public sealed class LoopbackTests : IDisposable
     {
         var lossy = Connect(new NetworkConditions(LossPercent: 50));
         PumpUntil(() => lossy.Status == ConnectionStatus.Lobby, "the lobby");
-        lossy.SetReady();
+        lossy.ReadyUp();
         PumpUntil(() => lossy.Replica.World.GetPlayerShip(lossy.LocalPlayerId) is not null, "our ship");
 
         var startTick = lossy.Replica.LatestSnapshotTick;
