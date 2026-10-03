@@ -26,9 +26,9 @@ public sealed class LoopbackTests : IDisposable
         _server.Dispose();
     }
 
-    private ClientConnection Connect()
+    private ClientConnection Connect(NetworkConditions? conditions = null)
     {
-        var client = new ClientConnection("127.0.0.1", _server.Port);
+        var client = new ClientConnection("127.0.0.1", _server.Port, conditions);
         _clients.Add(client);
         return client;
     }
@@ -214,6 +214,49 @@ public sealed class LoopbackTests : IDisposable
             "a's client to show the starboard deck reloading");
 
         Assert.True(mirrored.GetAbility(AbilitySlot.One)!.IsChannelReady(BroadsideVolley.PortChannel));
+    }
+
+    [Fact]
+    public void SimulatedLag_DelaysBothDirections()
+    {
+        var lagged = Connect(new NetworkConditions(LagMs: 400));
+        var started = _clock.Elapsed.TotalSeconds;
+        PumpUntil(() => lagged.Status == ConnectionStatus.Lobby, "the lobby");
+        Assert.True(_clock.Elapsed.TotalSeconds - started >= 0.2, "the welcome should be held for half the lag");
+
+        // Readying up goes out after 200 ms, the run starts on the server, and the news takes another 200 ms back.
+        started = _clock.Elapsed.TotalSeconds;
+        lagged.SetReady();
+        PumpUntil(() => _server.World is not null, "the server to start the run");
+        Assert.True(_clock.Elapsed.TotalSeconds - started >= 0.2, "the ready should be held for half the lag");
+        PumpUntil(() => lagged.Status == ConnectionStatus.InRun, "the client to hear the run started");
+        Assert.True(_clock.Elapsed.TotalSeconds - started >= 0.4, "a full round trip should have passed");
+        Assert.True(lagged.RoundTripMs >= 400);
+    }
+
+    [Fact]
+    public void SimulatedLoss_DropsSomeSnapshots_ButNeverReliableMessages()
+    {
+        var lossy = Connect(new NetworkConditions(LossPercent: 50));
+        PumpUntil(() => lossy.Status == ConnectionStatus.Lobby, "the lobby");
+        lossy.SetReady();
+        PumpUntil(() => lossy.Replica.World.GetPlayerShip(lossy.LocalPlayerId) is not null, "our ship");
+
+        var startTick = lossy.Replica.LatestSnapshotTick;
+        var snapshots = 0;
+        var lastSeen = startTick;
+        PumpUntil(() =>
+        {
+            if (lossy.Replica.LatestSnapshotTick != lastSeen)
+            {
+                snapshots++;
+                lastSeen = lossy.Replica.LatestSnapshotTick;
+            }
+            return _server.World!.Tick >= startTick + 60;
+        }, "two seconds of play");
+
+        // 30 snapshots were sent; about half should have arrived (each single-chunk with one ship).
+        Assert.InRange(snapshots, 5, 25);
     }
 
     [Fact]

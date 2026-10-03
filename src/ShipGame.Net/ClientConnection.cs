@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using LiteNetLib;
 using LiteNetLib.Utils;
 using ShipGame.Shared.Commands;
@@ -30,8 +31,18 @@ public sealed class ClientConnection : IDisposable
     private readonly Dictionary<long, (Snapshot Assembled, int Received, int Expected)> _partialSnapshots = new();
     private NetPeer? _server;
 
-    public ClientConnection(string host, int port)
+    // Simulated network conditions (null: none). Messages wait in these queues until due.
+    private readonly NetworkConditions? _conditions;
+    private readonly Random _random = new();
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly PriorityQueue<byte[], double> _delayedIn = new();
+    private readonly PriorityQueue<(byte[] Data, DeliveryMethod Delivery), double> _delayedOut = new();
+    private double _lastReliableIn;
+    private double _lastReliableOut;
+
+    public ClientConnection(string host, int port, NetworkConditions? conditions = null)
     {
+        _conditions = conditions is { IsPerfect: false } ? conditions : null;
         _net = new NetManager(_listener) { DisconnectTimeout = 10_000 };
         _listener.PeerConnectedEvent += peer => _server = peer;
         _listener.PeerDisconnectedEvent += OnDisconnected;
@@ -56,12 +67,14 @@ public sealed class ClientConnection : IDisposable
 
     public ClientReplica Replica { get; } = new();
 
-    /// <summary>Round-trip time to the server in milliseconds.</summary>
-    public int RoundTripMs => _server?.RoundTripTime ?? 0;
+    /// <summary>Round-trip time to the server in milliseconds, including any simulated lag.</summary>
+    public int RoundTripMs => (_server?.RoundTripTime ?? 0) + (_conditions?.LagMs ?? 0);
 
     public void Update(double elapsedSeconds)
     {
         _net.PollEvents();
+        if (_conditions is not null)
+            ReleaseDelayed();
         Replica.Advance(elapsedSeconds);
     }
 
@@ -72,7 +85,7 @@ public sealed class ClientConnection : IDisposable
         _writer.Reset();
         _writer.Put((byte)MessageType.Command);
         _writer.PutCommand(command);
-        _server.Send(_writer, DeliveryMethod.ReliableOrdered);
+        SendToServer(_writer, DeliveryMethod.ReliableOrdered);
     }
 
     /// <summary>Ready up in the lobby; the run starts once everyone is ready.</summary>
@@ -83,7 +96,7 @@ public sealed class ClientConnection : IDisposable
         _writer.Reset();
         _writer.Put((byte)MessageType.Ready);
         _writer.Put(ready);
-        _server.Send(_writer, DeliveryMethod.ReliableOrdered);
+        SendToServer(_writer, DeliveryMethod.ReliableOrdered);
     }
 
     public IReadOnlyList<WorldEvent> TakeEvents() => Replica.TakeEvents();
@@ -106,46 +119,94 @@ public sealed class ClientConnection : IDisposable
             };
     }
 
+    private void SendToServer(NetDataWriter writer, DeliveryMethod delivery)
+    {
+        if (_conditions is null)
+        {
+            _server?.Send(writer, delivery);
+            return;
+        }
+        _delayedOut.Enqueue((writer.CopyData(), delivery), DueAt(delivery, ref _lastReliableOut));
+    }
+
     private void OnReceive(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod delivery)
     {
         try
         {
-            switch ((MessageType)reader.GetByte())
-            {
-                case MessageType.Welcome:
-                    LocalPlayerId = reader.GetInt();
-                    Status = ConnectionStatus.Lobby;
-                    break;
-                case MessageType.Lobby:
-                    Lobby = reader.GetLobby();
-                    if (!Lobby.RunInProgress && Status == ConnectionStatus.InRun)
-                        Status = ConnectionStatus.Lobby; // run over: back to the lobby (the replica keeps showing the wreckage)
-                    break;
-                case MessageType.RunStarted:
-                    Replica.Reset(reader.GetRunStart());
-                    _partialSnapshots.Clear();
-                    Status = ConnectionStatus.InRun;
-                    break;
-                case MessageType.ShipInfo:
-                    Replica.EnqueueShipInfo(reader.GetShipInfo());
-                    break;
-                case MessageType.Events:
-                {
-                    var count = reader.GetUShort();
-                    var events = new List<WorldEvent>(count);
-                    for (var i = 0; i < count; i++)
-                        events.Add(reader.GetEvent());
-                    Replica.EnqueueEvents(events);
-                    break;
-                }
-                case MessageType.SnapshotChunk:
-                    OnSnapshotChunk(reader.GetSnapshotChunk());
-                    break;
-            }
+            if (_conditions is null)
+                Handle(reader);
+            else if (delivery == DeliveryMethod.Unreliable && _random.Next(100) < _conditions.LossPercent)
+                return; // lost
+            else
+                _delayedIn.Enqueue(reader.GetRemainingBytes(), DueAt(delivery, ref _lastReliableIn));
         }
         finally
         {
             reader.Recycle();
+        }
+    }
+
+    /// <summary>
+    /// When a delayed message comes due: half the lag each way, plus jitter. Reliable ones never overtake each other
+    /// (the transport guarantees their order); unreliable ones may, as on a real network.
+    /// </summary>
+    private double DueAt(DeliveryMethod delivery, ref double lastReliable)
+    {
+        var due = _clock.Elapsed.TotalSeconds + (_conditions!.LagMs / 2.0 + _random.NextDouble() * _conditions.JitterMs / 2.0) / 1000.0;
+        if (delivery == DeliveryMethod.Unreliable)
+            return due;
+        lastReliable = due = Math.Max(due, lastReliable + 1e-6);
+        return due;
+    }
+
+    private void ReleaseDelayed()
+    {
+        var now = _clock.Elapsed.TotalSeconds;
+        while (_delayedOut.TryPeek(out var outgoing, out var due) && due <= now)
+        {
+            _delayedOut.Dequeue();
+            _server?.Send(outgoing.Data, outgoing.Delivery);
+        }
+        while (_delayedIn.TryPeek(out var incoming, out var due) && due <= now)
+        {
+            _delayedIn.Dequeue();
+            Handle(new NetDataReader(incoming));
+        }
+    }
+
+    private void Handle(NetDataReader reader)
+    {
+        switch ((MessageType)reader.GetByte())
+        {
+            case MessageType.Welcome:
+                LocalPlayerId = reader.GetInt();
+                Status = ConnectionStatus.Lobby;
+                break;
+            case MessageType.Lobby:
+                Lobby = reader.GetLobby();
+                if (!Lobby.RunInProgress && Status == ConnectionStatus.InRun)
+                    Status = ConnectionStatus.Lobby; // run over: back to the lobby (the replica keeps showing the wreckage)
+                break;
+            case MessageType.RunStarted:
+                Replica.Reset(reader.GetRunStart());
+                _partialSnapshots.Clear();
+                Status = ConnectionStatus.InRun;
+                break;
+            case MessageType.ShipInfo:
+                Replica.EnqueueShipInfo(reader.GetShipInfo());
+                break;
+            case MessageType.Events:
+            {
+                var count = reader.GetUShort();
+                var events = new List<WorldEvent>(count);
+                for (var i = 0; i < count; i++)
+                    events.Add(reader.GetEvent());
+                Replica.EnqueueEvents(events);
+                break;
+            }
+            case MessageType.SnapshotChunk:
+                OnSnapshotChunk(reader.GetSnapshotChunk());
+                break;
         }
     }
 

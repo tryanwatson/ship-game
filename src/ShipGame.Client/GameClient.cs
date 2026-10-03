@@ -26,6 +26,7 @@ public sealed class GameClient : Game
     private readonly int _connectPort;
     private readonly bool _hosting;
     private readonly bool _hostFriendlyFire;
+    private readonly NetworkConditions _conditions;
     private HostedServer? _hostedServer;
     private ClientSettings _settings = new();
 
@@ -94,8 +95,11 @@ public sealed class GameClient : Game
     /// <param name="connectHost">Server to join straight away; null to start at the menu.</param>
     /// <param name="host">Run a server in this process on <paramref name="connectPort"/> and join it.</param>
     /// <param name="friendlyFire">When hosting: whether players' shots hurt each other.</param>
-    public GameClient(string? connectHost = null, int connectPort = Protocol.DefaultPort, bool host = false, bool friendlyFire = true)
+    /// <param name="conditions">Simulated lag and loss for online games, for testing.</param>
+    public GameClient(string? connectHost = null, int connectPort = Protocol.DefaultPort, bool host = false, bool friendlyFire = true,
+        NetworkConditions? conditions = null)
     {
+        _conditions = conditions ?? new NetworkConditions();
         _hostFriendlyFire = friendlyFire;
         _connectHost = connectHost;
         _connectPort = connectPort;
@@ -172,7 +176,7 @@ public sealed class GameClient : Game
     private void Join(ServerAddress address)
     {
         _menu.Close();
-        _session = new NetworkGameSession(address.Host, address.Port);
+        _session = new NetworkGameSession(address.Host, address.Port, _conditions);
         ResetControls();
     }
 
@@ -586,7 +590,8 @@ public sealed class GameClient : Game
         if (Online is { } online)
         {
             var role = _hostedServer is not null ? $"hosting on {_hostedServer.Port}" : "online";
-            status = $"{role} as player {online.LocalPlayerId} ({online.Connection.RoundTripMs} ms) | {status}";
+            var simulated = _conditions.IsPerfect ? "" : $", simulating {_conditions}";
+            status = $"{role} as player {online.LocalPlayerId} ({online.Connection.RoundTripMs} ms{simulated}) | {status}";
         }
         Window.Title = $"ShipGame | {status} | speed {ship?.Speed:0.0} (sail {ship?.Throttle}/{ShipMovement.ThrottleLevels}) | {fps:0} fps";
         _titleTimer = 0;
