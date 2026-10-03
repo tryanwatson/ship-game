@@ -1,9 +1,10 @@
+using System;
 using System.Linq;
 using ShipGame.Net;
 
-// Single-player:  dotnet run --project src/ShipGame.Client
-// Host a game:    dotnet run --project src/ShipGame.Client -- --host [7777] [--no-friendly-fire]
-// Join a game:    dotnet run --project src/ShipGame.Client -- --connect 127.0.0.1[:7777]
+// Menu (solo, host, join):  dotnet run --project src/ShipGame.Client
+// Host a game:              dotnet run --project src/ShipGame.Client -- --host [7777] [--no-friendly-fire]
+// Join a game:              dotnet run --project src/ShipGame.Client -- --connect 127.0.0.1[:7777]
 string? host = null;
 var port = Protocol.DefaultPort;
 var hosting = false;
@@ -19,20 +20,11 @@ for (var i = 0; i < args.Length; i++)
                 port = hostPort;
             break;
         case "--connect" when i + 1 < args.Length:
-        {
-            var address = args[i + 1];
-            var colon = address.LastIndexOf(':');
-            if (colon > 0 && int.TryParse(address[(colon + 1)..], out var parsedPort))
-            {
-                host = address[..colon];
-                port = parsedPort;
-            }
+            if (ServerAddress.TryParse(args[i + 1], out var address))
+                (host, port) = (address.Host, address.Port);
             else
-            {
-                host = address;
-            }
+                Console.Error.WriteLine($"Ignoring --connect '{args[i + 1]}': not a valid address.");
             break;
-        }
     }
 }
 

@@ -27,7 +27,7 @@ public sealed class GameClient : Game
     private readonly bool _hosting;
     private readonly bool _hostFriendlyFire;
     private HostedServer? _hostedServer;
-    private string? _hostError;
+    private ClientSettings _settings = new();
 
     private const float CameraPanSpeed = 900f;
 
@@ -59,6 +59,7 @@ public sealed class GameClient : Game
     private ShipyardPanel _shipyardPanel = null!;
     private StatusBanner _statusBanner = null!;
     private MapView _mapView = null!;
+    private MainMenu _menu = null!;
     private bool _mapOpen;
 
     private bool _cameraLocked = true;
@@ -90,7 +91,7 @@ public sealed class GameClient : Game
     private double _titleTimer;
     private int _framesSinceTitle;
 
-    /// <param name="connectHost">Server to join; null for single-player.</param>
+    /// <param name="connectHost">Server to join straight away; null to start at the menu.</param>
     /// <param name="host">Run a server in this process on <paramref name="connectPort"/> and join it.</param>
     /// <param name="friendlyFire">When hosting: whether players' shots hurt each other.</param>
     public GameClient(string? connectHost = null, int connectPort = Protocol.DefaultPort, bool host = false, bool friendlyFire = true)
@@ -109,6 +110,7 @@ public sealed class GameClient : Game
         IsMouseVisible = true;
         IsFixedTimeStep = false; // The session runs its own fixed tick; render as fast as vsync allows.
         Window.AllowUserResizing = true;
+        Window.TextInput += (_, e) => _menu?.OnTextInput(e.Character, e.Key);
     }
 
     private int LocalPlayerId => _session.LocalPlayerId;
@@ -120,25 +122,58 @@ public sealed class GameClient : Game
 
     protected override void Initialize()
     {
-        if (_hosting)
-        {
-            try
-            {
-                _hostedServer = new HostedServer(_connectPort, _hostFriendlyFire);
-            }
-            catch (InvalidOperationException)
-            {
-                _hostError = $"PORT {_connectPort} IS IN USE";
-            }
-        }
+        base.Initialize(); // loads content, including the menu
 
-        if (_hostError is not null)
-            _session = new LocalGameSession(EmptySea(), SoloPlayerId); // just the banner over open water: don't join anyone else's game
+        _settings = ClientSettings.Load();
+        _menu.Address = _settings.LastAddress;
+        _menu.FriendlyFire = _settings.HostFriendlyFire;
+
+        if (_hosting)
+            StartHosting(_hostFriendlyFire);
         else if (_connectHost is not null)
-            _session = new NetworkGameSession(_connectHost, _connectPort);
+            Join(new ServerAddress(_connectHost, _connectPort));
         else
-            StartRun();
-        base.Initialize();
+            OpenMenu();
+    }
+
+    /// <summary>Leaves whatever game is going (stopping a hosted server) and shows the menu over open water.</summary>
+    private void OpenMenu(string? message = null, bool onJoinPage = false)
+    {
+        LeaveSession();
+        _session = new LocalGameSession(EmptySea(), SoloPlayerId);
+        _camera.Position = IsoProjection.WorldToIso(Archipelago.Size / 2f);
+        _menu.Open(message, onJoinPage);
+    }
+
+    private void LeaveSession()
+    {
+        Online?.Dispose();
+        _hostedServer?.Dispose();
+        _hostedServer = null;
+        ResetControls();
+    }
+
+    /// <summary>Runs a server in this process on <see cref="_connectPort"/> and joins it.</summary>
+    private void StartHosting(bool friendlyFire)
+    {
+        LeaveSession();
+        try
+        {
+            _hostedServer = new HostedServer(_connectPort, friendlyFire);
+        }
+        catch (InvalidOperationException)
+        {
+            OpenMenu($"PORT {_connectPort} IS IN USE");
+            return;
+        }
+        Join(new ServerAddress("127.0.0.1", _hostedServer.Port));
+    }
+
+    private void Join(ServerAddress address)
+    {
+        _menu.Close();
+        _session = new NetworkGameSession(address.Host, address.Port);
+        ResetControls();
     }
 
     private static World EmptySea()
@@ -158,8 +193,19 @@ public sealed class GameClient : Game
         world.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, SoloPlayerId, Loadouts.Sloop);
 
         _session = new LocalGameSession(world, SoloPlayerId);
+        ResetControls();
+    }
+
+    /// <summary>Forget held keys and toggles from the last game.</summary>
+    private void ResetControls()
+    {
         _sentRudder = 0;
         _cameraLocked = true;
+        _mapOpen = false;
+        _aimKeyDown = null;
+        _anchorHeldSeconds = 0;
+        _anchorKeyLatched = false;
+        _ignoreRightDrag = false;
     }
 
     protected override void LoadContent()
@@ -174,12 +220,12 @@ public sealed class GameClient : Game
         _shipyardPanel = new ShipyardPanel(_primitives);
         _statusBanner = new StatusBanner(_primitives);
         _mapView = new MapView(_primitives);
+        _menu = new MainMenu(_primitives);
     }
 
     protected override void UnloadContent()
     {
-        Online?.Dispose();
-        _hostedServer?.Dispose();
+        LeaveSession();
         _primitives.Dispose();
     }
 
@@ -188,8 +234,29 @@ public sealed class GameClient : Game
         var dt = gameTime.ElapsedGameTime.TotalSeconds;
         _input.Update();
 
-        if (_input.IsKeyDown(Keys.Escape))
-            Exit();
+        if (_menu.IsOpen)
+        {
+            UpdateMenu(dt);
+            UpdateTitle(dt);
+            base.Update(gameTime);
+            return;
+        }
+
+        if (IsActive && _input.WasKeyPressed(Keys.Escape))
+        {
+            OpenMenu();
+            base.Update(gameTime);
+            return;
+        }
+
+        // Refused or dropped: back to the menu with the reason, on the join page so trying again is one key.
+        if (Online is { Connection.Status: ConnectionStatus.Disconnected } dropped)
+        {
+            var wasHosting = _hostedServer is not null;
+            OpenMenu(dropped.Connection.DisconnectReason, onJoinPage: !wasHosting);
+            base.Update(gameTime);
+            return;
+        }
 
         // Enter: online, ready up in the lobby; offline, start a new run once this one is over.
         if (IsActive && _input.WasKeyPressed(Keys.Enter))
@@ -230,10 +297,52 @@ public sealed class GameClient : Game
         base.Update(gameTime);
     }
 
+    private void UpdateMenu(double dt)
+    {
+        _session.Update(dt); // the sea behind the menu
+        if (!IsActive)
+            return;
+
+        switch (_menu.Update(_input, Hud, dt))
+        {
+            case MenuAction.PlaySolo:
+                _menu.Close();
+                StartRun();
+                break;
+            case MenuAction.Host:
+                SaveSettings();
+                StartHosting(_menu.FriendlyFire);
+                break;
+            case MenuAction.Join when _menu.ParsedAddress is { } address:
+                SaveSettings();
+                Join(address);
+                break;
+            case MenuAction.Quit:
+                SaveSettings();
+                Exit();
+                break;
+        }
+    }
+
+    private void SaveSettings()
+    {
+        _settings.LastAddress = _menu.Address.Trim();
+        _settings.HostFriendlyFire = _menu.FriendlyFire;
+        _settings.Save();
+    }
+
     protected override void Draw(GameTime gameTime)
     {
         GraphicsDevice.Clear(new Color(10, 22, 40));
         var view = _camera.GetView(GraphicsDevice.Viewport);
+        if (_menu.IsOpen)
+        {
+            _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
+            _menu.Draw(Hud);
+            base.Draw(gameTime);
+            return;
+        }
+
         var aim = ShowingAim is { } slot ? new AimPreview(slot, _aimCursor) : (AimPreview?)null;
         _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view, aim);
         _islandOverlays.Draw(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _session.InterpolationAlpha, view, Hud, AnchorDropProgress);
@@ -399,11 +508,6 @@ public sealed class GameClient : Game
     private void DrawStatusBanner()
     {
         var world = _session.World;
-        if (_hostError is not null)
-        {
-            _statusBanner.Draw("COULD NOT HOST", _hostError, Hud);
-            return;
-        }
         if (Online is { } online && DrawConnectionBanner(online))
             return;
 
@@ -426,10 +530,7 @@ public sealed class GameClient : Game
         switch (connection.Status)
         {
             case ConnectionStatus.Connecting:
-                _statusBanner.Draw("CONNECTING", $"{online.Host}:{online.Port}", Hud);
-                return true;
-            case ConnectionStatus.Disconnected:
-                _statusBanner.Draw("DISCONNECTED", connection.DisconnectReason ?? "", Hud);
+                _statusBanner.Draw("CONNECTING", $"{new ServerAddress(online.Host, online.Port)}  -  ESC TO CANCEL", Hud);
                 return true;
             case ConnectionStatus.Lobby:
             {
@@ -452,6 +553,13 @@ public sealed class GameClient : Game
         _titleTimer += dt;
         if (_titleTimer < 0.5)
             return;
+        if (_menu.IsOpen)
+        {
+            Window.Title = "ShipGame";
+            _titleTimer = 0;
+            _framesSinceTitle = 0;
+            return;
+        }
 
         var world = _session.World;
         var ship = world.GetPlayerShip(LocalPlayerId);

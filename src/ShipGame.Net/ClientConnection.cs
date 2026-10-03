@@ -99,6 +99,7 @@ public sealed class ClientConnection : IDisposable
             : info.Reason switch
             {
                 LiteNetLib.DisconnectReason.ConnectionFailed => "COULD NOT REACH SERVER",
+                LiteNetLib.DisconnectReason.UnknownHost => "UNKNOWN SERVER ADDRESS",
                 LiteNetLib.DisconnectReason.Timeout => "CONNECTION TIMED OUT",
                 LiteNetLib.DisconnectReason.RemoteConnectionClose => "SERVER CLOSED THE CONNECTION",
                 _ => info.Reason.ToString().ToUpperInvariant(),
