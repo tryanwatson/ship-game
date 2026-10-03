@@ -39,7 +39,7 @@ public sealed class ShipState
     public float Heading;
     public float Speed;
     public float Health;
-    public byte Throttle;
+    public sbyte Throttle;
     public sbyte Rudder;
     public AnchorState Anchor;
     public int AnchorRaiseTicks;
@@ -110,7 +110,7 @@ public sealed class Snapshot
             Heading = ship.Heading,
             Speed = ship.Speed,
             Health = ship.Health,
-            Throttle = (byte)ship.Throttle,
+            Throttle = (sbyte)ship.Throttle,
             Rudder = (sbyte)ship.Rudder,
             Anchor = ship.Anchor,
             AnchorRaiseTicks = ship.AnchorRaiseTicksRemaining,

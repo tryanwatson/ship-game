@@ -507,7 +507,7 @@ public sealed class World
                 ship.MoveTarget = Vector2.Clamp(move.Target, Vector2.Zero, WorldSize);
                 ship.IsHoldingCourse = false;
                 ship.Rudder = 0;
-                if (ship.Throttle == 0)
+                if (ship.Throttle <= 0)
                     ship.Throttle = ShipMovement.AutopilotThrottle;
                 return null;
             case StopCommand:
@@ -516,7 +516,7 @@ public sealed class World
                 ship.Throttle = 0;
                 return null;
             case AdjustThrottleCommand adjust:
-                ship.Throttle = Math.Clamp(ship.Throttle + adjust.Delta, 0, ShipMovement.ThrottleLevels);
+                ship.Throttle = Math.Clamp(ship.Throttle + adjust.Delta, ShipMovement.AsternThrottle, ShipMovement.ThrottleLevels);
                 return null;
             case AnchorKeyCommand { Pressed: false }:
                 Anchoring.ReleaseKey(ship);

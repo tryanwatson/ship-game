@@ -124,7 +124,7 @@ public sealed class Ship
 
     /// <summary>
     /// Sail setting from 0 (furled, stopped) to <see cref="ShipMovement.ThrottleLevels"/>. Sets cruise speed:
-    /// with no move order the ship sails straight on at it.
+    /// with no move order the ship sails straight on at it. <see cref="ShipMovement.AsternThrottle"/> (-1) rows astern.
     /// </summary>
     public int Throttle { get; set; }
 
@@ -175,7 +175,8 @@ public sealed class Ship
     /// <summary>Manual helm: -1 port, 0 amidships, +1 starboard. Only steers when there's no move order.</summary>
     public int Rudder { get; set; }
 
-    public float CruiseSpeed => Stats.MaxSpeed * Throttle / ShipMovement.ThrottleLevels;
+    /// <summary>Speed under the current sail; 0 with the sails furled or rowing astern.</summary>
+    public float CruiseSpeed => Stats.MaxSpeed * Math.Max(0, Throttle) / ShipMovement.ThrottleLevels;
 
     private readonly List<CargoLot> _cargo = new();
 

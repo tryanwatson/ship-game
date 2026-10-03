@@ -28,7 +28,7 @@ progress.
 | | |
 |---|---|
 | Right-click (hold to steer) | Sail to a point |
-| W / S | More / less sail |
+| W / S | More / less sail; S again with the sails furled rows slowly astern |
 | A / D | Helm to port / starboard |
 | 1-4 | Your weapons, in the order you got them. Broadside fires the side the cursor is on; long gun and mortar: tap to fire at the cursor, hold to aim |
 | X | Hold to drop anchor, press to raise it |

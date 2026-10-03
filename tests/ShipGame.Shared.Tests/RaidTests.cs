@@ -36,7 +36,7 @@ public class RaidTests
     }
 
     [Fact]
-    public void Raids_ArriveEveryMinute_OneMoreRaiderEachTime()
+    public void Raids_ComeAMinuteAfterTheLastIsSunk_OneMoreRaiderEachTime()
     {
         var (world, _, waves) = CreateRun();
 
@@ -45,11 +45,23 @@ public class RaidTests
 
         world.Step();
         Assert.Equal(1, waves.Raid);
-        Assert.Single(Raiders(world));
+        var first = Assert.Single(Raiders(world));
 
-        RunTicks(world, WaveDirector.RaidIntervalTicks);
+        // While the raider is afloat the countdown waits, however long it takes.
+        RunTicks(world, WaveDirector.RaidIntervalTicks * 2);
+        Assert.Equal(1, waves.Raid);
+        Assert.Equal(WaveDirector.RaidIntervalTicks, waves.TicksUntilNextRaid);
+        Assert.Equal(1, waves.RaidersLeft);
+
+        // Sunk: a minute later, the next raid, one raider bigger.
+        first.Health = 0f;
+        world.Step();
+        Assert.Equal(0, waves.RaidersLeft);
+        RunTicks(world, WaveDirector.RaidIntervalTicks - 2);
+        Assert.Empty(Raiders(world));
+        world.Step();
         Assert.Equal(2, waves.Raid);
-        Assert.Equal(WaveDirector.RaidSize(1) + WaveDirector.RaidSize(2), Raiders(world).Count);
+        Assert.Equal(WaveDirector.RaidSize(2), Raiders(world).Count);
         Assert.Equal(2, WaveDirector.RaidSize(2));
     }
 
@@ -87,22 +99,8 @@ public class RaidTests
         Assert.NotEmpty(Raiders(world));
         Assert.Equal(WaveDirector.WaveSize(after.Wave + 1, players: 2), after.NextWaveSize);
         Assert.Equal(1, after.Raid);
+        Assert.Equal(Raiders(world).Count, after.RaidersLeft);
         Assert.Equal(WaveDirector.RaidSize(2, players: 2), after.NextRaidSize);
-    }
-
-    [Fact]
-    public void Forecast_NextRaid_ShrinksNearTheRaiderCap()
-    {
-        var (world, _, waves) = CreateRun();
-        for (var i = 0; i < WaveDirector.MaxRaidersAfloat - 1; i++)
-        {
-            var raider = world.SpawnShip(new Vector2(20 + i * 3, 20), 0f, ShipStats.Sloop, abilities: Loadouts.Pirate);
-            raider.Behavior = new HunterBehavior(raider.Position, relentless: true);
-        }
-
-        world.Step();
-
-        Assert.Equal(1, waves.Status.NextRaidSize); // room for just one more
     }
 
     [Fact]

@@ -45,10 +45,11 @@ public static class IslandCollision
             }
             ship.IsAground = true;
 
-            // Back out of the land, then lose the part of our way that was driving into it. Ships only move
-            // bow-first, so keep the along-shore fraction: head-on stops dead, a glancing blow scrapes along.
+            // Back out of the land, then lose the part of our way that was driving into it, keeping the along-shore
+            // fraction: head-on stops dead, a glancing blow scrapes along. (Way is along the keel, astern if rowing.)
             ship.Position += normal * depth;
-            var into = -Vector2.Dot(ship.Forward, normal);
+            var travel = ship.Speed < 0f ? -ship.Forward : ship.Forward;
+            var into = -Vector2.Dot(travel, normal);
             if (into > 0f)
                 ship.Speed *= MathF.Sqrt(MathF.Max(0f, 1f - into * into));
 

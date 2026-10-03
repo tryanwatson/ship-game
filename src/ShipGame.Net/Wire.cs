@@ -457,6 +457,7 @@ public static class Wire
         header.Put((ushort)Math.Clamp(waves.NextWaveSize, 0, ushort.MaxValue));
         header.Put(waves.Raid);
         header.Put(waves.TicksUntilNextRaid);
+        header.Put((ushort)Math.Clamp(waves.RaidersLeft, 0, ushort.MaxValue));
         header.Put((ushort)Math.Clamp(waves.NextRaidSize, 0, ushort.MaxValue));
         header.Put(snapshot.RunOver);
         header.Put((byte)snapshot.Players.Count);
@@ -530,7 +531,7 @@ public static class Wire
             snapshot.Wind = r.GetVector2();
             snapshot.Waves = new WaveStatus(
                 Wave: r.GetInt(), TicksUntilNextWave: r.GetInt(), WavePiratesLeft: r.GetUShort(), NextWaveSize: r.GetUShort(),
-                Raid: r.GetInt(), TicksUntilNextRaid: r.GetInt(), NextRaidSize: r.GetUShort());
+                Raid: r.GetInt(), TicksUntilNextRaid: r.GetInt(), RaidersLeft: r.GetUShort(), NextRaidSize: r.GetUShort());
             snapshot.RunOver = r.GetBool();
             var players = r.GetByte();
             for (var i = 0; i < players; i++)
@@ -590,7 +591,7 @@ public static class Wire
             Heading = r.GetFloat(),
             Speed = r.GetFloat(),
             Health = r.GetFloat(),
-            Throttle = r.GetByte(),
+            Throttle = r.GetSByte(),
             Rudder = r.GetSByte(),
             Anchor = (AnchorState)r.GetByte(),
             AnchorRaiseTicks = r.GetUShort(),

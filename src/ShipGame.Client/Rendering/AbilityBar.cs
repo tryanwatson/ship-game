@@ -256,7 +256,10 @@ public sealed class AbilityBar
         FillRect(new Vector2(center.X - 3.5f, top + lidHeight - 1f), new Vector2(7f, 8f), ChestBand);       // lock
     }
 
-    /// <summary>Stacked pips left of the bar, filled bottom-up to the current sail setting.</summary>
+    /// <summary>
+    /// Stacked pips left of the bar, filled bottom-up to the current sail setting. Rowing astern, a down arrow
+    /// under them instead.
+    /// </summary>
     private void DrawSailGauge(Ship ship, Vector2 topLeft)
     {
         var levels = ShipMovement.ThrottleLevels;
@@ -265,6 +268,16 @@ public sealed class AbilityBar
         {
             var y = topLeft.Y + SlotSize - level * pipHeight - (level - 1) * SailPipGap;
             FillRect(new Vector2(topLeft.X, y), new Vector2(SailPipWidth, pipHeight), level <= ship.Throttle ? SailOn : SailOff);
+        }
+
+        if (ship.Throttle < 0)
+        {
+            var top = topLeft.Y + SlotSize + 4f;
+            Span<Vector2> arrow = stackalloc Vector2[]
+            {
+                new(topLeft.X - 1f, top), new(topLeft.X + SailPipWidth + 1f, top), new(topLeft.X + SailPipWidth / 2f, top + 9f),
+            };
+            _batch.FillConvex(arrow, SailOn);
         }
     }
 

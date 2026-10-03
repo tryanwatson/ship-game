@@ -6,8 +6,8 @@ using ShipGame.Shared.Simulation;
 namespace ShipGame.Client.Rendering;
 
 /// <summary>
-/// Top-right, under the counters: when the next wave and the next raid arrive and how many pirates each brings (or,
-/// while a wave is afloat, how many of it are left). Reads the director's <see cref="WaveStatus"/>, which clients
+/// Top-right, under the counters: when the next wave and the next raid arrive and how many pirates each brings, or,
+/// while one is afloat (its countdown waits for it to be sunk), how many of it are left. Reads the director's <see cref="WaveStatus"/>, which clients
 /// mirror from the server.
 /// </summary>
 public sealed class WaveForecast
@@ -40,9 +40,8 @@ public sealed class WaveForecast
         var top = HudCounters.Bottom + Gap;
 
         DrawLine(WaveLine(status), right, top, WaveText);
-        var raidSeconds = Seconds(status.TicksUntilNextRaid);
-        DrawLine(RaidLine(status), right, top + PixelFont.Height(Scale) + 2 * PanelPadding + LineGap,
-            raidSeconds <= WarningSeconds ? Urgent : RaidText);
+        var urgent = status.RaidersLeft == 0 && Seconds(status.TicksUntilNextRaid) <= WarningSeconds;
+        DrawLine(RaidLine(status), right, top + PixelFont.Height(Scale) + 2 * PanelPadding + LineGap, urgent ? Urgent : RaidText);
 
         _batch.Flush();
     }
@@ -55,9 +54,9 @@ public sealed class WaveForecast
         return $"{which} IN {Clock(s.TicksUntilNextWave)} - {Pirates(s.NextWaveSize, "PIRATE")}";
     }
 
-    private static string RaidLine(WaveStatus s) => s.NextRaidSize > 0
-        ? $"RAID IN {Clock(s.TicksUntilNextRaid)} - {Pirates(s.NextRaidSize, "RAIDER")}"
-        : $"RAID IN {Clock(s.TicksUntilNextRaid)} - RAIDERS AT FULL STRENGTH";
+    private static string RaidLine(WaveStatus s) => s.RaidersLeft > 0
+        ? $"RAID {s.Raid} - {Pirates(s.RaidersLeft, "RAIDER")} LEFT"
+        : $"RAID IN {Clock(s.TicksUntilNextRaid)} - {Pirates(s.NextRaidSize, "RAIDER")}";
 
     private static string Pirates(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}S";
 

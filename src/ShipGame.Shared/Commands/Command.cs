@@ -42,7 +42,7 @@ public sealed record PurchaseContractCommand(int PlayerId, int ContractId) : Com
 /// </summary>
 public sealed record SetRudderCommand(int PlayerId, int Rudder) : Command(PlayerId);
 
-/// <summary>Raises or lowers the sail setting by <paramref name="Delta"/> levels.</summary>
+/// <summary>Raises or lowers the sail setting by <paramref name="Delta"/> levels; one below furled rows astern.</summary>
 public sealed record AdjustThrottleCommand(int PlayerId, int Delta) : Command(PlayerId);
 
 /// <summary>Casts the ability in <paramref name="Slot"/>. <paramref name="Target"/> is the cursor's world position.</summary>

@@ -5,8 +5,9 @@ namespace ShipGame.Shared.Simulation;
 /// <summary>
 /// Arcade ship handling built on one rule: ships turn along arcs. Heading can change by at most
 /// (distance travelled / turning radius), so a ship needs way on to steer, and the radius tightens as it slows.
-/// Ships always move bow-first. The one exception is rowing: with the sails furled, the helm swings the ship round
-/// slowly on the spot (<see cref="RowingTurnRate"/>), so a stopped ship can line up a broadside.
+/// Under sail ships move bow-first. The exception is rowing: with the sails furled the helm swings the ship round
+/// slowly on the spot (<see cref="RowingTurnRate"/>), so a stopped ship can line up a broadside, and one setting
+/// below furled (<see cref="AsternThrottle"/>) the crew row her slowly backwards (<see cref="RowAsternSpeed"/>).
 ///
 /// Steering relies on one geometric fact: turning hard toward a target reaches it if and only if the target lies
 /// outside the turning circle, and since that circle stays put while we sail round it, a target outside it stays
@@ -25,8 +26,17 @@ public static class ShipMovement
     /// <summary>How fast the crew can row a ship round with the sails furled, in radians per second (20 degrees).</summary>
     public const float RowingTurnRate = 20f * MathF.PI / 180f;
 
-    /// <summary>Rowing: sails furled, helm over, and no move order (move orders always set sail).</summary>
-    public static bool IsRowing(Ship ship) => !ship.IsAnchored && ship.Throttle == 0 && ship.MoveTarget is null && ship.Rudder != 0;
+    /// <summary>The setting below furled: the crew row astern.</summary>
+    public const int AsternThrottle = -1;
+
+    /// <summary>How fast the crew row a ship backwards (tiles per second), and how quickly they get her moving.</summary>
+    public const float RowAsternSpeed = 0.6f;
+    public const float RowingAcceleration = 0.6f;
+
+    /// <summary>
+    /// Rowing round: sails furled (or rowing astern), helm over, and no move order (move orders always set sail).
+    /// </summary>
+    public static bool IsRowing(Ship ship) => !ship.IsAnchored && ship.Throttle <= 0 && ship.MoveTarget is null && ship.Rudder != 0;
 
     // Fraction of cruise speed used for turns too tight to make at cruise. Lower speed means a tighter circle;
     // players who want tighter still can shorten sail.
@@ -103,15 +113,25 @@ public static class ShipMovement
         }
         else
         {
-            // Manual sailing: hold cruise speed and steer by the rudder at full lock.
-            desiredSpeed = ship.CruiseSpeed;
+            // Manual sailing: hold cruise speed (or row astern) and steer by the rudder at full lock.
+            desiredSpeed = ship.Throttle < 0 ? -RowAsternSpeed : ship.CruiseSpeed;
             headingError = ship.Rudder * MathF.PI;
             canTurn = ship.Rudder != 0;
         }
 
-        ship.Speed = desiredSpeed > ship.Speed
-            ? MathF.Min(desiredSpeed, ship.Speed + stats.Acceleration * dt)
-            : MathF.Max(desiredSpeed, ship.Speed - stats.DecelerationAt(ship.Speed) * dt);
+        if (desiredSpeed < 0f || ship.Speed < 0f)
+        {
+            // Rowing astern, or easing out of it. Any headway is carried off by drag before the oars bite.
+            ship.Speed = ship.Speed > 0f
+                ? MathF.Max(0f, ship.Speed - stats.DecelerationAt(ship.Speed) * dt)
+                : MoveTowards(ship.Speed, desiredSpeed, RowingAcceleration * dt);
+        }
+        else
+        {
+            ship.Speed = desiredSpeed > ship.Speed
+                ? MathF.Min(desiredSpeed, ship.Speed + stats.Acceleration * dt)
+                : MathF.Max(desiredSpeed, ship.Speed - stats.DecelerationAt(ship.Speed) * dt);
+        }
 
         // Heading changes by at most arc length / radius: no way on, no turning. Unless rowing, which turns at least
         // at the rowing rate (a ship still coasting after furling keeps its faster arc while that lasts).
@@ -122,12 +142,15 @@ public static class ShipMovement
             ship.Heading = Angles.Wrap(ship.Heading + Math.Clamp(headingError, -maxTurn, maxTurn));
 
         // A ship that isn't making way is set downwind; under way, the sails and keel hold her course.
-        var exposure = 1f - MathF.Min(1f, ship.Speed / WindDriftCutoffSpeed);
+        var exposure = 1f - MathF.Min(1f, MathF.Abs(ship.Speed) / WindDriftCutoffSpeed);
         var targetDrift = wind * exposure;
         ship.WindDrift += (targetDrift - ship.WindDrift) * MathF.Min(1f, dt / WindDriftResponseTime);
 
         ship.Position += (ship.Forward * ship.Speed + ship.WindDrift) * dt;
     }
+
+    private static float MoveTowards(float value, float target, float maxStep) =>
+        value < target ? MathF.Min(target, value + maxStep) : MathF.Max(target, value - maxStep);
 
     /// <summary>
     /// Radius of the arc that leaves the ship on its current heading and passes through the target:

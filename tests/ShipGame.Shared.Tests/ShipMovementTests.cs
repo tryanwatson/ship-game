@@ -172,7 +172,8 @@ public class ShipMovementTests
 
         world.Enqueue(new AdjustThrottleCommand(PlayerId, -10));
         world.Step();
-        Assert.Equal(0, ship.Throttle);
+        Assert.Equal(ShipMovement.AsternThrottle, ship.Throttle); // one below furled: rowing astern
+        Assert.Equal(0f, ship.CruiseSpeed);
     }
 
     [Theory]
@@ -300,6 +301,72 @@ public class ShipMovementTests
         Assert.Equal(expectedTurnSign * ShipMovement.RowingTurnRate * 2f, Angles.Delta(0f, ship.Heading), 3);
         Assert.Equal(new Vector2(30, 30), ship.Position);
         Assert.Equal(0f, ship.Speed);
+    }
+
+    [Fact]
+    public void Astern_RowsSlowlyBackwards()
+    {
+        var (world, ship) = CreateWorld(new Vector2(30, 30));
+
+        world.Enqueue(new AdjustThrottleCommand(PlayerId, -1)); // one below furled
+        RunTicks(world, SimConstants.TickRate * 4);
+
+        Assert.Equal(ShipMovement.AsternThrottle, ship.Throttle);
+        Assert.Equal(-ShipMovement.RowAsternSpeed, ship.Speed, 3);
+        Assert.True(ship.Position.X < 29f, "should have backed off to the west (stern first)");
+        Assert.Equal(30f, ship.Position.Y, 3);
+        Assert.Equal(0f, ship.Heading); // still facing the same way
+    }
+
+    [Fact]
+    public void Astern_FromUnderSail_LosesTheHeadwayFirst()
+    {
+        var (world, ship) = CreateWorld(new Vector2(30, 30));
+        ship.Throttle = ShipMovement.AsternThrottle;
+        ship.Speed = ship.Stats.MaxSpeed;
+
+        world.Step();
+        Assert.InRange(ship.Speed, 0.01f, ship.Stats.MaxSpeed); // still carrying way forward
+
+        RunTicks(world, SimConstants.TickRate * 15);
+        Assert.Equal(-ShipMovement.RowAsternSpeed, ship.Speed, 3);
+    }
+
+    [Fact]
+    public void Astern_TheHelmStillRowsHerRound()
+    {
+        var (world, ship) = CreateWorld(new Vector2(30, 30));
+        ship.Throttle = ShipMovement.AsternThrottle;
+
+        world.Enqueue(new SetRudderCommand(PlayerId, 1));
+        RunTicks(world, SimConstants.TickRate);
+
+        Assert.Equal(ShipMovement.RowingTurnRate, Angles.Delta(0f, ship.Heading), 3);
+    }
+
+    [Fact]
+    public void MoveOrder_SetsSail_EvenWhenRowingAstern()
+    {
+        var (world, ship) = CreateWorld(new Vector2(30, 30));
+        ship.Throttle = ShipMovement.AsternThrottle;
+
+        world.Enqueue(new MoveCommand(PlayerId, new Vector2(50, 30)));
+        world.Step();
+
+        Assert.Equal(ShipMovement.AutopilotThrottle, ship.Throttle);
+    }
+
+    [Fact]
+    public void Astern_IntoAShore_StopsTheShip()
+    {
+        var (world, ship) = CreateWorld(new Vector2(31, 30));
+        world.AddIsland(new Island(1, new[] { new Vector2(20, 26), new Vector2(27, 26), new Vector2(27, 34), new Vector2(20, 34) }));
+        ship.Throttle = ShipMovement.AsternThrottle;
+
+        RunTicks(world, SimConstants.TickRate * 15);
+
+        Assert.True(ship.Position.X - ship.Stats.Length / 2f > 26.8f, "the stern shouldn't be driven into the land");
+        Assert.True(ship.Speed > -ShipMovement.RowAsternSpeed * 0.5f, "backing into the shore should take the way off");
     }
 
     [Fact]
