@@ -1,4 +1,5 @@
-# Push a tag like v0.3.0 to build the client for each platform and attach the zips to a GitHub release.
+# Push a tag like v0.3.0 to build the client for each platform, attach the zips to a GitHub release, and update the
+# dedicated server to match (see docs/hosting.md, "Automatic updates"; skipped until that's set up).
 # Run it by hand (Actions > Release > Run workflow) to get the zips as workflow artifacts without a release.
 name: Release
 
@@ -73,3 +74,22 @@ jobs:
       - run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # Clients and server must share a protocol version, so the server follows each release. The deploy key is pinned on
+  # the server to scripts/deploy-server.sh: all it can do is check out a release tag and restart.
+  deploy-server:
+    if: github.ref_type == 'tag' && vars.SHIPGAME_DEPLOY_HOST != ''
+    needs: release
+    runs-on: ubuntu-latest
+    concurrency: deploy-server
+    steps:
+      - name: Deploy
+        env:
+          HOST: ${{ vars.SHIPGAME_DEPLOY_HOST }}
+          KEY: ${{ secrets.SHIPGAME_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SHIPGAME_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=yes -o BatchMode=yes "root@$HOST" "$GITHUB_REF_NAME"

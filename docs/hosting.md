@@ -62,6 +62,40 @@ docker compose up -d --build
 The old container gets SIGTERM, finishes its current tick, disconnects everyone cleanly, and exits. Any run in
 progress ends. Rebuild when nobody's mid-run.
 
+Once automatic updates are set up (below), the checkout sits on a release tag rather than `main`, so update by hand
+with `shipgame-deploy vX.Y.Z` instead of `git pull`.
+
+### Automatic updates on release
+
+The release workflow can update the server whenever a `v*` tag is pushed, right after the GitHub release is
+published, so new client builds and the server always move together. It logs in with a deploy key that the server
+pins to [`scripts/deploy-server.sh`](../scripts/deploy-server.sh) (an SSH forced command), so the key can only check
+out a release tag and restart the server, never open a shell. One-time setup:
+
+1. **On the server**, install the script outside the checkout:
+   ```sh
+   install -m 755 /opt/ship-game/scripts/deploy-server.sh /usr/local/bin/shipgame-deploy
+   ```
+2. **On your machine**, make a key just for deploys, and record the server's host key:
+   ```sh
+   ssh-keygen -t ed25519 -N "" -C shipgame-deploy -f shipgame-deploy
+   ssh-keyscan -t ed25519 <server-ip> > shipgame-known-hosts
+   ```
+3. **Authorize it on the server**, pinned to the script. Add this line to `/root/.ssh/authorized_keys`:
+   ```
+   command="/usr/local/bin/shipgame-deploy",restrict <contents of shipgame-deploy.pub>
+   ```
+4. **Give GitHub the key and host** (repository settings, or the `gh` CLI):
+   ```sh
+   gh secret set SHIPGAME_DEPLOY_KEY < shipgame-deploy
+   gh secret set SHIPGAME_DEPLOY_KNOWN_HOSTS < shipgame-known-hosts
+   gh variable set SHIPGAME_DEPLOY_HOST --body <server-ip>
+   ```
+   Then delete the local copies of the key.
+
+Until `SHIPGAME_DEPLOY_HOST` is set, the deploy job is skipped. A deploy ends any run in progress, so tag releases
+when nobody's playing. To update to a tag by hand: `shipgame-deploy v0.3.0` on the server.
+
 ### Without Compose
 
 ```sh
