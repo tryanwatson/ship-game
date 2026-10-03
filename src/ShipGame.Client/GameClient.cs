@@ -66,6 +66,8 @@ public sealed class GameClient : Game
     private MapView _mapView = null!;
     private MainMenu _menu = null!;
     private WeaponPicker _weaponPicker = null!;
+    private GameMenu _gameMenu = null!;
+    private WaveForecast _waveForecast = null!;
     private bool _mapOpen;
 
     // Solo: choosing the starting weapon, before the run starts (online, the lobby does this).
@@ -226,6 +228,7 @@ public sealed class GameClient : Game
         _lettingGo = false;
         _anchorHeldSeconds = 0;
         _ignoreRightDrag = false;
+        _gameMenu?.Close();
     }
 
     protected override void LoadContent()
@@ -242,6 +245,8 @@ public sealed class GameClient : Game
         _mapView = new MapView(_primitives);
         _menu = new MainMenu(_primitives);
         _weaponPicker = new WeaponPicker(_primitives);
+        _gameMenu = new GameMenu(_primitives);
+        _waveForecast = new WaveForecast(_primitives);
     }
 
     protected override void UnloadContent()
@@ -263,18 +268,53 @@ public sealed class GameClient : Game
             return;
         }
 
-        if (IsActive && _input.WasKeyPressed(Keys.Escape))
-        {
-            OpenMenu();
-            base.Update(gameTime);
-            return;
-        }
-
         // Refused or dropped: back to the menu with the reason, on the join page so trying again is one key.
         if (Online is { Connection.Status: ConnectionStatus.Disconnected } dropped)
         {
             var wasHosting = _hostedServer is not null;
             OpenMenu(dropped.Connection.DisconnectReason, onJoinPage: !wasHosting);
+            base.Update(gameTime);
+            return;
+        }
+
+        // Esc: the game menu (resume or leave). Still connecting, or choosing a weapon before a solo run, there's
+        // nothing to leave yet, so it goes straight back to the title menu.
+        var menuJustOpened = false;
+        if (IsActive && _input.WasKeyPressed(Keys.Escape) && !_gameMenu.IsOpen)
+        {
+            if (_pickingSoloWeapon || Online is { Connection.Status: ConnectionStatus.Connecting })
+            {
+                OpenMenu();
+                base.Update(gameTime);
+                return;
+            }
+            _gameMenu.Open();
+            menuJustOpened = true;
+            _aimKeyDown = null;
+            ReleaseAnchorKey();
+        }
+
+        // With the game menu up, nothing reaches the game. Solo it's paused; online it carries on underneath. A
+        // choice takes effect from the next frame, so the Enter or click that resumes doesn't also act on the game.
+        if (_gameMenu.IsOpen)
+        {
+            if (IsActive && !menuJustOpened)
+            {
+                switch (_gameMenu.Update(_input, Hud, GameMenuNote))
+                {
+                    case GameMenuAction.Resume:
+                        _gameMenu.Close();
+                        break;
+                    case GameMenuAction.Leave:
+                        OpenMenu();
+                        base.Update(gameTime);
+                        return;
+                }
+            }
+            UpdateRudder();
+            if (Online is not null)
+                StepSession(dt);
+            UpdateTitle(dt);
             base.Update(gameTime);
             return;
         }
@@ -320,11 +360,7 @@ public sealed class GameClient : Game
             HandleOrders(dt);
         }
         UpdateRudder();
-
-        _worldRenderer.CaptureEffects(_session.World, _session.InterpolationAlpha);
-        _worldRenderer.UpdateEffects((float)dt);
-        _session.Update(dt);
-        _worldRenderer.ProcessEffects(_session.World, _session.TakeEvents());
+        StepSession(dt);
 
         if (IsActive)
             HandleCamera((float)dt);
@@ -332,6 +368,21 @@ public sealed class GameClient : Game
         UpdateTitle(dt);
         base.Update(gameTime);
     }
+
+    /// <summary>Advances the game (and its effects) by a frame.</summary>
+    private void StepSession(double dt)
+    {
+        _worldRenderer.CaptureEffects(_session.World, _session.InterpolationAlpha);
+        _worldRenderer.UpdateEffects((float)dt);
+        _session.Update(dt);
+        _worldRenderer.ProcessEffects(_session.World, _session.TakeEvents());
+    }
+
+    /// <summary>The game menu's title: solo pauses, online doesn't.</summary>
+    private string GameMenuTitle => Online is null ? "PAUSED" : "MENU";
+
+    /// <summary>Under the game menu's title: a reminder, mid-run online, that the game doesn't stop.</summary>
+    private string? GameMenuNote => Online is { Connection.Status: ConnectionStatus.InRun } ? "THE GAME CARRIES ON" : null;
 
     private void UpdateMenu(double dt)
     {
@@ -400,6 +451,9 @@ public sealed class GameClient : Game
         _compass.Draw(_session.World.Wind, Hud);
         var gold = _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
         _hudCounters.Draw(gold, _session.World.Waves?.Wave ?? 0, Hud);
+        // What's coming, while there's a run to come to (not in the lobby or after a wipe).
+        if (_session.World.Waves is { } waves && !_session.World.IsRunOver && Online is null or { Connection.Status: ConnectionStatus.InRun })
+            _waveForecast.Draw(waves.Status, Hud);
         // Choosing a contract charts each route beside the panel; otherwise M shows the full map.
         if (_shipyardPanel.CurrentRoutes(_session.World, localShip, _input, Hud) is { } routes)
             _mapView.Draw(_session.World, LocalPlayerId, Hud, ShipyardPanel.RouteMapArea(Hud), routes);
@@ -407,6 +461,8 @@ public sealed class GameClient : Game
             _mapView.Draw(_session.World, LocalPlayerId, Hud);
         _shipyardPanel.Draw(_session.World, localShip, _input, Hud);
         DrawStatusBanner();
+        if (_gameMenu.IsOpen)
+            _gameMenu.Draw(Hud, GameMenuTitle, GameMenuNote);
         base.Draw(gameTime);
     }
 
@@ -484,7 +540,7 @@ public sealed class GameClient : Game
     private void UpdateRudder()
     {
         var rudder = 0;
-        if (IsActive)
+        if (IsActive && !_gameMenu.IsOpen)
         {
             if (_input.IsKeyDown(Keys.A)) rudder -= 1;
             if (_input.IsKeyDown(Keys.D)) rudder += 1;

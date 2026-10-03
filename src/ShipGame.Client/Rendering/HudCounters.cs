@@ -25,6 +25,9 @@ public sealed class HudCounters
     private static readonly Color Flag = new(210, 70, 60);
     private static readonly Color WaveDigits = new(235, 235, 240);
 
+    /// <summary>Where the counters end (HUD units from the top), for readouts stacked beneath them.</summary>
+    public static float Bottom => FirstTop + DigitSize.Y + 2 * PanelPadding + RowGap + DigitSize.Y + PanelPadding;
+
     private readonly PrimitiveBatch _batch;
 
     public HudCounters(PrimitiveBatch batch)

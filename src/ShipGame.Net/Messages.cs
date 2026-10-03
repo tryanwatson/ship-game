@@ -1,4 +1,5 @@
 using System.Numerics;
+using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Stats;
 
@@ -61,8 +62,7 @@ public sealed class Snapshot
 {
     public long Tick;
     public Vector2 Wind;
-    public int Wave;
-    public int TicksUntilNextWave;
+    public WaveStatus Waves;
     public bool RunOver;
     public List<PlayerSnapshot> Players = new();
     public List<(int IslandId, int Ticks)> IslandCooldowns = new();
@@ -89,8 +89,7 @@ public sealed class Snapshot
         {
             Tick = world.Tick,
             Wind = world.Wind,
-            Wave = world.Waves?.Wave ?? 0,
-            TicksUntilNextWave = world.Waves?.TicksUntilNextWave ?? 0,
+            Waves = world.Waves?.Status ?? default,
             RunOver = world.IsRunOver,
         };
         foreach (var player in world.Players.Values)

@@ -161,6 +161,8 @@ public class WireTests
         world.AddGold(1, 25);
         var snapshot = Snapshot.Capture(world);
         snapshot.CommandAcks.Add((1, 4_000_000_000u));
+        snapshot.Waves = new ShipGame.Shared.Progression.WaveStatus(
+            Wave: 3, TicksUntilNextWave: 150, WavePiratesLeft: 2, NextWaveSize: 5, Raid: 4, TicksUntilNextRaid: 1234, NextRaidSize: 5);
 
         var (header, ships) = RoundTrip(snapshot, out var chunks);
         Assert.True(chunks > 1);
@@ -177,6 +179,7 @@ public class WireTests
         Assert.Equal(17, ships[0].AnchorDropTicks);
         Assert.Equal(4_000_000_000u, header.AckFor(1));
         Assert.Equal(0u, header.AckFor(2));
+        Assert.Equal(snapshot.Waves, header.Waves); // the HUD's wave and raid forecast
     }
 
     [Fact]

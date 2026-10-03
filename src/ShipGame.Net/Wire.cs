@@ -2,6 +2,7 @@ using System.Numerics;
 using LiteNetLib.Utils;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Stats;
 using ShipGame.Shared.Trading;
@@ -449,8 +450,14 @@ public static class Wire
     {
         var header = new NetDataWriter();
         header.Put(snapshot.Wind);
-        header.Put(snapshot.Wave);
-        header.Put(snapshot.TicksUntilNextWave);
+        var waves = snapshot.Waves;
+        header.Put(waves.Wave);
+        header.Put(waves.TicksUntilNextWave);
+        header.Put((ushort)Math.Clamp(waves.WavePiratesLeft, 0, ushort.MaxValue));
+        header.Put((ushort)Math.Clamp(waves.NextWaveSize, 0, ushort.MaxValue));
+        header.Put(waves.Raid);
+        header.Put(waves.TicksUntilNextRaid);
+        header.Put((ushort)Math.Clamp(waves.NextRaidSize, 0, ushort.MaxValue));
         header.Put(snapshot.RunOver);
         header.Put((byte)snapshot.Players.Count);
         foreach (var p in snapshot.Players)
@@ -521,8 +528,9 @@ public static class Wire
         if (index == 0)
         {
             snapshot.Wind = r.GetVector2();
-            snapshot.Wave = r.GetInt();
-            snapshot.TicksUntilNextWave = r.GetInt();
+            snapshot.Waves = new WaveStatus(
+                Wave: r.GetInt(), TicksUntilNextWave: r.GetInt(), WavePiratesLeft: r.GetUShort(), NextWaveSize: r.GetUShort(),
+                Raid: r.GetInt(), TicksUntilNextRaid: r.GetInt(), NextRaidSize: r.GetUShort());
             snapshot.RunOver = r.GetBool();
             var players = r.GetByte();
             for (var i = 0; i < players; i++)

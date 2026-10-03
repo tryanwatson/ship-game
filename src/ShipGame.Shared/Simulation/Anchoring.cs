@@ -19,10 +19,10 @@ public enum AnchorState
 /// </summary>
 public static class Anchoring
 {
-    public const float DropSeconds = 2f;
+    public const float DropSeconds = 1f;
     public static readonly int DropTicks = (int)(DropSeconds * SimConstants.TickRate);
 
-    public const float RaiseSeconds = 10f;
+    public const float RaiseSeconds = 3f;
     public static readonly int RaiseTicks = (int)(RaiseSeconds * SimConstants.TickRate);
 
     /// <summary>The anchor key went down: start letting go if the anchor's up, start hauling it in if it's down.</summary>

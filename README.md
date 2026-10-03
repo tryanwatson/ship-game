@@ -37,7 +37,7 @@ progress.
 | Y / C / arrow keys | Toggle camera lock / center on ship / pan |
 | 1-3 / click (lobby, new run) | Choose your starting weapon: broadside, long gun, or mortar. Buy the others, and each weapon's skills, at shipyards |
 | Enter | Ready up (lobby), new run (solo, after sinking) |
-| Esc | Back to the menu |
+| Esc | Game menu: resume or leave the game (solo pauses; online carries on) |
 
 ## Developing
 

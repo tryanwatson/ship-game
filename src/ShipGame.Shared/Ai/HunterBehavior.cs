@@ -21,6 +21,9 @@ public enum HunterState
 /// chases at full sail and, once in range, steers to hold the target abeam at a comfortable distance and fires
 /// whichever broadside bears. Steers by rudder, like a player on WASD. Leashed: if dragged too far from home, or
 /// the target gets away, it sails home and resumes guarding.
+///
+/// A <see cref="Relentless"/> hunter (a raider) has no home to guard: it hunts from the moment it spawns, always
+/// going after the nearest enemy wherever it is, and never gives up the chase.
 /// </summary>
 public sealed class HunterBehavior : INpcBehavior
 {
@@ -67,10 +70,16 @@ public sealed class HunterBehavior : INpcBehavior
     // Close enough to home to drop anchor.
     private const float HomeArrivalDistance = 2f;
 
-    public HunterBehavior(Vector2 home)
+    /// <param name="relentless">A raider: always chasing the nearest enemy, with no leash and no post to return to.</param>
+    public HunterBehavior(Vector2 home, bool relentless = false)
     {
         Home = home;
+        Relentless = relentless;
+        if (relentless)
+            State = HunterState.Hunting;
     }
+
+    public bool Relentless { get; }
 
     /// <summary>Where the pirate guards from and returns to when leashed: its spawn point.</summary>
     public Vector2 Home { get; }
@@ -165,6 +174,18 @@ public sealed class HunterBehavior : INpcBehavior
 
     private void Hunt(World world, Ship ship)
     {
+        // A raider goes for whoever is nearest right now, however far; with nobody afloat it waits, sails furled.
+        if (Relentless)
+        {
+            _target = FindNearestEnemy(world, ship, float.PositiveInfinity);
+            if (_target is null)
+            {
+                ship.Throttle = 0;
+                ship.Rudder = 0;
+                return;
+            }
+        }
+
         // Lost the target (sunk): take on another one in range, or go home.
         if (_target is null || _target.IsSunk)
         {
@@ -177,8 +198,9 @@ public sealed class HunterBehavior : INpcBehavior
         }
 
         var target = _target;
-        if (Vector2.Distance(ship.Position, Home) > LeashRange
-            || Vector2.Distance(ship.Position, target.Position) > DisengageRange)
+        if (!Relentless
+            && (Vector2.Distance(ship.Position, Home) > LeashRange
+                || Vector2.Distance(ship.Position, target.Position) > DisengageRange))
         {
             StartReturning(ship);
             return;

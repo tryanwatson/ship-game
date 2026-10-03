@@ -6,9 +6,22 @@ using ShipGame.Shared.Stats;
 
 namespace ShipGame.Shared.Progression;
 
+/// <summary>What's coming, for the HUD: computed by the server's director each tick and mirrored by clients.</summary>
+/// <param name="Wave">The wave in progress (or most recently cleared); 0 before the first.</param>
+/// <param name="TicksUntilNextWave">Countdown to the next wave; it only runs once <paramref name="WavePiratesLeft"/> is 0.</param>
+/// <param name="WavePiratesLeft">The current wave's pirates still afloat (raiders don't count).</param>
+/// <param name="NextWaveSize">Pirates in the next wave.</param>
+/// <param name="Raid">Raids so far.</param>
+/// <param name="TicksUntilNextRaid">Countdown to the next raid; always runs.</param>
+/// <param name="NextRaidSize">Raiders the next raid will bring (fewer if the raider cap is near).</param>
+public readonly record struct WaveStatus(
+    int Wave, int TicksUntilNextWave, int WavePiratesLeft, int NextWaveSize, int Raid, int TicksUntilNextRaid, int NextRaidSize);
+
 /// <summary>
-/// Sends pirates in waves: once a wave is sunk, a short breather, then a bigger, tougher one. Runs inside
-/// <see cref="World.Step"/> and draws from its own seeded RNG, so a run is reproducible from its seed.
+/// Sends pirates in waves: once a wave is sunk, a short breather, then a bigger, tougher one. Separately, every
+/// <see cref="RaidIntervalSeconds"/> a raid arrives whatever else is going on: raiders that hunt the nearest player
+/// from the moment they appear, one more of them each time. Runs inside <see cref="World.Step"/> and draws from its
+/// own seeded RNG, so a run is reproducible from its seed.
 /// </summary>
 public sealed class WaveDirector
 {
@@ -31,6 +44,17 @@ public sealed class WaveDirector
 
     public const string ScalingSource = "wave-scaling";
 
+    /// <summary>A raid arrives this often, starting this long into the run.</summary>
+    public const float RaidIntervalSeconds = 60f;
+    public static readonly int RaidIntervalTicks = (int)(RaidIntervalSeconds * SimConstants.TickRate);
+
+    /// <summary>Raiders in the first raid (before scaling for the crew); each raid after brings <see cref="RaidGrowth"/> more.</summary>
+    public const int FirstRaidSize = 1;
+    public const int RaidGrowth = 1;
+
+    /// <summary>No raid spawns beyond this many raiders afloat at once, to protect the server and bandwidth.</summary>
+    public const int MaxRaidersAfloat = 40;
+
     // Spawn placement: on a ring around a random player, just beyond the edge of their screen (so the wave
     // sails in rather than popping into view, and doesn't take half a minute to arrive on a big map), kept
     // inside the playable area, clear of every player, and spread out.
@@ -48,7 +72,39 @@ public sealed class WaveDirector
     {
         _rng = new Random(seed);
         TicksUntilNextWave = (int)(FirstWaveDelaySeconds * SimConstants.TickRate);
+        TicksUntilNextRaid = RaidIntervalTicks;
+        NextWaveSize = WaveSize(1);
+        NextRaidSize = RaidSize(1);
     }
+
+    /// <summary>The current wave's pirates still afloat (raiders don't count). Kept current by <see cref="Update"/>.</summary>
+    public int WavePiratesLeft { get; private set; }
+
+    /// <summary>Pirates in the next wave. Kept current by <see cref="Update"/>.</summary>
+    public int NextWaveSize { get; private set; }
+
+    /// <summary>Raiders the next raid will bring. Kept current by <see cref="Update"/>.</summary>
+    public int NextRaidSize { get; private set; }
+
+    /// <summary>Everything the HUD shows about what's coming.</summary>
+    public WaveStatus Status =>
+        new(Wave, TicksUntilNextWave, WavePiratesLeft, NextWaveSize, Raid, TicksUntilNextRaid, NextRaidSize);
+
+    /// <summary>Raids so far.</summary>
+    public int Raid { get; private set; }
+
+    /// <summary>Countdown to the next raid. Always runs.</summary>
+    public int TicksUntilNextRaid { get; private set; }
+
+    /// <summary>Raiders in raid number <paramref name="raid"/> for a run of <paramref name="players"/> players.</summary>
+    public static int RaidSize(int raid, int players = 1)
+    {
+        var scale = 1f + SizePerExtraPlayer * Math.Max(0, players - 1);
+        return Math.Min((int)MathF.Ceiling((FirstRaidSize + RaidGrowth * (raid - 1)) * scale), AbsoluteMaxWaveSize);
+    }
+
+    /// <summary>A ship sent by a raid rather than a wave.</summary>
+    public static bool IsRaider(Ship ship) => ship.Behavior is HunterBehavior { Relentless: true };
 
     /// <summary>The wave in progress (or most recently cleared); 0 before the first arrives.</summary>
     public int Wave { get; private set; }
@@ -58,10 +114,15 @@ public sealed class WaveDirector
 
     /// <summary>Pirates in <paramref name="wave"/> for a run of <paramref name="players"/> players.</summary>
     /// <summary>Sets the counters directly, for a client mirroring the server (which runs the real director).</summary>
-    public void Restore(int wave, int ticksUntilNextWave)
+    public void Restore(WaveStatus status)
     {
-        Wave = wave;
-        TicksUntilNextWave = ticksUntilNextWave;
+        Wave = status.Wave;
+        TicksUntilNextWave = status.TicksUntilNextWave;
+        WavePiratesLeft = status.WavePiratesLeft;
+        NextWaveSize = status.NextWaveSize;
+        Raid = status.Raid;
+        TicksUntilNextRaid = status.TicksUntilNextRaid;
+        NextRaidSize = status.NextRaidSize;
     }
 
     public static int WaveSize(int wave, int players = 1)
@@ -73,7 +134,24 @@ public sealed class WaveDirector
 
     public void Update(World world)
     {
-        if (world.IsRunOver || AnyPiratesAfloat(world))
+        Advance(world);
+        RefreshForecast(world);
+    }
+
+    private void Advance(World world)
+    {
+        if (world.IsRunOver)
+            return;
+
+        if (--TicksUntilNextRaid <= 0)
+        {
+            Raid++;
+            SpawnRaid(world, Raid);
+            TicksUntilNextRaid = RaidIntervalTicks;
+        }
+
+        // Raiders don't hold up the waves: the next wave comes once the last one's guards are sunk.
+        if (AnyWavePiratesAfloat(world))
             return;
 
         if (TicksUntilNextWave > 0)
@@ -104,15 +182,64 @@ public sealed class WaveDirector
             pirate.Behavior = new HunterBehavior(home: position);
             pirate.Stance = NpcStance.Guarding;
             pirate.IsAnchored = true; // guarding: rides at anchor until something comes in range
-
-            var scale = wave - 1;
-            if (scale > 0)
-            {
-                pirate.AddModifier(new StatModifier(StatId.MaxHealth, ModifierKind.Percent, HealthPerWave * scale, ScalingSource));
-                pirate.AddModifier(new StatModifier(StatId.CooldownSpeed, ModifierKind.Percent, CooldownSpeedPerWave * scale, ScalingSource));
-                pirate.AddModifier(new StatModifier(StatId.MaxSpeed, ModifierKind.Percent, SpeedPerWave * scale, ScalingSource));
-            }
+            Toughen(pirate, wave);
         }
+    }
+
+    /// <summary>Recounts what the HUD shows: the wave's pirates left, and the size of the next wave and raid.</summary>
+    private void RefreshForecast(World world)
+    {
+        var guards = 0;
+        var raiders = 0;
+        foreach (var ship in world.Ships)
+        {
+            if (ship.Team != Team.Pirates || ship.IsSunk)
+                continue;
+            if (IsRaider(ship))
+                raiders++;
+            else
+                guards++;
+        }
+        var players = world.Players.Count;
+        WavePiratesLeft = guards;
+        NextWaveSize = WaveSize(Wave + 1, players);
+        NextRaidSize = Math.Min(RaidSize(Raid + 1, players), Math.Max(0, MaxRaidersAfloat - raiders));
+    }
+
+    /// <summary>Raiders: under full sail toward the nearest player from the start, toughened like the current wave.</summary>
+    private void SpawnRaid(World world, int raid)
+    {
+        var room = MaxRaidersAfloat - world.Ships.Count(IsRaider);
+        var count = Math.Min(RaidSize(raid, world.Players.Count), room);
+        var placed = new List<Vector2>();
+        for (var i = 0; i < count; i++)
+        {
+            var position = PickSpawnPoint(world, placed);
+            placed.Add(position);
+            var nearest = world.Ships.Where(s => s.Team == Team.Players)
+                .OrderBy(s => Vector2.DistanceSquared(s.Position, position))
+                .Select(s => s.Position)
+                .DefaultIfEmpty(world.WorldSize / 2f)
+                .First();
+            var toTarget = nearest - position;
+
+            var raider = world.SpawnShip(position, MathF.Atan2(toTarget.Y, toTarget.X), ShipStats.Sloop, abilities: Loadouts.Pirate);
+            raider.Behavior = new HunterBehavior(home: position, relentless: true);
+            raider.Stance = NpcStance.Hunting;
+            raider.Throttle = ShipMovement.ThrottleLevels;
+            Toughen(raider, Math.Max(1, Wave));
+        }
+    }
+
+    /// <summary>Pirates of later waves are tougher, faster, and reload quicker.</summary>
+    private static void Toughen(Ship pirate, int wave)
+    {
+        var scale = wave - 1;
+        if (scale <= 0)
+            return;
+        pirate.AddModifier(new StatModifier(StatId.MaxHealth, ModifierKind.Percent, HealthPerWave * scale, ScalingSource));
+        pirate.AddModifier(new StatModifier(StatId.CooldownSpeed, ModifierKind.Percent, CooldownSpeedPerWave * scale, ScalingSource));
+        pirate.AddModifier(new StatModifier(StatId.MaxSpeed, ModifierKind.Percent, SpeedPerWave * scale, ScalingSource));
     }
 
     /// <summary>
@@ -163,11 +290,11 @@ public sealed class WaveDirector
         return nearest;
     }
 
-    private static bool AnyPiratesAfloat(World world)
+    private static bool AnyWavePiratesAfloat(World world)
     {
         foreach (var ship in world.Ships)
         {
-            if (ship.Team == Team.Pirates && !ship.IsSunk)
+            if (ship.Team == Team.Pirates && !ship.IsSunk && !IsRaider(ship))
                 return true;
         }
         return false;

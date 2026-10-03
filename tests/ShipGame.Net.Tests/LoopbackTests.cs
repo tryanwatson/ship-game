@@ -4,6 +4,7 @@ using ShipGame.Net;
 using ShipGame.Server;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Upgrades;
 
@@ -447,6 +448,12 @@ public sealed class LoopbackTests : IDisposable
         PumpUntil(() => a.Replica.World.Ships.Any(s => s.Team == Team.Pirates), "the first wave to show up", timeoutSeconds: 15);
 
         Assert.Equal(1, a.Replica.World.Waves!.Wave);
+        // The forecast comes along: this wave's pirates left, the next wave's size, and the countdown to the first raid.
+        PumpUntil(() => a.Replica.World.Waves!.WavePiratesLeft == _server.World!.Waves!.WavePiratesLeft, "the forecast to catch up");
+        var forecast = a.Replica.World.Waves!.Status;
+        Assert.True(forecast.WavePiratesLeft > 0);
+        Assert.Equal(_server.World!.Waves!.NextWaveSize, forecast.NextWaveSize);
+        Assert.InRange(forecast.TicksUntilNextRaid, 1, WaveDirector.RaidIntervalTicks);
         Assert.All(a.Replica.World.Ships.Where(s => s.Team == Team.Pirates), p => Assert.Equal(NpcStance.Guarding, p.Stance));
     }
 

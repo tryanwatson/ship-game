@@ -353,7 +353,7 @@ public sealed class ClientReplica
     private void ApplyHeader(Snapshot snapshot)
     {
         World.Wind = snapshot.Wind;
-        World.Waves?.Restore(snapshot.Wave, snapshot.TicksUntilNextWave);
+        World.Waves?.Restore(snapshot.Waves);
         if (snapshot.RunOver)
             World.EndRun();
 
