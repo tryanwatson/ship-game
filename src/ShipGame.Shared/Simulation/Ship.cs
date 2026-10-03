@@ -59,6 +59,16 @@ public sealed class Ship
         RecalculateStats();
     }
 
+    /// <summary>Replaces every modifier at once, for a client mirroring the server's ship.</summary>
+    public void ReplaceModifiers(IEnumerable<StatModifier> modifiers)
+    {
+        foreach (var source in _modifiers.All.Select(m => m.Source).Distinct().ToList())
+            _modifiers.RemoveSource(source);
+        foreach (var modifier in modifiers)
+            _modifiers.Add(modifier);
+        RecalculateStats();
+    }
+
     /// <summary>Number of modifiers from <paramref name="source"/>, e.g. levels bought of an upgrade.</summary>
     public int ModifierCount(string source) => _modifiers.CountSource(source);
 

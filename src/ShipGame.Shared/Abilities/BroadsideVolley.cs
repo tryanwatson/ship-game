@@ -31,6 +31,8 @@ public sealed class BroadsideVolley : Ability
 
     public BroadsideSide Side { get; }
 
+    public override string Id => Side == BroadsideSide.Port ? "volley-port" : "volley-starboard";
+
     public override string Name => Side == BroadsideSide.Port ? "Port Volley" : "Starboard Volley";
 
     public override int CooldownTicks => (int)(2.5f * SimConstants.TickRate);

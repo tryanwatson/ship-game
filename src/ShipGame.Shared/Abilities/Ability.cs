@@ -18,6 +18,9 @@ public enum AbilitySlot
 /// </summary>
 public abstract class Ability
 {
+    /// <summary>Stable identifier, used to name the ability over the network (see <see cref="AbilityRegistry"/>).</summary>
+    public abstract string Id { get; }
+
     public abstract string Name { get; }
 
     public abstract int CooldownTicks { get; }
@@ -55,6 +58,13 @@ public sealed class AbilityState
         var duration = Definition.CooldownTicks / MathF.Max(cooldownSpeed, 0.01f);
         CooldownDurationTicks = Math.Max(1, (int)MathF.Round(duration));
         CooldownRemainingTicks = CooldownDurationTicks;
+    }
+
+    /// <summary>Sets cooldown state directly, for a client mirroring the server's ship.</summary>
+    public void Restore(int remainingTicks, int durationTicks)
+    {
+        CooldownRemainingTicks = Math.Max(0, remainingTicks);
+        CooldownDurationTicks = Math.Max(0, durationTicks);
     }
 
     public void TickCooldown()

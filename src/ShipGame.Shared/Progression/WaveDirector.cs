@@ -57,6 +57,13 @@ public sealed class WaveDirector
     public int TicksUntilNextWave { get; private set; }
 
     /// <summary>Pirates in <paramref name="wave"/> for a run of <paramref name="players"/> players.</summary>
+    /// <summary>Sets the counters directly, for a client mirroring the server (which runs the real director).</summary>
+    public void Restore(int wave, int ticksUntilNextWave)
+    {
+        Wave = wave;
+        TicksUntilNextWave = ticksUntilNextWave;
+    }
+
     public static int WaveSize(int wave, int players = 1)
     {
         var scale = 1f + SizePerExtraPlayer * Math.Max(0, players - 1);

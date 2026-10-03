@@ -127,9 +127,13 @@ public sealed class World
         float heading,
         ShipStats stats,
         int? ownerPlayerId = null,
-        IReadOnlyList<Ability?>? abilities = null)
+        IReadOnlyList<Ability?>? abilities = null,
+        int? id = null)
     {
-        var ship = new Ship(_nextEntityId++, ownerPlayerId, stats, abilities)
+        // Explicit ids are for clients mirroring the server, which hands out the real ones.
+        var shipId = id ?? _nextEntityId++;
+        _nextEntityId = Math.Max(_nextEntityId, shipId + 1);
+        var ship = new Ship(shipId, ownerPlayerId, stats, abilities)
         {
             Position = position,
             Heading = heading,
@@ -142,6 +146,41 @@ public sealed class World
         Emit(new ShipSpawned(Tick, ship.Id));
         return ship;
     }
+
+    public Ship? FindShip(int id) => _ships.Find(s => s.Id == id);
+
+    /// <summary>Removes a ship outright (no sinking, no rewards): for disconnects and for mirroring the server.</summary>
+    public bool RemoveShip(int id) => _ships.RemoveAll(s => s.Id == id) > 0;
+
+    /// <summary>Adds an already-built projectile, for a client flying the server's shots.</summary>
+    public void AddProjectile(Projectile projectile) => _projectiles.Add(projectile);
+
+    public bool RemoveProjectile(int id) => _projectiles.RemoveAll(p => p.Id == id) > 0;
+
+    /// <summary>Takes a player out of the run (they left): their ship goes and they stop counting toward wave size.</summary>
+    public void RemovePlayer(int playerId)
+    {
+        if (GetPlayerShip(playerId) is { } ship)
+        {
+            RemoveShip(ship.Id);
+            Emit(new ShipSunk(Tick, ship.Id, null));
+        }
+        _players.Remove(playerId);
+    }
+
+    /// <summary>Sets an island's plunder cooldown directly (0 clears it), for mirroring the server.</summary>
+    public void SetPlunderCooldown(int islandId, int ticks)
+    {
+        if (ticks > 0)
+            _plunderCooldowns[islandId] = ticks;
+        else
+            _plunderCooldowns.Remove(islandId);
+    }
+
+    public IReadOnlyDictionary<int, int> PlunderCooldowns => _plunderCooldowns;
+
+    /// <summary>Sets the tick counter, for a client mirroring the server's clock.</summary>
+    public void SetTick(long tick) => Tick = tick;
 
     public Projectile SpawnProjectile(Ship owner, Vector2 position, Vector2 velocity, float damage, int lifetimeTicks)
     {

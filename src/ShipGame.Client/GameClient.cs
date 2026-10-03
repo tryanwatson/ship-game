@@ -6,6 +6,7 @@ using Microsoft.Xna.Framework.Input;
 using ShipGame.Client.Input;
 using ShipGame.Client.Rendering;
 using ShipGame.Client.Session;
+using ShipGame.Net;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Maps;
@@ -18,7 +19,14 @@ namespace ShipGame.Client;
 
 public sealed class GameClient : Game
 {
-    private const int LocalPlayerId = 1;
+    // Player id in single-player; online, the server assigns one.
+    private const int SoloPlayerId = 1;
+
+    private readonly string? _connectHost;
+    private readonly int _connectPort;
+    private readonly bool _hosting;
+    private HostedServer? _hostedServer;
+    private string? _hostError;
 
     private const float CameraPanSpeed = 900f;
 
@@ -56,8 +64,13 @@ public sealed class GameClient : Game
     private double _titleTimer;
     private int _framesSinceTitle;
 
-    public GameClient()
+    /// <param name="connectHost">Server to join; null for single-player.</param>
+    /// <param name="host">Run a server in this process on <paramref name="connectPort"/> and join it.</param>
+    public GameClient(string? connectHost = null, int connectPort = Protocol.DefaultPort, bool host = false)
     {
+        _connectHost = connectHost;
+        _connectPort = connectPort;
+        _hosting = host;
         _graphics = new GraphicsDeviceManager(this)
         {
             PreferredBackBufferWidth = 1280,
@@ -70,10 +83,39 @@ public sealed class GameClient : Game
         Window.AllowUserResizing = true;
     }
 
+    private int LocalPlayerId => _session.LocalPlayerId;
+
+    private NetworkGameSession? Online => _session as NetworkGameSession;
+
     protected override void Initialize()
     {
-        StartRun();
+        if (_hosting)
+        {
+            try
+            {
+                _hostedServer = new HostedServer(_connectPort);
+            }
+            catch (InvalidOperationException)
+            {
+                _hostError = $"PORT {_connectPort} IS IN USE";
+            }
+        }
+
+        if (_hostError is not null)
+            _session = new LocalGameSession(EmptySea(), SoloPlayerId); // just the banner over open water: don't join anyone else's game
+        else if (_connectHost is not null)
+            _session = new NetworkGameSession(_connectHost, _connectPort);
+        else
+            StartRun();
         base.Initialize();
+    }
+
+    private static World EmptySea()
+    {
+        var world = new World(Archipelago.Size);
+        foreach (var island in Archipelago.CreateIslands())
+            world.AddIsland(island);
+        return world;
     }
 
     /// <summary>A fresh run: the player's ship at the center, pirates arriving in waves.</summary>
@@ -82,9 +124,9 @@ public sealed class GameClient : Game
         var world = new World(Archipelago.Size) { Waves = new WaveDirector(seed: Environment.TickCount) };
         foreach (var island in Archipelago.CreateIslands())
             world.AddIsland(island);
-        world.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, LocalPlayerId, Loadouts.Sloop);
+        world.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, SoloPlayerId, Loadouts.Sloop);
 
-        _session = new LocalGameSession(world, LocalPlayerId);
+        _session = new LocalGameSession(world, SoloPlayerId);
         _sentRudder = 0;
         _cameraLocked = true;
     }
@@ -104,6 +146,8 @@ public sealed class GameClient : Game
 
     protected override void UnloadContent()
     {
+        Online?.Dispose();
+        _hostedServer?.Dispose();
         _primitives.Dispose();
     }
 
@@ -115,9 +159,14 @@ public sealed class GameClient : Game
         if (_input.IsKeyDown(Keys.Escape))
             Exit();
 
-        // Everyone's sunk: the run is over. Enter starts a new one.
-        if (IsActive && _session.World.IsRunOver && _input.WasKeyPressed(Keys.Enter))
-            StartRun();
+        // Enter: online, ready up in the lobby; offline, start a new run once this one is over.
+        if (IsActive && _input.WasKeyPressed(Keys.Enter))
+        {
+            if (Online is { Connection.Status: ConnectionStatus.Lobby } online)
+                online.Connection.SetReady(!IsLocallyReady(online));
+            else if (Online is null && _session.World.IsRunOver)
+                StartRun();
+        }
 
         if (IsActive)
         {
@@ -228,9 +277,20 @@ public sealed class GameClient : Game
         _camera.Position += pan * (CameraPanSpeed / _camera.Zoom * dt);
     }
 
+    private bool IsLocallyReady(NetworkGameSession online) =>
+        online.Connection.Lobby?.Players.Any(p => p.PlayerId == online.LocalPlayerId && p.Ready) == true;
+
     private void DrawStatusBanner()
     {
         var world = _session.World;
+        if (_hostError is not null)
+        {
+            _statusBanner.Draw("COULD NOT HOST", _hostError, GraphicsDevice.Viewport);
+            return;
+        }
+        if (Online is { } online && DrawConnectionBanner(online))
+            return;
+
         if (world.IsRunOver)
         {
             var wave = world.Waves?.Wave ?? 0;
@@ -240,6 +300,32 @@ public sealed class GameClient : Game
         {
             var seconds = (int)Math.Ceiling(player.RespawnTicksRemaining / (double)SimConstants.TickRate);
             _statusBanner.Draw("SUNK", $"RESPAWNING IN {seconds}", GraphicsDevice.Viewport);
+        }
+    }
+
+    /// <summary>Online-only banners: connecting, refused or dropped, and the lobby. True if one was drawn.</summary>
+    private bool DrawConnectionBanner(NetworkGameSession online)
+    {
+        var connection = online.Connection;
+        switch (connection.Status)
+        {
+            case ConnectionStatus.Connecting:
+                _statusBanner.Draw("CONNECTING", $"{online.Host}:{online.Port}", GraphicsDevice.Viewport);
+                return true;
+            case ConnectionStatus.Disconnected:
+                _statusBanner.Draw("DISCONNECTED", connection.DisconnectReason ?? "", GraphicsDevice.Viewport);
+                return true;
+            case ConnectionStatus.Lobby:
+            {
+                var players = connection.Lobby?.Players ?? Array.Empty<LobbyPlayer>();
+                var ready = players.Count(p => p.Ready);
+                var prompt = IsLocallyReady(online) ? "READY - WAITING FOR THE CREW" : "PRESS ENTER WHEN READY";
+                var title = _session.World.IsRunOver ? $"RUN OVER - WAVE {_session.World.Waves?.Wave ?? 0}" : "LOBBY";
+                _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {prompt}", GraphicsDevice.Viewport);
+                return true;
+            }
+            default:
+                return false;
         }
     }
 
@@ -272,6 +358,11 @@ public sealed class GameClient : Game
             status += ship.PlunderIslandId is null ? " | at anchor" : " | at anchor, plundering";
         else if (ship?.Anchor == AnchorState.Raising)
             status += $" | weighing anchor {Math.Ceiling(ship.AnchorRaiseTicksRemaining / (double)SimConstants.TickRate):0}s";
+        if (Online is { } online)
+        {
+            var role = _hostedServer is not null ? $"hosting on {_hostedServer.Port}" : "online";
+            status = $"{role} as player {online.LocalPlayerId} ({online.Connection.RoundTripMs} ms) | {status}";
+        }
         Window.Title = $"ShipGame | {status} | speed {ship?.Speed:0.0} (sail {ship?.Throttle}/{ShipMovement.ThrottleLevels}) | {fps:0} fps";
         _titleTimer = 0;
         _framesSinceTitle = 0;

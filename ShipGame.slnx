@@ -1,9 +1,12 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/ShipGame.Client/ShipGame.Client.csproj" />
+    <Project Path="src/ShipGame.Net/ShipGame.Net.csproj" />
+    <Project Path="src/ShipGame.Server/ShipGame.Server.csproj" />
     <Project Path="src/ShipGame.Shared/ShipGame.Shared.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/ShipGame.Net.Tests/ShipGame.Net.Tests.csproj" />
     <Project Path="tests/ShipGame.Shared.Tests/ShipGame.Shared.Tests.csproj" />
   </Folder>
 </Solution>

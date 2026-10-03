@@ -29,5 +29,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ShipGame.Shared\ShipGame.Shared.csproj" />
+    <ProjectReference Include="..\ShipGame.Net\ShipGame.Net.csproj" />
+    <ProjectReference Include="..\ShipGame.Server\ShipGame.Server.csproj" />
   </ItemGroup>
 </Project>
