@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet tool restore
+      - run: dotnet test ShipGame.slnx
+
+  server-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t shipgame-server .
+      # The server should start, report its settings, and stop cleanly on SIGTERM.
+      - run: |
+          docker run -d --name shipgame -e SHIPGAME_FRIENDLY_FIRE=false shipgame-server
+          sleep 3
+          docker stop shipgame
+          docker logs shipgame
+          docker logs shipgame | grep -q "listening on UDP 7777"
+          docker logs shipgame | grep -q "Server stopped"
+          test "$(docker inspect -f '{{.State.ExitCode}}' shipgame)" = 0

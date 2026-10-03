@@ -1,0 +1,75 @@
+# Push a tag like v0.3.0 to build the client for each platform and attach the zips to a GitHub release.
+# Run it by hand (Actions > Release > Run workflow) to get the zips as workflow artifacts without a release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  client:
+    strategy:
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: osx-arm64
+            os: macos-latest
+          - rid: linux-x64
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet tool restore
+
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version=${GITHUB_REF_NAME#v}; else version=0.0.0-dev.$GITHUB_RUN_NUMBER; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Publish
+        run: >
+          dotnet publish src/ShipGame.Client -c Release -r ${{ matrix.rid }} --self-contained
+          -p:Version=$VERSION -p:DebugType=None -p:DebugSymbols=false -o publish/ShipGame
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: cd publish && 7z a -tzip "../ShipGame-$VERSION-${{ matrix.rid }}.zip" ShipGame
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          scripts/make-macos-app.sh publish/ShipGame publish/app "$VERSION"
+          ditto -c -k --keepParent publish/app/ShipGame.app "ShipGame-$VERSION-${{ matrix.rid }}.zip"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: cd publish && zip -qr "../ShipGame-$VERSION-${{ matrix.rid }}.zip" ShipGame
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ShipGame-${{ matrix.rid }}
+          path: ShipGame-*.zip
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: client
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
