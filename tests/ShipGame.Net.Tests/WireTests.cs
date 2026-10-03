@@ -125,34 +125,80 @@ public class WireTests
     public void Snapshots_SplitIntoChunks_AndReassemble()
     {
         var world = new World(new Vector2(192, 192));
-        world.SpawnShip(new Vector2(10, 10), 0.5f, ShipStats.Sloop, 1, Loadouts.Sloop);
+        var player = world.SpawnShip(new Vector2(10, 10), 0.5f, ShipStats.Sloop, 1, Loadouts.Sloop);
+        player.IsHoldingCourse = true;
+        player.WindDrift = new Vector2(0.25f, -0.5f);
+        player.AnchorDropTicksRemaining = 17;
         for (var i = 0; i < 30; i++)
             world.SpawnShip(new Vector2(20 + i, 40), 0f, ShipStats.Sloop);
         world.AddGold(1, 25);
         var snapshot = Snapshot.Capture(world);
+        snapshot.CommandAcks.Add((1, 4_000_000_000u));
 
-        var chunks = Wire.WriteSnapshotChunks(snapshot);
-        Assert.Equal(3, chunks.Count); // 31 ships, 12 per chunk
-        Assert.All(chunks, c => Assert.True(c.Length < 1100, $"chunk of {c.Length} bytes"));
-
-        var ships = new List<ShipState>();
-        Snapshot? header = null;
-        foreach (var chunk in chunks)
-        {
-            var reader = ReaderFor(chunk);
-            Assert.Equal(MessageType.SnapshotChunk, (MessageType)reader.GetByte());
-            var read = reader.GetSnapshotChunk();
-            Assert.Equal(snapshot.Tick, read.Tick);
-            if (read.Index == 0)
-                header = read.Partial;
-            ships.AddRange(read.Partial.Ships);
-        }
+        var (header, ships) = RoundTrip(snapshot, out var chunks);
+        Assert.True(chunks > 1);
 
         Assert.Equal(snapshot.Ships.Select(s => (s.ShipId, s.Position, s.Heading)), ships.Select(s => (s.ShipId, s.Position, s.Heading)));
         // Per-slot, per-channel cooldowns survive: the player's broadside has two decks, empty pirate slots none.
         Assert.Equal(2, ships[0].Cooldowns[0].Length);           // the player's broadside: one per deck
         Assert.Single(ships[0].Cooldowns[1]);                    // the player's long gun: one cooldown
         Assert.Empty(ships[1].Cooldowns[1]);                     // a pirate's empty slot 2
-        Assert.Equal(25, Assert.Single(header!.Players).Gold);
+        Assert.Equal(25, Assert.Single(header.Players).Gold);
+        // What prediction needs to carry on from the server's state exactly.
+        Assert.True(ships[0].IsHoldingCourse);
+        Assert.Equal(new Vector2(0.25f, -0.5f), ships[0].WindDrift);
+        Assert.Equal(17, ships[0].AnchorDropTicks);
+        Assert.Equal(4_000_000_000u, header.AckFor(1));
+        Assert.Equal(0u, header.AckFor(2));
+    }
+
+    [Fact]
+    public void Snapshots_FitLiteNetLibsUnreliableLimit_AtFullSize()
+    {
+        // The worst case: a full server (12 players, all acked), a full wave of pirates with players' loadouts,
+        // every island on cooldown, everyone moving somewhere and plundering.
+        var world = new World(new Vector2(192, 192));
+        foreach (var island in ShipGame.Shared.Maps.Archipelago.CreateIslands())
+        {
+            world.AddIsland(island);
+            world.StartPlunderCooldown(island, 1000);
+        }
+        for (var i = 0; i < 52; i++)
+        {
+            var ship = world.SpawnShip(new Vector2(10 + i, 10 + i), 0f, ShipStats.Sloop, i < 12 ? i + 1 : null, Loadouts.Sloop);
+            ship.MoveTarget = new Vector2(100, 100);
+            ship.PlunderIslandId = 1;
+        }
+        var snapshot = Snapshot.Capture(world);
+        for (var i = 1; i <= 12; i++)
+            snapshot.CommandAcks.Add((i, uint.MaxValue));
+
+        foreach (var chunk in Wire.WriteSnapshotChunks(snapshot))
+            Assert.InRange(chunk.Length, 1, Protocol.MaxSnapshotChunkBytes);
+
+        var (header, ships) = RoundTrip(snapshot, out _);
+        Assert.Equal(52, ships.Count);
+        Assert.Equal(12, header.CommandAcks.Count);
+    }
+
+    private static (Snapshot Header, List<ShipState> Ships) RoundTrip(Snapshot snapshot, out int chunkCount)
+    {
+        var chunks = Wire.WriteSnapshotChunks(snapshot);
+        chunkCount = chunks.Count;
+        var ships = new List<ShipState>();
+        Snapshot? header = null;
+        foreach (var chunk in chunks)
+        {
+            Assert.True(chunk.Length <= Protocol.MaxSnapshotChunkBytes, $"chunk of {chunk.Length} bytes");
+            var reader = ReaderFor(chunk);
+            Assert.Equal(MessageType.SnapshotChunk, (MessageType)reader.GetByte());
+            var read = reader.GetSnapshotChunk();
+            Assert.Equal(snapshot.Tick, read.Tick);
+            Assert.Equal(chunks.Count, read.Count);
+            if (read.Index == 0)
+                header = read.Partial;
+            ships.AddRange(read.Partial.Ships);
+        }
+        return (header!, ships);
     }
 }

@@ -339,43 +339,68 @@ public static class Wire
     // ---- Snapshots (chunked: each chunk is one unreliable packet) ---------------------------------------
 
     /// <summary>
-    /// Splits a snapshot into packets of at most <see cref="Protocol.ShipsPerSnapshotChunk"/> ships. The first
-    /// chunk also carries the world-level header (players, waves, island cooldowns).
+    /// Splits a snapshot into packets of at most <paramref name="maxBytes"/>, as many ships to a packet as fit. The
+    /// first chunk also carries the world-level header (players, command acks, waves, island cooldowns).
     /// </summary>
-    public static List<NetDataWriter> WriteSnapshotChunks(Snapshot snapshot)
+    public static List<NetDataWriter> WriteSnapshotChunks(Snapshot snapshot, int maxBytes = Protocol.MaxSnapshotChunkBytes)
     {
-        var chunkCount = Math.Max(1, (snapshot.Ships.Count + Protocol.ShipsPerSnapshotChunk - 1) / Protocol.ShipsPerSnapshotChunk);
-        var chunks = new List<NetDataWriter>(chunkCount);
-        for (var chunk = 0; chunk < chunkCount; chunk++)
+        var header = new NetDataWriter();
+        header.Put(snapshot.Wind);
+        header.Put(snapshot.Wave);
+        header.Put(snapshot.TicksUntilNextWave);
+        header.Put(snapshot.RunOver);
+        header.Put((byte)snapshot.Players.Count);
+        foreach (var p in snapshot.Players)
+        {
+            header.Put(p.PlayerId); header.Put(p.Gold); header.Put(p.Kills); header.Put(p.RespawnTicks);
+        }
+        header.Put((byte)snapshot.CommandAcks.Count);
+        foreach (var (playerId, sequence) in snapshot.CommandAcks)
+        {
+            header.Put(playerId); header.Put(sequence);
+        }
+        header.Put((byte)snapshot.IslandCooldowns.Count);
+        foreach (var (islandId, ticks) in snapshot.IslandCooldowns)
+        {
+            header.Put(islandId); header.Put(ticks);
+        }
+
+        // Pack ships greedily: type + tick + index + count + ship count, then the header in the first chunk.
+        const int fixedBytes = 1 + 8 + 1 + 1 + 1;
+        var shipBytes = snapshot.Ships.Select(ship =>
+        {
+            var w = new NetDataWriter();
+            PutShipState(w, ship);
+            return w;
+        }).ToList();
+        var groups = new List<List<NetDataWriter>> { new() };
+        var used = fixedBytes + header.Length;
+        if (used > maxBytes)
+            throw new InvalidOperationException($"Snapshot header of {header.Length} bytes doesn't fit a {maxBytes}-byte packet.");
+        foreach (var ship in shipBytes)
+        {
+            if (used + ship.Length > maxBytes || groups[^1].Count == byte.MaxValue)
+            {
+                groups.Add(new List<NetDataWriter>());
+                used = fixedBytes;
+            }
+            groups[^1].Add(ship);
+            used += ship.Length;
+        }
+
+        var chunks = new List<NetDataWriter>(groups.Count);
+        for (var chunk = 0; chunk < groups.Count; chunk++)
         {
             var w = new NetDataWriter();
             w.Put((byte)MessageType.SnapshotChunk);
             w.Put(snapshot.Tick);
             w.Put((byte)chunk);
-            w.Put((byte)chunkCount);
-
+            w.Put((byte)groups.Count);
             if (chunk == 0)
-            {
-                w.Put(snapshot.Wind);
-                w.Put(snapshot.Wave);
-                w.Put(snapshot.TicksUntilNextWave);
-                w.Put(snapshot.RunOver);
-                w.Put((byte)snapshot.Players.Count);
-                foreach (var p in snapshot.Players)
-                {
-                    w.Put(p.PlayerId); w.Put(p.Gold); w.Put(p.Kills); w.Put(p.RespawnTicks);
-                }
-                w.Put((byte)snapshot.IslandCooldowns.Count);
-                foreach (var (islandId, ticks) in snapshot.IslandCooldowns)
-                {
-                    w.Put(islandId); w.Put(ticks);
-                }
-            }
-
-            var ships = snapshot.Ships.Skip(chunk * Protocol.ShipsPerSnapshotChunk).Take(Protocol.ShipsPerSnapshotChunk).ToList();
-            w.Put((byte)ships.Count);
-            foreach (var ship in ships)
-                PutShipState(w, ship);
+                w.Put(header.Data, 0, header.Length);
+            w.Put((byte)groups[chunk].Count);
+            foreach (var ship in groups[chunk])
+                w.Put(ship.Data, 0, ship.Length);
             chunks.Add(w);
         }
         return chunks;
@@ -399,6 +424,9 @@ public static class Wire
             var players = r.GetByte();
             for (var i = 0; i < players; i++)
                 snapshot.Players.Add(new PlayerSnapshot(r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt()));
+            var acks = r.GetByte();
+            for (var i = 0; i < acks; i++)
+                snapshot.CommandAcks.Add((r.GetInt(), r.GetUInt()));
             var islands = r.GetByte();
             for (var i = 0; i < islands; i++)
                 snapshot.IslandCooldowns.Add((r.GetInt(), r.GetInt()));
@@ -421,12 +449,15 @@ public static class Wire
         w.Put(s.Rudder);
         w.Put((byte)s.Anchor);
         w.Put((ushort)Math.Clamp(s.AnchorRaiseTicks, 0, ushort.MaxValue));
+        w.Put((byte)Math.Clamp(s.AnchorDropTicks, 0, byte.MaxValue));
         w.PutOptional(s.PlunderIslandId);
         w.Put((ushort)Math.Clamp(s.PlunderTicks, 0, ushort.MaxValue));
         w.Put((byte)s.Stance);
         w.Put(s.MoveTarget.HasValue);
         if (s.MoveTarget is { } target)
             w.Put(target);
+        w.Put(s.IsHoldingCourse);
+        w.Put(s.WindDrift);
         foreach (var channels in s.Cooldowns)
         {
             var count = channels?.Length ?? 0;
@@ -452,12 +483,15 @@ public static class Wire
             Rudder = r.GetSByte(),
             Anchor = (AnchorState)r.GetByte(),
             AnchorRaiseTicks = r.GetUShort(),
+            AnchorDropTicks = r.GetByte(),
             PlunderIslandId = r.GetOptionalInt(),
             PlunderTicks = r.GetUShort(),
             Stance = (NpcStance)r.GetByte(),
         };
         if (r.GetBool())
             s.MoveTarget = r.GetVector2();
+        s.IsHoldingCourse = r.GetBool();
+        s.WindDrift = r.GetVector2();
         for (var i = 0; i < s.Cooldowns.Length; i++)
         {
             var count = r.GetByte();

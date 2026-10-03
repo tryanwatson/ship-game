@@ -40,10 +40,14 @@ public sealed class ShipState
     public sbyte Rudder;
     public AnchorState Anchor;
     public int AnchorRaiseTicks;
+    public int AnchorDropTicks;
     public int? PlunderIslandId;
     public int PlunderTicks;
     public NpcStance Stance;
     public Vector2? MoveTarget;
+    // The rest of the movement state, so a client predicting its own ship can carry on from exactly here.
+    public bool IsHoldingCourse;
+    public Vector2 WindDrift;
     /// <summary>Per ability slot, per cooldown channel: (remaining, duration) ticks. Empty for an empty slot.</summary>
     public (int Remaining, int Duration)[][] Cooldowns = new (int, int)[Ship.AbilitySlotCount][];
 }
@@ -62,7 +66,20 @@ public sealed class Snapshot
     public List<(int IslandId, int Ticks)> IslandCooldowns = new();
     public List<ShipState> Ships = new();
 
+    /// <summary>Per player: the sequence number of the last command the server had applied by this tick.</summary>
+    public List<(int PlayerId, uint Sequence)> CommandAcks = new();
+
     public ShipState? Find(int shipId) => Ships.Find(s => s.ShipId == shipId);
+
+    public uint AckFor(int playerId)
+    {
+        foreach (var (id, sequence) in CommandAcks)
+        {
+            if (id == playerId)
+                return sequence;
+        }
+        return 0;
+    }
 
     public static Snapshot Capture(World world)
     {
@@ -96,10 +113,13 @@ public sealed class Snapshot
             Rudder = (sbyte)ship.Rudder,
             Anchor = ship.Anchor,
             AnchorRaiseTicks = ship.AnchorRaiseTicksRemaining,
+            AnchorDropTicks = ship.AnchorDropTicksRemaining,
             PlunderIslandId = ship.PlunderIslandId,
             PlunderTicks = ship.PlunderTicks,
             Stance = ship.Stance,
             MoveTarget = ship.MoveTarget,
+            IsHoldingCourse = ship.IsHoldingCourse,
+            WindDrift = ship.WindDrift,
         };
         for (var i = 0; i < Ship.AbilitySlotCount; i++)
         {

@@ -235,6 +235,34 @@ public sealed class LoopbackTests : IDisposable
     }
 
     [Fact]
+    public void OwnShip_IsPredicted_AheadOfTheServer_OnALaggyConnection()
+    {
+        var client = Connect(new NetworkConditions(LagMs: 300));
+        PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
+        client.SetReady();
+        PumpUntil(() => client.Replica.World.GetPlayerShip(client.LocalPlayerId) is not null, "our ship");
+        client.Send(new AdjustThrottleCommand(0, 3));
+        PumpFor(2.0);
+
+        // The helm answers at once on the client, while the order is still on its way to the server.
+        client.Send(new SetRudderCommand(0, 1));
+        PumpFor(0.05);
+        var serverShip = _server.World!.GetPlayerShip(client.LocalPlayerId)!;
+        Assert.Equal(1, client.Replica.World.GetPlayerShip(client.LocalPlayerId)!.Rudder);
+        Assert.Equal(0, serverShip.Rudder);
+        PumpUntil(() => client.Replica.Predictor.PendingCount == 0, "the server to confirm the order");
+
+        // Steady state: where the client draws its ship now is where the server's ship will be at that tick.
+        PumpFor(1.0);
+        var predictTick = (long)Math.Round(client.Replica.PredictTick);
+        var predicted = client.Replica.World.GetPlayerShip(client.LocalPlayerId)!.Position;
+        Assert.True(predictTick > _server.World.Tick, "prediction should run ahead of the server");
+        PumpUntil(() => _server.World.Tick >= predictTick, "the server to catch up");
+        var distance = Vector2.Distance(predicted, serverShip.Position);
+        Assert.True(distance < 0.5f, $"predicted {predicted}, server got to {serverShip.Position} ({distance} tiles off)");
+    }
+
+    [Fact]
     public void SimulatedLoss_DropsSomeSnapshots_ButNeverReliableMessages()
     {
         var lossy = Connect(new NetworkConditions(LossPercent: 50));

@@ -39,6 +39,7 @@ public sealed class ClientConnection : IDisposable
     private readonly PriorityQueue<(byte[] Data, DeliveryMethod Delivery), double> _delayedOut = new();
     private double _lastReliableIn;
     private double _lastReliableOut;
+    private uint _commandSequence;
 
     /// <param name="password">The server's password, if it has one.</param>
     public ClientConnection(string host, int port, NetworkConditions? conditions = null, string? password = null)
@@ -77,6 +78,7 @@ public sealed class ClientConnection : IDisposable
         _net.PollEvents();
         if (_conditions is not null)
             ReleaseDelayed();
+        Replica.RoundTripSeconds = RoundTripMs / 1000.0;
         Replica.Advance(elapsedSeconds);
     }
 
@@ -85,9 +87,12 @@ public sealed class ClientConnection : IDisposable
         if (_server is null || Status != ConnectionStatus.InRun)
             return;
         _writer.Reset();
+        var sequence = ++_commandSequence;
         _writer.Put((byte)MessageType.Command);
+        _writer.Put(sequence);
         _writer.PutCommand(command);
         SendToServer(_writer, DeliveryMethod.ReliableOrdered);
+        Replica.OnCommandSent(command, sequence);
     }
 
     /// <summary>Ready up in the lobby; the run starts once everyone is ready.</summary>
@@ -182,6 +187,7 @@ public sealed class ClientConnection : IDisposable
         {
             case MessageType.Welcome:
                 LocalPlayerId = reader.GetInt();
+                Replica.LocalPlayerId = LocalPlayerId;
                 Status = ConnectionStatus.Lobby;
                 break;
             case MessageType.Lobby:
@@ -230,6 +236,7 @@ public sealed class ClientConnection : IDisposable
             assembled.RunOver = chunk.Partial.RunOver;
             assembled.Players = chunk.Partial.Players;
             assembled.IslandCooldowns = chunk.Partial.IslandCooldowns;
+            assembled.CommandAcks = chunk.Partial.CommandAcks;
         }
         assembled.Ships.AddRange(chunk.Partial.Ships);
         entry = (assembled, entry.Received + 1, entry.Expected);

@@ -1,5 +1,6 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
+using ShipGame.Shared.Commands;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
@@ -12,6 +13,10 @@ namespace ShipGame.Net;
 /// always a snapshot either side of "now" to blend between. Events are held back until that same render clock
 /// reaches them, so a volley appears exactly when the drawn ship fires it. Cannonballs are flown locally from
 /// their spawn event (they travel in straight lines) and removed when the server reports an impact.
+///
+/// The exception is the player's own ship, which is predicted (see <see cref="LocalShipPredictor"/>): drawn where
+/// it will be once the commands sent now reach the server, a round trip ahead of the newest snapshot, so the helm
+/// answers at once. Everything else, including the ship's guns and health, stays on the server's timeline.
 /// </summary>
 public sealed class ClientReplica
 {
@@ -21,6 +26,9 @@ public sealed class ClientReplica
     // If the local clock drifts this far from the server's, jump rather than glide back.
     private const double ClockSnapTicks = 8;
 
+    // Predict this much further than the round trip alone, since a command waits up to a tick on the server.
+    private const double PredictionMarginTicks = 1;
+
     private readonly List<Snapshot> _snapshots = new();
     private readonly List<WorldEvent> _pendingEvents = new();
     private readonly List<ShipInfo> _pendingShipInfos = new();
@@ -28,11 +36,28 @@ public sealed class ClientReplica
     private readonly Dictionary<int, ProjectileSpawned> _projectiles = new();
     private double _clock;
     private bool _clockStarted;
+    private double _predictClock;
+    private LocalShipPredictor _predictor = new(Archipelago.Size);
 
     public ClientReplica()
     {
         World = CreateWorld(Archipelago.Size, Vector2.Zero);
     }
+
+    /// <summary>Whose ship to predict; 0 for none.</summary>
+    public int LocalPlayerId { get; set; }
+
+    /// <summary>Predict the local player's ship (on by default).</summary>
+    public bool PredictLocalShip { get; set; } = true;
+
+    /// <summary>Round trip to the server, which sets how far ahead to predict. Kept up to date by the connection.</summary>
+    public double RoundTripSeconds { get; set; }
+
+    /// <summary>The tick the local ship is drawn at, and the one a command sent now is expected to land on.</summary>
+    public double PredictTick => _predictClock;
+
+    /// <summary>For tests and diagnostics.</summary>
+    public LocalShipPredictor Predictor => _predictor;
 
     /// <summary>The mirrored world: draw this.</summary>
     public World World { get; private set; }
@@ -56,8 +81,16 @@ public sealed class ClientReplica
         _pendingShipInfos.Clear();
         _projectiles.Clear();
         _clockStarted = false;
+        _predictor = new LocalShipPredictor(start.WorldSize);
         Alpha = 1f;
     }
+
+    /// <summary>
+    /// A command was just sent with this sequence number: replay it in the prediction until the server confirms it.
+    /// </summary>
+    public void OnCommandSent(Command command, uint sequence) =>
+        // As on the server, it's ours whatever player it names.
+        _predictor.Record(sequence, command with { PlayerId = LocalPlayerId }, (long)Math.Floor(_predictClock) + 1);
 
     /// <summary>Queues ship info to take effect when the render clock reaches its tick.</summary>
     public void EnqueueShipInfo(ShipInfo info) => _pendingShipInfos.Add(info);
@@ -118,9 +151,49 @@ public sealed class ClientReplica
         RenderTick = Math.Max(_snapshots[0].Tick, _clock - InterpolationDelayTicks);
         World.SetTick((long)RenderTick);
 
+        // A command sent now reaches the server half a round trip from now, when it's half a round trip past
+        // the newest snapshot we've seen: so predict a full round trip ahead of the snapshot clock.
+        var predictTarget = _clock + RoundTripSeconds * Protocol.TickRate + PredictionMarginTicks;
+        if (Math.Abs(predictTarget - _predictClock) > ClockSnapTicks)
+            _predictClock = predictTarget;
+        else
+            _predictClock += elapsedSeconds * Protocol.TickRate + (predictTarget - _predictClock) * 0.05;
+        _predictClock = Math.Max(_predictClock, latest);
+
         ApplyDueEvents();
         ApplySnapshots();
         FlyProjectiles();
+        PredictOwnShip(elapsedSeconds);
+    }
+
+    private void PredictOwnShip(double elapsedSeconds)
+    {
+        var ship = LocalPlayerId == 0 ? null : World.GetPlayerShip(LocalPlayerId);
+        var latest = _snapshots[^1];
+        if (!PredictLocalShip || ship is null || latest.Find(ship.Id) is not { } state)
+        {
+            if (ship is null)
+                _predictor.Forget();
+            return;
+        }
+
+        _predictor.Update(ship, state, latest.Tick, latest.AckFor(LocalPlayerId), World.Wind, _predictClock, elapsedSeconds);
+
+        // Drawn already blended, so previous and current agree whatever the shared alpha is.
+        ship.Position = ship.PreviousPosition = _predictor.Position;
+        ship.Heading = ship.PreviousHeading = _predictor.Heading;
+        if (_predictor.Predicted is { } predicted)
+        {
+            ship.Speed = predicted.Speed;
+            ship.Throttle = predicted.Throttle;
+            ship.Rudder = predicted.Rudder;
+            ship.MoveTarget = predicted.MoveTarget;
+            ship.IsHoldingCourse = predicted.IsHoldingCourse;
+            ship.WindDrift = predicted.WindDrift;
+            ship.Anchor = predicted.Anchor;
+            ship.AnchorRaiseTicksRemaining = predicted.AnchorRaiseTicksRemaining;
+            ship.AnchorDropTicksRemaining = predicted.AnchorDropTicksRemaining;
+        }
     }
 
     private void ApplyDueEvents()

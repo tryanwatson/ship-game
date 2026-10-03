@@ -8,7 +8,7 @@ public static class Protocol
     public const string Key = "ShipGame";
 
     /// <summary>Bump whenever the wire format changes.</summary>
-    public const int Version = 7;
+    public const int Version = 8;
 
     public const int DefaultPort = 7777;
 
@@ -17,8 +17,11 @@ public static class Protocol
     /// <summary>Snapshots go out every this many simulation ticks (30 Hz / 2 = 15 Hz).</summary>
     public const int SnapshotEveryTicks = 2;
 
-    /// <summary>Ships per snapshot packet, keeping each unreliable packet comfortably under one MTU.</summary>
-    public const int ShipsPerSnapshotChunk = 12;
+    /// <summary>
+    /// Largest snapshot packet. LiteNetLib (2.x) sends unreliable packets of at most 1023 bytes of payload and throws
+    /// on anything bigger, so chunks are packed by size, leaving room to spare.
+    /// </summary>
+    public const int MaxSnapshotChunkBytes = 1000;
 
     public static readonly int TickRate = SimConstants.TickRate;
 }

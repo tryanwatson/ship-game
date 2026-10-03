@@ -29,6 +29,12 @@ public sealed class GameServer : IDisposable
         public float MessageBudget { get; set; } = MessageBurst;
 
         public int DroppedMessages { get; set; }
+
+        /// <summary>Sequence number of the newest command received (queued for the next step).</summary>
+        public uint LastCommandReceived { get; set; }
+
+        /// <summary>Sequence number of the newest command the world has applied; sent back in snapshots.</summary>
+        public uint LastCommandApplied { get; set; }
     }
 
     private const float StartSpacing = 6f;
@@ -96,6 +102,8 @@ public sealed class GameServer : IDisposable
         }
 
         World.Step();
+        foreach (var player in _byPeerId.Values)
+            player.LastCommandApplied = player.LastCommandReceived; // every queued command was applied in that step
         SendWorldOutput(World);
 
         if (World.IsRunOver)
@@ -257,7 +265,10 @@ public sealed class GameServer : IDisposable
 
         if (world.Tick % Protocol.SnapshotEveryTicks == 0 || world.IsRunOver)
         {
-            foreach (var chunk in Wire.WriteSnapshotChunks(Snapshot.Capture(world)))
+            var snapshot = Snapshot.Capture(world);
+            foreach (var player in _byPeerId.Values)
+                snapshot.CommandAcks.Add((player.PlayerId, player.LastCommandApplied));
+            foreach (var chunk in Wire.WriteSnapshotChunks(snapshot))
                 SendToAll(chunk, DeliveryMethod.Unreliable);
         }
     }
@@ -301,9 +312,13 @@ public sealed class GameServer : IDisposable
             switch ((MessageType)reader.GetByte())
             {
                 case MessageType.Command when World is not null:
+                {
+                    var sequence = reader.GetUInt();
                     // The command is read on behalf of this connection's player, whatever it claims.
                     World.Enqueue(reader.GetCommand(player.PlayerId));
+                    player.LastCommandReceived = sequence;
                     break;
+                }
                 case MessageType.Ready when World is null:
                     player.Ready = reader.GetBool();
                     BroadcastLobby();
