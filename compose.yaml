@@ -1,0 +1,17 @@
+# docker compose up -d --build   (see docs/hosting.md)
+services:
+  shipgame:
+    build: .
+    image: shipgame-server
+    restart: unless-stopped
+    ports:
+      - "7777:7777/udp"
+    environment:
+      SHIPGAME_PORT: "7777"
+      SHIPGAME_FRIENDLY_FIRE: "true"
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

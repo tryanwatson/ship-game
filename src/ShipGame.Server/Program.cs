@@ -1,24 +1,34 @@
+using System.Runtime.InteropServices;
 using ShipGame.Net;
 using ShipGame.Server;
 
 // Dedicated server: dotnet run --project src/ShipGame.Server -- [--port 7777] [--no-friendly-fire]
-var port = Protocol.DefaultPort;
-var friendlyFire = !args.Contains("--no-friendly-fire");
-for (var i = 0; i < args.Length - 1; i++)
+ServerOptions options;
+try
 {
-    if (args[i] == "--port" && int.TryParse(args[i + 1], out var parsed))
-        port = parsed;
+    options = ServerOptions.Parse(args, Environment.GetEnvironmentVariable);
+}
+catch (FormatException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    Console.Error.WriteLine(ServerOptions.Usage);
+    return 2;
 }
 
-using var server = new GameServer(port, message => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}"), friendlyFire);
-Console.WriteLine($"ShipGame server listening on UDP {server.Port} (protocol v{Protocol.Version}), friendly fire {(friendlyFire ? "on" : "off")}. Ctrl+C to stop.");
+using var server = new GameServer(options.Port, message => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}"), options.FriendlyFire);
+Console.WriteLine($"ShipGame server listening on UDP {server.Port} (protocol v{Protocol.Version}), friendly fire {(options.FriendlyFire ? "on" : "off")}. Ctrl+C to stop.");
 
+// Ctrl+C, and SIGTERM from `docker stop` or systemd: finish the current tick, then say goodbye to everyone.
 using var stop = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) =>
+void RequestStop(PosixSignalContext context)
 {
-    e.Cancel = true;
+    context.Cancel = true;
+    Console.WriteLine($"Received {context.Signal}, shutting down.");
     stop.Cancel();
-};
+}
+using var onInterrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, RequestStop);
+using var onTerminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, RequestStop);
 
 ServerRunner.Run(server, stop.Token);
 Console.WriteLine("Server stopped.");
+return 0;
