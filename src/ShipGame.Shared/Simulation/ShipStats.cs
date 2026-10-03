@@ -14,6 +14,7 @@ namespace ShipGame.Shared.Simulation;
 /// <param name="WeaponRange">Multiplier on weapon range.</param>
 /// <param name="MinTurnRadius">Tightest turning radius, approached as the ship slows to a crawl.</param>
 /// <param name="TurnRadiusAtMaxSpeed">Turning radius at full sail. Radius scales linearly with speed in between.</param>
+/// <param name="CargoCapacity">Units of contract cargo the hold carries (see <c>Contracts</c>).</param>
 public readonly record struct ShipStats(
     float MaxSpeed,
     float Acceleration,
@@ -28,7 +29,8 @@ public readonly record struct ShipStats(
     float CooldownSpeed = 1f,
     float WeaponDamage = 1f,
     float ProjectileSpeed = 1f,
-    float WeaponRange = 1f)
+    float WeaponRange = 1f,
+    float CargoCapacity = 12f)
 {
     public static readonly ShipStats Sloop = new(
         MaxSpeed: 5f,

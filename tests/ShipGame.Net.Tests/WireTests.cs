@@ -5,6 +5,7 @@ using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Stats;
+using ShipGame.Shared.Trading;
 
 namespace ShipGame.Net.Tests;
 
@@ -23,6 +24,7 @@ public class WireTests
         new object[] { new AnchorKeyCommand(9, false) },
         new object[] { new ChoosePlunderCommand(9) },
         new object[] { new PurchaseUpgradeCommand(9, "shot-speed") },
+        new object[] { new PurchaseContractCommand(9, 123) },
     };
 
     [Theory]
@@ -69,7 +71,15 @@ public class WireTests
         new object[] { new PlayerSunk(10, 2, 300) },
         new object[] { new PlayerRespawned(10, 2, 55) },
         new object[] { new RunEnded(10) },
+        new object[] { new ContractsOffered(10, 1, new[] { Contract, Contract with { Id = 32, DestinationIslandId = 9 } }) },
+        new object[] { new ContractPurchased(10, 3, 2, Contract) },
+        new object[] { new ContractDelivered(10, 3, 2, 31, 60) },
+        new object[] { new CargoDropped(10, 4, new Vector2(70, 80.5f), new CargoLot(Contract, 6)) },
+        new object[] { new CargoRecovered(10, 4, 5, 3) },
+        new object[] { new CargoLost(10, 31) },
     };
+
+    private static readonly TradeContract Contract = new(31, 1, 7, Cost: 40, Payout: 100, CargoUnits: 10);
 
     [Theory]
     [MemberData(nameof(Events))]
@@ -103,7 +113,7 @@ public class WireTests
     public void ShipInfo_RoundTrips()
     {
         var info = new ShipInfo(
-            123, 7, 2, Team.Players, ShipStats.Sloop with { WeaponRange = 1.3f },
+            123, 7, 2, Team.Players, ShipStats.Sloop with { WeaponRange = 1.3f, CargoCapacity = 16f },
             new[] { "broadside", null, "long-gun", "mortar" },
             new[] { new StatModifier(StatId.MaxHealth, ModifierKind.Flat, 20, "upgrade:hull") },
             new Vector2(96, 90), 1.25f);

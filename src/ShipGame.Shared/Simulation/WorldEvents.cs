@@ -1,6 +1,7 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Trading;
 
 namespace ShipGame.Shared.Simulation;
 
@@ -54,6 +55,31 @@ public sealed record IslandPlundered(long Tick, int IslandId, int PlayerId, int 
 
 public sealed record UpgradePurchased(long Tick, int ShipId, string UpgradeId, int Level) : WorldEvent(Tick);
 
+/// <summary>A trading post's full list of contracts on offer, sent when the markets open and whenever it changes.</summary>
+public sealed record ContractsOffered(long Tick, int IslandId, IReadOnlyList<TradeContract> Offers) : WorldEvent(Tick)
+{
+    // Records compare lists by reference; compare the contracts themselves.
+    public bool Equals(ContractsOffered? other) =>
+        other is not null && Tick == other.Tick && IslandId == other.IslandId && Offers.SequenceEqual(other.Offers);
+
+    public override int GetHashCode() => HashCode.Combine(Tick, IslandId, Offers.Count);
+}
+
+/// <summary>A ship bought a contract: its full cargo is now in the hold.</summary>
+public sealed record ContractPurchased(long Tick, int ShipId, int PlayerId, TradeContract Contract) : WorldEvent(Tick);
+
+/// <summary>Cargo reached its destination and paid <paramref name="Payout"/>; it's out of the hold.</summary>
+public sealed record ContractDelivered(long Tick, int ShipId, int PlayerId, int ContractId, int Payout) : WorldEvent(Tick);
+
+/// <summary>A sinking set what survived of a lot afloat as crate <paramref name="CrateId"/>.</summary>
+public sealed record CargoDropped(long Tick, int CrateId, Vector2 Position, CargoLot Cargo) : WorldEvent(Tick);
+
+/// <summary>A ship anchored beside a crate and hauled its cargo aboard.</summary>
+public sealed record CargoRecovered(long Tick, int CrateId, int ShipId, int PlayerId) : WorldEvent(Tick);
+
+/// <summary>A sinking left too little of a contract's cargo to float: it can never be delivered now.</summary>
+public sealed record CargoLost(long Tick, int ContractId) : WorldEvent(Tick);
+
 public sealed record WaveStarted(long Tick, int Wave, int Pirates) : WorldEvent(Tick);
 
 /// <summary>A player's ship went down; they'll be back in <paramref name="RespawnTicks"/> unless the run ends first.</summary>
@@ -88,4 +114,10 @@ public enum RejectionReason
     UnknownUpgrade,
     MaxLevel,
     NotEnoughGold,
+
+    /// <summary>That contract isn't on offer here (anymore).</summary>
+    UnknownContract,
+
+    /// <summary>The hold hasn't room for the contract's cargo.</summary>
+    NotEnoughCargoSpace,
 }

@@ -12,6 +12,7 @@ using ShipGame.Shared.Commands;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
+using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 using NVector2 = System.Numerics.Vector2;
 
@@ -198,9 +199,11 @@ public sealed class GameClient : Game
     /// <summary>A fresh run: the player's ship at the center, pirates arriving in waves.</summary>
     private void StartRun()
     {
-        var world = new World(Archipelago.Size) { Waves = new WaveDirector(seed: Environment.TickCount) };
+        var seed = Environment.TickCount;
+        var world = new World(Archipelago.Size) { Waves = new WaveDirector(seed) };
         foreach (var island in Archipelago.CreateIslands())
             world.AddIsland(island);
+        Contracts.OpenMarkets(world, seed);
         world.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, SoloPlayerId, Loadouts.Sloop);
 
         _session = new LocalGameSession(world, SoloPlayerId);
@@ -359,7 +362,7 @@ public sealed class GameClient : Game
         var aim = ShowingAim is { } slot ? new AimPreview(slot, _aimCursor) : (AimPreview?)null;
         _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view, aim);
         _islandOverlays.Draw(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _session.InterpolationAlpha, view, Hud, AnchorDropProgress);
-        _offscreenMarkers.Draw(_session.World, _session.InterpolationAlpha, view, Hud);
+        _offscreenMarkers.Draw(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _session.InterpolationAlpha, view, Hud);
         var localShip = _session.World.GetPlayerShip(LocalPlayerId);
         var plunderReady = localShip is not null && Plundering.PlunderableFrom(_session.World, localShip.Position) is not null;
         var shipyardReady = localShip is not null && Shipyards.ShipyardFrom(_session.World, localShip.Position) is not null;
@@ -367,9 +370,12 @@ public sealed class GameClient : Game
         _compass.Draw(_session.World.Wind, Hud);
         var gold = _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
         _hudCounters.Draw(gold, _session.World.Waves?.Wave ?? 0, Hud);
-        _shipyardPanel.Draw(_session.World, localShip, _input, Hud);
-        if (_mapOpen)
+        // Choosing a contract charts each route beside the panel; otherwise M shows the full map.
+        if (_shipyardPanel.CurrentRoutes(_session.World, localShip, _input, Hud) is { } routes)
+            _mapView.Draw(_session.World, LocalPlayerId, Hud, ShipyardPanel.RouteMapArea(Hud), routes);
+        else if (_mapOpen)
             _mapView.Draw(_session.World, LocalPlayerId, Hud);
+        _shipyardPanel.Draw(_session.World, localShip, _input, Hud);
         DrawStatusBanner();
         base.Draw(gameTime);
     }

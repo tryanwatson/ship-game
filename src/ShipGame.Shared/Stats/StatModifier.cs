@@ -20,6 +20,9 @@ public enum StatId
 
     /// <summary>Applies to both turning radii (tiles): negative percentages mean tighter turns.</summary>
     TurnRadius,
+
+    /// <summary>Units of contract cargo the hold carries.</summary>
+    CargoCapacity,
 }
 
 public enum ModifierKind

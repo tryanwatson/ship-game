@@ -2,6 +2,7 @@ using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Ai;
 using ShipGame.Shared.Stats;
+using ShipGame.Shared.Trading;
 
 namespace ShipGame.Shared.Simulation;
 
@@ -172,6 +173,24 @@ public sealed class Ship
     public int Rudder { get; set; }
 
     public float CruiseSpeed => Stats.MaxSpeed * Throttle / ShipMovement.ThrottleLevels;
+
+    private readonly List<CargoLot> _cargo = new();
+
+    /// <summary>Contract cargo in the hold. Change through <see cref="Contracts"/> in game code, so changes are announced.</summary>
+    public IReadOnlyList<CargoLot> Cargo => _cargo;
+
+    /// <summary>Whole units of cargo the hold takes (from <see cref="ShipStats.CargoCapacity"/>, so upgrades can raise it).</summary>
+    public int CargoCapacity => (int)MathF.Floor(Stats.CargoCapacity + 1e-3f);
+
+    public int CargoUsed => _cargo.Sum(c => c.RemainingUnits);
+
+    public int FreeCargo => Math.Max(0, CargoCapacity - CargoUsed);
+
+    public void LoadCargo(CargoLot lot) => _cargo.Add(lot);
+
+    public bool UnloadCargo(int contractId) => _cargo.RemoveAll(c => c.Contract.Id == contractId) > 0;
+
+    public void ClearCargo() => _cargo.Clear();
 
     public float Health { get; set; }
 

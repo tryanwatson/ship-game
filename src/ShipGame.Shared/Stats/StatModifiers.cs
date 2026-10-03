@@ -43,6 +43,7 @@ public sealed class StatModifiers
         WeaponRange = Apply(StatId.WeaponRange, baseStats.WeaponRange),
         MinTurnRadius = Apply(StatId.TurnRadius, baseStats.MinTurnRadius),
         TurnRadiusAtMaxSpeed = Apply(StatId.TurnRadius, baseStats.TurnRadiusAtMaxSpeed),
+        CargoCapacity = Apply(StatId.CargoCapacity, baseStats.CargoCapacity),
     };
 
     /// <summary>How many modifiers come from <paramref name="source"/> (e.g. levels bought of an upgrade).</summary>

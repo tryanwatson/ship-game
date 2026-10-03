@@ -27,6 +27,9 @@ public sealed record ChoosePlunderCommand(int PlayerId) : Command(PlayerId);
 /// <summary>At a shipyard: buy the next level of an upgrade from <c>UpgradeCatalog</c>.</summary>
 public sealed record PurchaseUpgradeCommand(int PlayerId, string UpgradeId) : Command(PlayerId);
 
+/// <summary>At a trading post (shipyard): buy one of the contracts it has on offer, by <c>TradeContract.Id</c>.</summary>
+public sealed record PurchaseContractCommand(int PlayerId, int ContractId) : Command(PlayerId);
+
 /// <summary>
 /// Sets the helm: -1 hard to port, 0 amidships, +1 hard to starboard. Sent when the input changes rather than
 /// every frame. Putting the helm over takes manual control, cancelling any move order.

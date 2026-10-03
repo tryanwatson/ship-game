@@ -10,8 +10,9 @@ public sealed class Island
     /// <summary>Gold for plundering an island unless its layout says otherwise.</summary>
     public const int DefaultPlunderGold = 10;
 
-    public Island(int id, IReadOnlyList<Vector2> outline, int plunderGold = DefaultPlunderGold, bool hasShipyard = false)
+    public Island(int id, IReadOnlyList<Vector2> outline, int plunderGold = DefaultPlunderGold, bool hasShipyard = false, string? name = null)
     {
+        Name = name ?? $"ISLE {id}";
         PlunderGold = plunderGold;
         HasShipyard = hasShipyard;
         if (outline.Count < 3)
@@ -28,6 +29,9 @@ public sealed class Island
     }
 
     public int Id { get; }
+
+    /// <summary>What the charts call it (upper case, for the pixel font): how trade contracts name their destinations.</summary>
+    public string Name { get; }
 
     /// <summary>Gold a player earns for plundering this island.</summary>
     public int PlunderGold { get; }
@@ -52,7 +56,8 @@ public sealed class Island
     /// An island built from a hand-drawn outline: rotated, and scaled so its area is exactly
     /// <paramref name="area"/> square tiles, then centered on <paramref name="center"/>.
     /// </summary>
-    public static Island FromTemplate(int id, IReadOnlyList<Vector2> template, Vector2 center, float area, float rotation, bool hasShipyard = false)
+    public static Island FromTemplate(int id, IReadOnlyList<Vector2> template, Vector2 center, float area, float rotation, bool hasShipyard = false,
+        string? name = null)
     {
         var templateCenter = Geometry.Centroid(template.ToArray());
         var scale = MathF.Sqrt(area / Geometry.Area(template.ToArray()));
@@ -63,6 +68,6 @@ public sealed class Island
             var local = (p - templateCenter) * scale;
             return center + new Vector2(local.X * cos - local.Y * sin, local.X * sin + local.Y * cos);
         }).ToList();
-        return new Island(id, outline, hasShipyard: hasShipyard);
+        return new Island(id, outline, hasShipyard: hasShipyard, name: name);
     }
 }

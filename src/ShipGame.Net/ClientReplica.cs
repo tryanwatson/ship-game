@@ -4,6 +4,7 @@ using ShipGame.Shared.Commands;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
+using ShipGame.Shared.Trading;
 
 namespace ShipGame.Net;
 
@@ -280,6 +281,25 @@ public sealed class ClientReplica
                     break;
                 case RunEnded:
                     World.EndRun();
+                    break;
+                case ContractsOffered offered:
+                    World.Trade.SetOffers(offered.IslandId, offered.Offers);
+                    break;
+                case ContractPurchased purchased:
+                    World.FindShip(purchased.ShipId)?.LoadCargo(new CargoLot(purchased.Contract, purchased.Contract.CargoUnits));
+                    break;
+                case ContractDelivered delivered:
+                    World.FindShip(delivered.ShipId)?.UnloadCargo(delivered.ContractId);
+                    break;
+                case CargoDropped dropped:
+                    World.Trade.AddCrate(dropped.Position, dropped.Cargo, dropped.CrateId);
+                    break;
+                case CargoRecovered recovered:
+                    if (World.Trade.FindCrate(recovered.CrateId) is { } crate)
+                    {
+                        World.Trade.RemoveCrate(crate.Id);
+                        World.FindShip(recovered.ShipId)?.LoadCargo(crate.Cargo);
+                    }
                     break;
             }
             _appliedEvents.Add(e);

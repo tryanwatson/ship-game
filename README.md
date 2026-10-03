@@ -1,7 +1,8 @@
 # ShipGame
 
-An isometric pirate-ship roguelike for up to 12 players. Sail, sink pirate waves, plunder islands and upgrade your
-ship at shipyards. Friendly fire is on unless the host turns it off.
+An isometric pirate-ship roguelike for up to 12 players. Sail, sink pirate waves, plunder islands, upgrade your
+ship at shipyards, and run cargo contracts between islands (sunk cargo floats free for anyone to salvage). Friendly
+fire is on unless the host turns it off.
 
 ## Playing
 

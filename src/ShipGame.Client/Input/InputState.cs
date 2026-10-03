@@ -1,3 +1,4 @@
+using System;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 
@@ -26,6 +27,14 @@ public sealed class InputState
     public bool WasKeyPressed(Keys key) => Keyboard.IsKeyDown(key) && PreviousKeyboard.IsKeyUp(key);
 
     public bool WasKeyReleased(Keys key) => Keyboard.IsKeyUp(key) && PreviousKeyboard.IsKeyDown(key);
+
+    /// <summary>Ctrl (Cmd on macOS, which MonoGame reports as the Windows keys) is held, for shortcuts like paste.</summary>
+    public bool IsShortcutModifierDown => OperatingSystem.IsMacOS()
+        ? IsKeyDown(Keys.LeftWindows) || IsKeyDown(Keys.RightWindows) || IsKeyDown(Keys.LeftControl) || IsKeyDown(Keys.RightControl)
+        : IsKeyDown(Keys.LeftControl) || IsKeyDown(Keys.RightControl);
+
+    /// <summary>The shortcut modifier plus <paramref name="key"/>, pressed this frame (e.g. Ctrl+V).</summary>
+    public bool WasShortcutPressed(Keys key) => IsShortcutModifierDown && WasKeyPressed(key);
 
     public bool WasLeftMousePressed =>
         Mouse.LeftButton == ButtonState.Pressed && PreviousMouse.LeftButton == ButtonState.Released;

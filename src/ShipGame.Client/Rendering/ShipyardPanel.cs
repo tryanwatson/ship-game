@@ -6,13 +6,15 @@ using ShipGame.Client.Input;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
+using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Client.Rendering;
 
 /// <summary>
 /// Pops up while the player is anchored at a shipyard: first a choice between plundering the island and trading,
-/// then the upgrade list. Every action is sent as a command; the simulation decides whether it's allowed.
+/// then the upgrade list or the trade contracts on offer. Every action is sent as a command; the simulation decides
+/// whether it's allowed. While contracts are showing, <see cref="CurrentRoutes"/> says what to chart beside the panel.
 /// </summary>
 public sealed class ShipyardPanel
 {
@@ -20,6 +22,7 @@ public sealed class ShipyardPanel
     {
         Choice,
         Upgrades,
+        Contracts,
     }
 
     private sealed record Button(Rectangle Bounds, string Label, bool Enabled, Command? Command = null, Page? GoTo = null);
@@ -28,6 +31,9 @@ public sealed class ShipyardPanel
     private const int Padding = 16;
     private const int ButtonHeight = 40;
     private const int RowHeight = 52;
+    private const int ContractRowHeight = 64;
+    private const int BadgeSize = 22;
+    private const int PanelLeft = 24;
     private const float TitleScale = 3f;
     private const float LabelScale = 2f;
     private const float SmallScale = 1.5f;
@@ -43,6 +49,8 @@ public sealed class ShipyardPanel
     private static readonly Color ButtonBorder = new(130, 140, 165);
     private static readonly Color PipOn = new(240, 200, 90);
     private static readonly Color PipOff = new Color(240, 200, 90) * 0.18f;
+    private static readonly Color Short = new(235, 95, 80);
+    private static readonly Color RowHover = new Color(255, 255, 255) * 0.06f;
 
     private readonly PrimitiveBatch _batch;
     private Page _page;
@@ -99,7 +107,7 @@ public sealed class ShipyardPanel
         FillRect(panel, PanelBack);
         OutlineRect(panel, PanelBorder);
 
-        var title = _page == Page.Choice ? "SHIPYARD" : "UPGRADES";
+        var title = _page switch { Page.Choice => "SHIPYARD", Page.Upgrades => "UPGRADES", _ => "CONTRACTS" };
         PixelFont.Draw(_batch, title, new Vector2(panel.X + Padding, panel.Y + Padding), TitleScale, Title);
 
         var gold = ship.OwnerPlayerId is { } id && world.Players.TryGetValue(id, out var player) ? player.Gold : 0;
@@ -112,12 +120,14 @@ public sealed class ShipyardPanel
             var hint = "RAISE ANCHOR X TO LEAVE";
             PixelFont.Draw(_batch, hint, new Vector2(panel.X + Padding, panel.Bottom - Padding - PixelFont.Height(SmallScale)), SmallScale, Muted);
         }
-        else
+        else if (_page == Page.Upgrades)
         {
             DrawUpgradeRows(ship, panel);
         }
 
         var mouse = hud.FromScreen(input.Mouse.Position);
+        if (_page == Page.Contracts)
+            DrawContractRows(world, ship, shipyard, panel, HoveredContract(world, shipyard, viewport, mouse));
         foreach (var button in buttons)
             DrawButton(button, button.Enabled && button.Bounds.Contains(mouse));
 
@@ -129,11 +139,11 @@ public sealed class ShipyardPanel
     {
         var buttons = new List<Button>();
         var headerHeight = (int)PixelFont.Height(TitleScale) + Padding * 2;
-        var x = 24;
+        var x = PanelLeft;
 
         if (_page == Page.Choice)
         {
-            var height = headerHeight + ButtonHeight * 2 + Padding * 3 + (int)PixelFont.Height(SmallScale) + Padding;
+            var height = headerHeight + ButtonHeight * 3 + Padding * 4 + (int)PixelFont.Height(SmallScale) + Padding;
             panel = new Rectangle(x, (viewport.Height - height) / 2, PanelWidth, height);
             var y = panel.Y + headerHeight;
 
@@ -148,6 +158,28 @@ public sealed class ShipyardPanel
             y += ButtonHeight + Padding;
             buttons.Add(new Button(new Rectangle(panel.X + Padding, y, PanelWidth - Padding * 2, ButtonHeight), "UPGRADE SHIP",
                 Enabled: true, GoTo: Page.Upgrades));
+
+            y += ButtonHeight + Padding;
+            buttons.Add(new Button(new Rectangle(panel.X + Padding, y, PanelWidth - Padding * 2, ButtonHeight), "TRADE CONTRACTS",
+                Enabled: true, GoTo: Page.Contracts));
+            return buttons;
+        }
+
+        if (_page == Page.Contracts)
+        {
+            var offers = world.Trade.OffersAt(shipyard.Id);
+            panel = ContractsPanel(viewport, offers.Count);
+            var cash = Gold(world, ship);
+            for (var i = 0; i < offers.Count; i++)
+            {
+                var offer = offers[i];
+                var row = ContractRow(panel, i);
+                var bounds = new Rectangle(row.Right - 84, row.Y + (row.Height - ButtonHeight) / 2, 84, ButtonHeight);
+                buttons.Add(new Button(bounds, "BUY", Enabled: cash >= offer.Cost && ship.FreeCargo >= offer.CargoUnits,
+                    Command: new PurchaseContractCommand(ship.OwnerPlayerId ?? 0, offer.Id)));
+            }
+            buttons.Add(new Button(new Rectangle(panel.X + Padding, panel.Bottom - Padding - ButtonHeight, 120, ButtonHeight), "BACK",
+                Enabled: true, GoTo: Page.Choice));
             return buttons;
         }
 
@@ -171,6 +203,103 @@ public sealed class ShipyardPanel
         buttons.Add(new Button(new Rectangle(panel.X + Padding, panel.Bottom - Padding - ButtonHeight, 120, ButtonHeight), "BACK",
             Enabled: true, GoTo: Page.Choice));
         return buttons;
+    }
+
+    private static int HeaderHeight => (int)PixelFont.Height(TitleScale) + Padding * 2;
+
+    /// <summary>Header, a line for the hold, one row per offer, and the back button.</summary>
+    private static Rectangle ContractsPanel(Viewport viewport, int offers)
+    {
+        var height = HeaderHeight + HoldLineHeight + offers * ContractRowHeight + Padding + ButtonHeight + Padding;
+        return new Rectangle(PanelLeft, (viewport.Height - height) / 2, PanelWidth, height);
+    }
+
+    private static int HoldLineHeight => (int)PixelFont.Height(SmallScale) + Padding;
+
+    private static Rectangle ContractRow(Rectangle panel, int index) =>
+        new(panel.X + Padding / 2, panel.Y + HeaderHeight + HoldLineHeight + index * ContractRowHeight, PanelWidth - Padding, ContractRowHeight - 4);
+
+    private static int Gold(World world, Ship ship) =>
+        ship.OwnerPlayerId is { } id && world.Players.TryGetValue(id, out var player) ? player.Gold : 0;
+
+    /// <summary>The offer whose row the mouse is over, if any.</summary>
+    private TradeContract? HoveredContract(World world, Island shipyard, Viewport viewport, Point mouse)
+    {
+        var offers = world.Trade.OffersAt(shipyard.Id);
+        var panel = ContractsPanel(viewport, offers.Count);
+        for (var i = 0; i < offers.Count; i++)
+        {
+            if (ContractRow(panel, i).Contains(mouse))
+                return offers[i];
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// While the contracts page is up: the offers to chart on the map, the one under the mouse highlighted. Null
+    /// on any other page, or away from a shipyard.
+    /// </summary>
+    public RoutePreview? CurrentRoutes(World world, Ship? ship, InputState input, HudView hud)
+    {
+        if (_page != Page.Contracts || ship is null || Shipyards.DockedAt(world, ship) is not { } shipyard || shipyard.Id != _islandId)
+            return null;
+        var hovered = HoveredContract(world, shipyard, hud.Viewport, hud.FromScreen(input.Mouse.Position));
+        return new RoutePreview(shipyard, world.Trade.OffersAt(shipyard.Id), hovered?.Id);
+    }
+
+    /// <summary>Where the route map goes: the rest of the screen to the right of the panel.</summary>
+    public static Rectangle RouteMapArea(HudView hud)
+    {
+        var left = PanelLeft + PanelWidth + Padding;
+        return new Rectangle(left, 24, Math.Max(0, hud.Viewport.Width - left - 24), Math.Max(0, hud.Viewport.Height - 48));
+    }
+
+    private void DrawContractRows(World world, Ship ship, Island shipyard, Rectangle panel, TradeContract? hovered)
+    {
+        var holdText = $"HOLD {ship.CargoUsed}/{ship.CargoCapacity}";
+        PixelFont.Draw(_batch, holdText, new Vector2(panel.X + Padding, panel.Y + HeaderHeight - Padding / 2), SmallScale, Muted);
+
+        var offers = world.Trade.OffersAt(shipyard.Id);
+        if (offers.Count == 0)
+            PixelFont.Draw(_batch, "NO CONTRACTS ON OFFER", new Vector2(panel.X + Padding, ContractRow(panel, 0).Y), LabelScale, Muted);
+
+        var gold = Gold(world, ship);
+        for (var i = 0; i < offers.Count; i++)
+        {
+            var offer = offers[i];
+            var row = ContractRow(panel, i);
+            if (offer == hovered)
+                FillRect(row, RowHover);
+
+            var color = TradeMarkers.OfferColor(i);
+            var badge = new Vector2(row.X + Padding / 2 + BadgeSize / 2f, row.Y + 4 + BadgeSize / 2f);
+            TradeMarkers.DrawBadge(_batch, badge, TradeMarkers.Letter(i), color, BadgeSize, LabelScale);
+
+            var left = row.X + Padding / 2 + BadgeSize + 10;
+            var destination = world.FindIsland(offer.DestinationIslandId);
+            var name = destination?.Name ?? "?";
+            PixelFont.Draw(_batch, name, new Vector2(left, row.Y + 8), LabelScale, color);
+
+            // Terms, with whatever we can't cover picked out.
+            var y = row.Y + 8 + PixelFont.Height(LabelScale) + 6;
+            var x = (float)left;
+            x = DrawPiece($"COST {offer.Cost}  ", x, y, gold >= offer.Cost ? Text : Short);
+            x = DrawPiece($"PAYS {offer.Payout}  ", x, y, PipOn);
+            DrawPiece($"CARGO {offer.CargoUnits}", x, y, ship.FreeCargo >= offer.CargoUnits ? Text : Short);
+
+            if (destination is not null)
+            {
+                var distance = Contracts.RouteDistance(shipyard, destination);
+                var route = $"{distance:0} TILES {TradeMarkers.BearingName(shipyard.Center, destination.Center)}";
+                PixelFont.Draw(_batch, route, new Vector2(left, y + PixelFont.Height(SmallScale) + 5), SmallScale, Muted);
+            }
+        }
+    }
+
+    private float DrawPiece(string text, float x, float y, Color color)
+    {
+        PixelFont.Draw(_batch, text, new Vector2(x, y), SmallScale, color);
+        return x + PixelFont.Measure(text, SmallScale);
     }
 
     private void DrawUpgradeRows(Ship ship, Rectangle panel)

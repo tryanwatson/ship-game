@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using ShipGame.Client.Input;
@@ -19,7 +20,8 @@ public enum MenuAction
 /// <summary>
 /// The title menu: play solo, host, or join a server by address (and password, if it has one). Arrow keys and
 /// Enter or the mouse; Tab or Up/Down move between the join page's fields; Esc backs out (and quits from the top
-/// page). Typing goes through <see cref="OnTextInput"/> so keyboard layouts and key repeat behave.
+/// page). Typing goes through <see cref="OnTextInput"/> so keyboard layouts and key repeat behave; Ctrl/Cmd+V pastes
+/// into the focused field and Ctrl/Cmd+C copies the address.
 /// <see cref="Message"/> shows why we're back here (refused, dropped, couldn't host).
 /// </summary>
 public sealed class MainMenu
@@ -117,22 +119,48 @@ public sealed class MainMenu
         if (!IsOpen || _page != Page.Join)
             return;
 
-        var text = _focus == Field.Address ? Address : Password;
+        var text = FocusedText;
         if (key == Keys.Back)
         {
-            if (text.Length == 0)
-                return;
-            text = text[..^1];
+            if (text.Length > 0)
+                SetFocusedText(text[..^1]);
         }
-        else if (text.Length < MaxFieldLength && Accepts(_focus, character))
+        else if (!IsShortcutLetter(character))
         {
-            text += character;
+            Insert(character.ToString());
         }
-        else
-        {
-            return;
-        }
+    }
 
+    /// <summary>
+    /// Adds <paramref name="text"/> to the focused field, keeping only what it accepts; pasted text is cut at its
+    /// first line break and trimmed, since copied addresses and passwords tend to bring a stray newline or space.
+    /// </summary>
+    private void Insert(string text)
+    {
+        var current = FocusedText;
+        var added = new StringBuilder();
+        foreach (var character in text)
+        {
+            if (current.Length + added.Length >= MaxFieldLength)
+                break;
+            if (Accepts(_focus, character))
+                added.Append(character);
+        }
+        if (added.Length > 0)
+            SetFocusedText(current + added);
+    }
+
+    private void Paste()
+    {
+        var text = Clipboard.GetText();
+        var lineBreak = text.IndexOfAny(new[] { '\r', '\n' });
+        Insert((lineBreak >= 0 ? text[..lineBreak] : text).Trim());
+    }
+
+    private string FocusedText => _focus == Field.Address ? Address : Password;
+
+    private void SetFocusedText(string text)
+    {
         if (_focus == Field.Address)
             Address = text;
         else
@@ -140,6 +168,19 @@ public sealed class MainMenu
         _blink = 0;
         _selected = 0; // Enter joins
         Message = null;
+    }
+
+    // The letter of a Ctrl/Cmd+C or +V shortcut, in case the platform also sends it as typed text. AltGr reads as
+    // Ctrl+Alt, so letters typed with Alt held still go through.
+    private static bool IsShortcutLetter(char character)
+    {
+        if (character is not ('c' or 'C' or 'v' or 'V'))
+            return false;
+        var keyboard = Keyboard.GetState();
+        var alt = keyboard.IsKeyDown(Keys.LeftAlt) || keyboard.IsKeyDown(Keys.RightAlt);
+        var control = keyboard.IsKeyDown(Keys.LeftControl) || keyboard.IsKeyDown(Keys.RightControl);
+        var command = OperatingSystem.IsMacOS() && (keyboard.IsKeyDown(Keys.LeftWindows) || keyboard.IsKeyDown(Keys.RightWindows));
+        return command || (control && !alt);
     }
 
     public MenuAction Update(InputState input, HudView hud, double dt)
@@ -168,6 +209,10 @@ public sealed class MainMenu
                 Focus(_focus == Field.Address ? Field.Password : Field.Address);
             if (input.WasKeyPressed(Keys.Left) || input.WasKeyPressed(Keys.Right))
                 _selected = 1 - _selected;
+            if (input.WasShortcutPressed(Keys.V))
+                Paste();
+            if (input.WasShortcutPressed(Keys.C) && _focus == Field.Address)
+                Clipboard.SetText(Address.Trim()); // never the password: it's drawn masked
         }
 
         var mouse = hud.FromScreen(input.Mouse.Position);
@@ -219,7 +264,8 @@ public sealed class MainMenu
         for (var i = 0; i < buttons.Count; i++)
             DrawButton(buttons[i], i == _selected);
 
-        var hint = _page == Page.Main ? "ARROWS AND ENTER OR CLICK" : "TAB SWITCHES FIELD  -  ESC TO GO BACK";
+        var paste = OperatingSystem.IsMacOS() ? "CMD+V" : "CTRL+V";
+        var hint = _page == Page.Main ? "ARROWS AND ENTER OR CLICK" : $"TAB: NEXT FIELD  -  {paste}: PASTE  -  ESC: BACK";
         DrawCentered(hint, panel, panel.Bottom - Padding - PixelFont.Height(SmallScale), SmallScale, Muted);
 
         _batch.Flush();

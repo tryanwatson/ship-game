@@ -2,6 +2,7 @@ using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Progression;
+using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Simulation;
@@ -57,6 +58,11 @@ public sealed class World
     public IReadOnlyList<Projectile> Projectiles => _projectiles;
 
     public IReadOnlyList<Island> Islands => _islands;
+
+    public Island? FindIsland(int id) => _islands.Find(i => i.Id == id);
+
+    /// <summary>Contracts on offer and cargo afloat. Empty until <see cref="Contracts.OpenMarkets"/>.</summary>
+    public TradeBoard Trade { get; } = new();
 
     /// <summary>Shells in the air.</summary>
     public IReadOnlyList<AreaStrike> Strikes => _strikes;
@@ -213,6 +219,7 @@ public sealed class World
         {
             RemoveShip(ship.Id);
             Emit(new ShipSunk(Tick, ship.Id, null));
+            Contracts.SpillCargo(this, ship); // their cargo stays in play for everyone else
         }
         _players.Remove(playerId);
     }
@@ -300,6 +307,7 @@ public sealed class World
         StepStrikes();
 
         Plundering.Step(this);
+        Contracts.Step(this);
 
         ResolveSinkings();
         Respawning.Step(this);
@@ -327,6 +335,7 @@ public sealed class World
             if (!victim.IsSunk)
                 continue;
             Emit(new ShipSunk(Tick, victim.Id, victim.LastHitByShipId));
+            Contracts.SpillCargo(this, victim);
             if (victim.OwnerPlayerId is { } playerId)
                 Respawning.OnPlayerSunk(this, victim, GetOrAddPlayer(playerId));
         }
@@ -487,6 +496,8 @@ public sealed class World
                 return Shipyards.TryChoosePlunder(this, ship);
             case PurchaseUpgradeCommand purchase:
                 return Shipyards.ToRejection(Shipyards.TryPurchase(this, ship, purchase.UpgradeId));
+            case PurchaseContractCommand contract:
+                return Contracts.TryPurchase(this, ship, contract.ContractId);
             case SetRudderCommand rudder:
                 ship.Rudder = Math.Clamp(rudder.Rudder, -1, 1);
                 if (ship.Rudder != 0)

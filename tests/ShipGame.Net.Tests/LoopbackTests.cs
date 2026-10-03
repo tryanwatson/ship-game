@@ -409,4 +409,33 @@ public sealed class LoopbackTests : IDisposable
         Assert.Equal(1, a.Replica.World.Waves!.Wave);
         Assert.All(a.Replica.World.Ships.Where(s => s.Team == Team.Pirates), p => Assert.Equal(NpcStance.Guarding, p.Stance));
     }
+
+    [Fact]
+    public void Trade_IsMirrored_FromTheBoardToTheHoldToTheSea()
+    {
+        var (a, b) = StartTwoPlayerRun();
+        var world = _server.World!;
+        var post = world.Islands.First(i => i.HasShipyard);
+        PumpUntil(() => a.Replica.World.Trade.OffersAt(post.Id).SequenceEqual(world.Trade.OffersAt(post.Id)), "offers on the client");
+
+        // Moor a's ship just off the trading post and buy its first contract.
+        var ship = world.GetPlayerShip(a.LocalPlayerId)!;
+        var outward = Vector2.Normalize(new Vector2(-1, -1));
+        var spot = post.Center;
+        while (post.DistanceTo(spot) < 2f)
+            spot += outward * 0.25f;
+        ship.Position = ship.PreviousPosition = spot;
+        ship.IsAnchored = true;
+        world.AddGold(a.LocalPlayerId, 100);
+        var offer = world.Trade.OffersAt(post.Id)[0];
+        a.Send(new PurchaseContractCommand(0, offer.Id));
+
+        PumpUntil(() => new[] { a, b }.All(c => c.Replica.World.FindShip(ship.Id)?.Cargo.Count == 1), "cargo aboard on both clients");
+        Assert.Equal(offer, a.Replica.World.FindShip(ship.Id)!.Cargo[0].Contract);
+        PumpUntil(() => a.Replica.World.Trade.OffersAt(post.Id).SequenceEqual(world.Trade.OffersAt(post.Id)), "the restocked board");
+
+        ship.Health = 0;
+        PumpUntil(() => new[] { a, b }.All(c => c.Replica.World.Trade.Crates.Count == 1), "the spilled crate on both clients");
+        Assert.Equal(world.Trade.Crates.Single(), b.Replica.World.Trade.Crates.Single());
+    }
 }

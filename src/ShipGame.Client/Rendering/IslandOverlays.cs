@@ -10,6 +10,7 @@ namespace ShipGame.Client.Rendering;
 /// <summary>
 /// Screen-space markers pinned to the map: a countdown over each plundered island until it's ripe again, a coin
 /// over ripe islands near the player, and a progress bar over the player's ship while plundering or weighing anchor.
+/// Trade shows here too: a crate over each island our cargo is bound for, and what each floating crate holds.
 /// </summary>
 public sealed class IslandOverlays
 {
@@ -56,10 +57,33 @@ public sealed class IslandOverlays
                 DrawCoin(screen, 8f);
         }
 
+        // Destinations of our cargo, lifted clear of any plunder marker on the same island.
+        if (localShip is not null)
+        {
+            foreach (var lot in localShip.Cargo)
+            {
+                if (world.FindIsland(lot.Contract.DestinationIslandId) is not { } destination)
+                    continue;
+                var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(destination.Center), view));
+                if (bounds.Contains(screen.ToPoint()))
+                    TradeMarkers.DrawCrate(_batch, screen - new Vector2(0f, 26f), 16f, TradeMarkers.Cargo);
+            }
+        }
+
+        // Floating cargo: how many units, and whether there's room for it aboard.
+        foreach (var crate in world.Trade.Crates)
+        {
+            var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(crate.Position), view));
+            if (!bounds.Contains(screen.ToPoint()))
+                continue;
+            var fits = localShip is null || localShip.FreeCargo >= crate.Cargo.RemainingUnits;
+            DrawCrateCount(screen - new Vector2(0f, 26f), crate.Cargo.RemainingUnits, fits);
+        }
+
         if (localShip is not null)
         {
             var position = NVector2.Lerp(localShip.PreviousPosition, localShip.Position, alpha);
-            var above = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(position) - new Vector2(0, 62f), view));
+            var above = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(position) - new Vector2(0, ShipVisuals.HealthHeight + 14f), view));
 
             // Raising cancels plundering, and dropping only happens under way, so at most one of these shows.
             if (anchorDropProgress > 0f && localShip.Anchor == AnchorState.Weighed)
@@ -103,6 +127,17 @@ public sealed class IslandOverlays
         _batch.FillConvex(lower, Hourglass);
 
         SegmentDigits.Draw(_batch, text, new Vector2(left + iconWidth + gap, top), DigitSize, DigitSpacing, DigitThickness, TimerDigits);
+    }
+
+    /// <summary>Units in a floating crate, dimmed when it won't fit in our hold.</summary>
+    private void DrawCrateCount(Vector2 center, int units, bool fits)
+    {
+        var text = units.ToString();
+        var width = SegmentDigits.Measure(text, DigitSize, DigitSpacing);
+        var top = center.Y - DigitSize.Y / 2f;
+        FillRect(new Vector2(center.X - width / 2f - 6f, top - 5f), new Vector2(width + 12f, DigitSize.Y + 10f), Panel);
+        SegmentDigits.Draw(_batch, text, new Vector2(center.X - width / 2f, top), DigitSize, DigitSpacing, DigitThickness,
+            fits ? TradeMarkers.Cargo : TimerDigits * 0.5f);
     }
 
     private void DrawCoin(Vector2 center, float radius)

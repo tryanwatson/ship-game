@@ -1,22 +1,31 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using ShipGame.Shared.Simulation;
+using ShipGame.Shared.Trading;
 using NVector2 = System.Numerics.Vector2;
 
 namespace ShipGame.Client.Rendering;
+
+/// <summary>Contracts to chart while the player picks one: <paramref name="Offers"/> in panel order, from <paramref name="Origin"/>.</summary>
+public sealed record RoutePreview(Island Origin, IReadOnlyList<TradeContract> Offers, int? HighlightedContractId);
 
 /// <summary>
 /// The full map (M). Drawn in the same isometric diamond as the game view, so directions on the map match what you
 /// see at sea. Only what your team has discovered is filled in: discovered water is blue and discovered islands
 /// appear (shipyards marked); everything else is blank parchment. The map's border is always drawn. Your ship is
-/// an arrow along its heading; teammates are dots.
+/// an arrow along its heading; teammates are dots. Where the cargo in your hold is bound is always marked, and while
+/// choosing a trade contract the map is drawn in an inset beside the panel with each offer's route on it.
 /// </summary>
 public sealed class MapView
 {
     private const float Margin = 56f;
+    private const float InsetMargin = 36f;
 
     private static readonly Color Backdrop = new Color(6, 8, 14) * 0.7f;
+    private static readonly Color InsetBackdrop = new Color(14, 18, 28) * 0.92f;
+    private static readonly Color LabelBack = new Color(10, 12, 18) * 0.75f;
     private static readonly Color Parchment = new(226, 210, 160);
     private static readonly Color ChartedSea = new(46, 92, 128);
     private static readonly Color Border = new(70, 50, 30);
@@ -36,16 +45,25 @@ public sealed class MapView
         _batch = batch;
     }
 
-    public void Draw(World world, int localPlayerId, HudView hud)
+    public void Draw(World world, int localPlayerId, HudView hud, Rectangle? area = null, RoutePreview? routes = null)
     {
         var viewport = hud.Viewport;
+        var frame = area ?? new Rectangle(0, 0, viewport.Width, viewport.Height);
+        var margin = area is null ? Margin : InsetMargin;
 
         // Backdrop and labels in plain HUD space.
         _batch.Begin(hud.Transform);
-        FillRect(new Vector2(0, 0), new Vector2(viewport.Width, viewport.Height), Backdrop);
-        PixelFont.Draw(_batch, "MAP", new Vector2(Margin, 18f), 3f, Title);
-        const string hint = "M TO CLOSE";
-        PixelFont.Draw(_batch, hint, new Vector2(viewport.Width - Margin - PixelFont.Measure(hint, 2f), 22f), 2f, Hint);
+        FillRect(new Vector2(frame.X, frame.Y), new Vector2(frame.Width, frame.Height), area is null ? Backdrop : InsetBackdrop);
+        if (area is null)
+        {
+            PixelFont.Draw(_batch, "MAP", new Vector2(Margin, 18f), 3f, Title);
+            const string hint = "M TO CLOSE";
+            PixelFont.Draw(_batch, hint, new Vector2(viewport.Width - Margin - PixelFont.Measure(hint, 2f), 22f), 2f, Hint);
+        }
+        else
+        {
+            PixelFont.Draw(_batch, "ROUTES", new Vector2(frame.X + 12f, frame.Y + 10f), 2f, Title);
+        }
         _batch.Flush();
 
         // The map itself: world coordinates through the iso projection, shrunk to fit and centred.
@@ -54,15 +72,17 @@ public sealed class MapView
         var isoRight = IsoProjection.WorldToIso(new NVector2(size.X, 0)).X;
         var isoTop = IsoProjection.WorldToIso(NVector2.Zero).Y;
         var isoBottom = IsoProjection.WorldToIso(size).Y;
-        var scale = MathF.Min((viewport.Width - 2 * Margin) / (isoRight - isoLeft), (viewport.Height - 2 * Margin) / (isoBottom - isoTop));
+        var scale = MathF.Min((frame.Width - 2 * margin) / (isoRight - isoLeft), (frame.Height - 2 * margin) / (isoBottom - isoTop));
         var center = new Vector2((isoLeft + isoRight) / 2f, (isoTop + isoBottom) / 2f);
-        var mapTransform = Matrix.CreateTranslation(-center.X, -center.Y, 0f)
+        // Iso units to HUD units; markers and labels are drawn in HUD units so they keep a readable size.
+        var toHud = Matrix.CreateTranslation(-center.X, -center.Y, 0f)
             * Matrix.CreateScale(scale, scale, 1f)
-            * Matrix.CreateTranslation(viewport.Width / 2f, viewport.Height / 2f + 12f, 0f)
-            * hud.Transform;
+            * Matrix.CreateTranslation(frame.Center.X, frame.Center.Y + 12f, 0f);
+        var mapTransform = toHud * hud.Transform;
 
         _batch.Begin(mapTransform);
-        var team = world.GetPlayerShip(localPlayerId)?.Team ?? Team.Players;
+        var localShip = world.GetPlayerShip(localPlayerId);
+        var team = localShip?.Team ?? Team.Players;
         DrawCells(world, team);
         _batch.Flush();
 
@@ -85,6 +105,94 @@ public sealed class MapView
                 DrawDot(IsoProjection.WorldToIso(ship.Position), 4f / scale, Crew);
         }
         _batch.Flush();
+
+        // Trade on top: destinations are charted whether or not the island has been discovered yet.
+        _batch.Begin(hud.Transform);
+        Vector2 ToHud(NVector2 point) => Vector2.Transform(IsoProjection.WorldToIso(point), toHud);
+        if (routes is { } preview)
+            DrawRoutes(world, preview, ToHud);
+        if (localShip is not null)
+        {
+            DrawCargoDestinations(world, localShip, ToHud);
+            if (area is null)
+                DrawHoldLegend(world, localShip, frame);
+        }
+        _batch.Flush();
+    }
+
+    /// <summary>A line from the trading post to each offer's destination, lettered and colored to match the panel.</summary>
+    private void DrawRoutes(World world, RoutePreview preview, Func<NVector2, Vector2> toHud)
+    {
+        var origin = toHud(preview.Origin.Center);
+        var anyHighlighted = preview.HighlightedContractId is not null;
+
+        // The highlighted route draws last, over the others; all lines go down before any badge so none hides a label.
+        var order = new List<int>();
+        for (var i = 0; i < preview.Offers.Count; i++)
+            order.Add(i);
+        order.Sort((x, y) => (preview.Offers[x].Id == preview.HighlightedContractId).CompareTo(preview.Offers[y].Id == preview.HighlightedContractId));
+
+        foreach (var badges in new[] { false, true })
+        {
+            foreach (var i in order)
+            {
+                var offer = preview.Offers[i];
+                if (world.FindIsland(offer.DestinationIslandId) is not { } destination)
+                    continue;
+                var highlighted = offer.Id == preview.HighlightedContractId;
+                var color = TradeMarkers.OfferColor(i) * (anyHighlighted && !highlighted ? 0.4f : 1f);
+                var to = toHud(destination.Center);
+                if (!badges)
+                {
+                    TradeMarkers.ThickLine(_batch, origin, to, highlighted ? 3.5f : 2f, color);
+                    continue;
+                }
+                TradeMarkers.DrawBadge(_batch, to, TradeMarkers.Letter(i), color, highlighted ? 22f : 16f, highlighted ? 2f : 1.5f);
+                DrawLabel(destination.Name, to + new Vector2(0f, highlighted ? 16f : 13f), 1.5f, color);
+            }
+        }
+        DrawDot(origin, 5f, You);
+    }
+
+    /// <summary>Where the cargo in our hold is bound: a crate on each destination, with a line from the ship.</summary>
+    private void DrawCargoDestinations(World world, Ship ship, Func<NVector2, Vector2> toHud)
+    {
+        var from = toHud(ship.Position);
+        foreach (var lot in ship.Cargo)
+        {
+            if (world.FindIsland(lot.Contract.DestinationIslandId) is not { } destination)
+                continue;
+            var to = toHud(destination.Center);
+            TradeMarkers.ThickLine(_batch, from, to, 1.5f, TradeMarkers.Cargo * 0.6f);
+            TradeMarkers.DrawCrate(_batch, to, 14f, TradeMarkers.Cargo);
+            DrawLabel(destination.Name, to + new Vector2(0f, 12f), 1.5f, TradeMarkers.Cargo);
+        }
+    }
+
+    /// <summary>Bottom-left of the full map: what's in the hold, and what each lot pays now.</summary>
+    private void DrawHoldLegend(World world, Ship ship, Rectangle frame)
+    {
+        const float scale = 2f;
+        var lineHeight = PixelFont.Height(scale) + 8f;
+        var y = frame.Bottom - Margin / 2f - lineHeight * (ship.Cargo.Count + 1);
+        PixelFont.Draw(_batch, $"HOLD {ship.CargoUsed}/{ship.CargoCapacity}", new Vector2(Margin, y), scale, Title);
+        foreach (var lot in ship.Cargo)
+        {
+            y += lineHeight;
+            var name = world.FindIsland(lot.Contract.DestinationIslandId)?.Name ?? "?";
+            var text = $"{name}  CARGO {lot.RemainingUnits}/{lot.Contract.CargoUnits}  PAYS {lot.Payout}";
+            TradeMarkers.DrawCrate(_batch, new Vector2(Margin + 6f, y + PixelFont.Height(scale) / 2f), 10f, TradeMarkers.Cargo);
+            PixelFont.Draw(_batch, text, new Vector2(Margin + 20f, y), scale, TradeMarkers.Cargo);
+        }
+    }
+
+    /// <summary>Text centered under <paramref name="top"/>, on a dark backing so it reads over land and sea alike.</summary>
+    private void DrawLabel(string text, Vector2 top, float scale, Color color)
+    {
+        var width = PixelFont.Measure(text, scale);
+        var height = PixelFont.Height(scale);
+        FillRect(new Vector2(top.X - width / 2f - 3f, top.Y - 2f), new Vector2(width + 6f, height + 4f), LabelBack);
+        PixelFont.Draw(_batch, text, new Vector2(top.X - width / 2f, top.Y), scale, color);
     }
 
     private void DrawCells(World world, Team team)

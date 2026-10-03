@@ -4,6 +4,7 @@ using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Stats;
+using ShipGame.Shared.Trading;
 
 namespace ShipGame.Net;
 
@@ -32,6 +33,22 @@ public static class Wire
         return value < 0 ? null : value;
     }
 
+    public static void Put(this NetDataWriter w, TradeContract c)
+    {
+        w.Put(c.Id); w.Put(c.OriginIslandId); w.Put(c.DestinationIslandId); w.Put(c.Cost); w.Put(c.Payout); w.Put(c.CargoUnits);
+    }
+
+    public static TradeContract GetContract(this NetDataReader r) =>
+        new(r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt());
+
+    public static void Put(this NetDataWriter w, CargoLot lot)
+    {
+        w.Put(lot.Contract);
+        w.Put(lot.RemainingUnits);
+    }
+
+    public static CargoLot GetCargoLot(this NetDataReader r) => new(r.GetContract(), r.GetInt());
+
     // ---- Commands (client -> server; PlayerId is never sent, the server knows who's talking) ----------
 
     private enum CommandTag : byte
@@ -44,6 +61,7 @@ public static class Wire
         AnchorKey = 6,
         ChoosePlunder = 7,
         PurchaseUpgrade = 8,
+        PurchaseContract = 9,
     }
 
     public static void PutCommand(this NetDataWriter w, Command command)
@@ -81,6 +99,10 @@ public static class Wire
                 w.Put((byte)CommandTag.PurchaseUpgrade);
                 w.Put(purchase.UpgradeId);
                 break;
+            case PurchaseContractCommand contract:
+                w.Put((byte)CommandTag.PurchaseContract);
+                w.Put(contract.ContractId);
+                break;
             default:
                 throw new ArgumentException($"No wire format for {command.GetType().Name}.");
         }
@@ -97,6 +119,7 @@ public static class Wire
         CommandTag.AnchorKey => new AnchorKeyCommand(playerId, r.GetBool()),
         CommandTag.ChoosePlunder => new ChoosePlunderCommand(playerId),
         CommandTag.PurchaseUpgrade => new PurchaseUpgradeCommand(playerId, r.GetString(64)),
+        CommandTag.PurchaseContract => new PurchaseContractCommand(playerId, r.GetInt()),
         var tag => throw new InvalidDataException($"Unknown command tag {tag}."),
     };
 
@@ -121,6 +144,12 @@ public static class Wire
         AreaStrikeLaunched = 15,
         AreaStrikeImpact = 16,
         AreaDiscovered = 17,
+        ContractsOffered = 18,
+        ContractPurchased = 19,
+        ContractDelivered = 20,
+        CargoDropped = 21,
+        CargoRecovered = 22,
+        CargoLost = 23,
     }
 
     public static void PutEvent(this NetDataWriter w, WorldEvent e)
@@ -186,6 +215,28 @@ public static class Wire
             case RunEnded x:
                 Begin(w, EventTag.RunEnded, x);
                 break;
+            case ContractsOffered x:
+                Begin(w, EventTag.ContractsOffered, x);
+                w.Put(x.IslandId);
+                w.Put((byte)x.Offers.Count);
+                foreach (var contract in x.Offers)
+                    w.Put(contract);
+                break;
+            case ContractPurchased x:
+                Begin(w, EventTag.ContractPurchased, x); w.Put(x.ShipId); w.Put(x.PlayerId); w.Put(x.Contract);
+                break;
+            case ContractDelivered x:
+                Begin(w, EventTag.ContractDelivered, x); w.Put(x.ShipId); w.Put(x.PlayerId); w.Put(x.ContractId); w.Put(x.Payout);
+                break;
+            case CargoDropped x:
+                Begin(w, EventTag.CargoDropped, x); w.Put(x.CrateId); w.Put(x.Position); w.Put(x.Cargo);
+                break;
+            case CargoRecovered x:
+                Begin(w, EventTag.CargoRecovered, x); w.Put(x.CrateId); w.Put(x.ShipId); w.Put(x.PlayerId);
+                break;
+            case CargoLost x:
+                Begin(w, EventTag.CargoLost, x); w.Put(x.ContractId);
+                break;
             default:
                 throw new ArgumentException($"No wire format for {e.GetType().Name}.");
         }
@@ -236,6 +287,20 @@ public static class Wire
             case EventTag.PlayerSunk: return new PlayerSunk(tick, r.GetInt(), r.GetInt());
             case EventTag.PlayerRespawned: return new PlayerRespawned(tick, r.GetInt(), r.GetInt());
             case EventTag.RunEnded: return new RunEnded(tick);
+            case EventTag.ContractsOffered:
+            {
+                var islandId = r.GetInt();
+                var count = r.GetByte();
+                var offers = new TradeContract[count];
+                for (var i = 0; i < count; i++)
+                    offers[i] = r.GetContract();
+                return new ContractsOffered(tick, islandId, offers);
+            }
+            case EventTag.ContractPurchased: return new ContractPurchased(tick, r.GetInt(), r.GetInt(), r.GetContract());
+            case EventTag.ContractDelivered: return new ContractDelivered(tick, r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt());
+            case EventTag.CargoDropped: return new CargoDropped(tick, r.GetInt(), r.GetVector2(), r.GetCargoLot());
+            case EventTag.CargoRecovered: return new CargoRecovered(tick, r.GetInt(), r.GetInt(), r.GetInt());
+            case EventTag.CargoLost: return new CargoLost(tick, r.GetInt());
             default: throw new InvalidDataException($"Unknown event tag {tag}.");
         }
     }
@@ -325,7 +390,7 @@ public static class Wire
         foreach (var value in new[]
                  {
                      s.MaxSpeed, s.Acceleration, s.CoastTimeConstant, s.MinDeceleration, s.MinTurnRadius, s.TurnRadiusAtMaxSpeed,
-                     s.Radius, s.Length, s.Beam, s.MaxHealth, s.CooldownSpeed, s.WeaponDamage, s.ProjectileSpeed, s.WeaponRange,
+                     s.Radius, s.Length, s.Beam, s.MaxHealth, s.CooldownSpeed, s.WeaponDamage, s.ProjectileSpeed, s.WeaponRange, s.CargoCapacity,
                  })
             w.Put(value);
     }
@@ -334,7 +399,7 @@ public static class Wire
         MaxSpeed: r.GetFloat(), Acceleration: r.GetFloat(), CoastTimeConstant: r.GetFloat(), MinDeceleration: r.GetFloat(),
         MinTurnRadius: r.GetFloat(), TurnRadiusAtMaxSpeed: r.GetFloat(), Radius: r.GetFloat(), Length: r.GetFloat(),
         Beam: r.GetFloat(), MaxHealth: r.GetFloat(), CooldownSpeed: r.GetFloat(), WeaponDamage: r.GetFloat(),
-        ProjectileSpeed: r.GetFloat(), WeaponRange: r.GetFloat());
+        ProjectileSpeed: r.GetFloat(), WeaponRange: r.GetFloat(), CargoCapacity: r.GetFloat());
 
     // ---- Snapshots (chunked: each chunk is one unreliable packet) ---------------------------------------
 

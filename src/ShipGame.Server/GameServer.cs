@@ -8,6 +8,7 @@ using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
+using ShipGame.Shared.Trading;
 
 namespace ShipGame.Server;
 
@@ -195,9 +196,11 @@ public sealed class GameServer : IDisposable
 
     private void StartRun()
     {
-        var world = new World(Archipelago.Size) { Waves = new WaveDirector(_runSeed++), FriendlyFire = FriendlyFire };
+        var seed = _runSeed++;
+        var world = new World(Archipelago.Size) { Waves = new WaveDirector(seed), FriendlyFire = FriendlyFire };
         foreach (var island in Archipelago.CreateIslands())
             world.AddIsland(island);
+        Contracts.OpenMarkets(world, seed);
 
         // Line the crew up abreast at the center, facing the same way.
         var players = _byPeerId.Values.OrderBy(p => p.PlayerId).ToList();

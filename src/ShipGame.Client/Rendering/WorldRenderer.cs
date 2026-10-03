@@ -8,22 +8,18 @@ using NVector2 = System.Numerics.Vector2;
 
 namespace ShipGame.Client.Rendering;
 
-/// <summary>Draws the world with placeholder geometry: a water grid and flat hull polygons.</summary>
+/// <summary>Draws the isometric sea, shaded sloops, islands, and readable combat overlays.</summary>
 public sealed class WorldRenderer
 {
-    private const float MastHeight = 36f;
     private const float CannonballHeight = 10f;
     private const float HealthBarWidth = 44f;
     private const float HealthBarHeight = 5f;
 
-    private static readonly Color Water = new(22, 64, 104);
-    private static readonly Color OutOfBoundsWater = new(14, 40, 68);
+    private static readonly Color Water = new(26, 85, 104);
+    private static readonly Color OutOfBoundsWater = new(19, 53, 71);
     private static readonly Color GridLine = new Color(255, 255, 255) * 0.06f;
-    private static readonly Color PlayerHull = new(176, 130, 82);
-    private static readonly Color NpcHull = new(120, 120, 128);
-    private static readonly Color TargetedHull = new(200, 70, 60);
     private static readonly Color HullOutline = new(30, 20, 12);
-    private static readonly Color Shallows = new(60, 120, 150);
+    private static readonly Color Shallows = new(64, 142, 145);
     private static readonly Color Sand = new(214, 196, 140);
     private static readonly Color Grass = new(92, 140, 70);
     private static readonly Color Shoreline = new(120, 100, 60);
@@ -81,24 +77,41 @@ public sealed class WorldRenderer
 
     private static readonly Color HealthBack = new Color(0, 0, 0) * 0.6f;
     private static readonly Color HealthOwn = new(90, 200, 90);
+    private static readonly Color HealthCrew = new(77, 208, 192);
     private static readonly Color HealthEnemy = new(210, 70, 60);
 
     private readonly PrimitiveBatch _batch;
+    private readonly SeaVisuals _sea;
+    private readonly ShipVisuals _ships;
+
+    /// <summary>Optional collision/navigation grid for debugging; normal play shows waves instead.</summary>
+    public bool ShowWaterGrid { get; set; }
 
     public WorldRenderer(PrimitiveBatch batch)
     {
         _batch = batch;
+        _sea = new SeaVisuals(batch);
+        _ships = new ShipVisuals(batch);
     }
 
     public void Draw(World world, float alpha, int localPlayerId, Matrix view, AimPreview? aim = null)
     {
         // Shells and warnings run on ticks; alpha is how far we are into the latest one.
         var renderTick = world.Tick - 1 + alpha;
+        var time = (world.Tick + alpha) / SimConstants.TickRate;
         _batch.Begin(view);
 
         DrawWater(world.WorldSize);
+        _sea.DrawSurface(world, view, time);
+        _sea.DrawShipWater(world, alpha, time);
+        _batch.Flush(); // Water strokes must be below land, buildings, and targeting overlays.
         foreach (var island in world.Islands)
+        {
             DrawIsland(island);
+            _batch.Flush();
+            _sea.DrawShoreFoam(island, time);
+            _batch.Flush();
+        }
 
         // Guarding pirates show how close you can get before they come for you.
         foreach (var ship in world.Ships)
@@ -106,6 +119,9 @@ public sealed class WorldRenderer
             if (ship.Stance == NpcStance.Guarding)
                 DrawGroundCircle(NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), HunterBehavior.AggroRange, AggroRing);
         }
+
+        foreach (var crate in world.Trade.Crates)
+            DrawFloatingCrate(crate.Position);
 
         // Where shells will land: public, so anyone can get out of the way.
         foreach (var strike in world.Strikes)
@@ -129,15 +145,14 @@ public sealed class WorldRenderer
             var heading = Angles.Lerp(ship.PreviousHeading, ship.Heading, alpha);
             // Anything our shots can hurt (pirates, and other players with friendly fire on) lights up in our lanes.
             var targetable = localShip is not null && world.CanDamage(localShip.Id, localShip.Team, ship);
-            var color = targetable && IsInFiringLane(localShip, ship) ? TargetedHull
-                : ship.OwnerPlayerId is not null ? PlayerHull
-                : NpcHull;
+            var targeted = targetable && IsInFiringLane(localShip, ship);
 
             if (ship.IsAnchored)
                 DrawAnchorRode(ship, pos, heading);
             if (ship == localShip)
                 DrawBroadsideRing(ship, pos, heading);
-            DrawShip(ship, pos, heading, color);
+            _batch.Flush();
+            _ships.Draw(ship, pos, heading, ship == localShip, targeted, time);
             _batch.Flush(); // Flush per ship so nearer hulls overlap farther ones.
         }
 
@@ -161,6 +176,9 @@ public sealed class WorldRenderer
         var margin = new NVector2(World.OutOfBoundsMargin);
         FillWorldRect(-margin, size + margin, OutOfBoundsWater);
         FillWorldRect(NVector2.Zero, size, Water);
+
+        if (!ShowWaterGrid)
+            return;
 
         for (var x = 0; x <= (int)size.X; x++)
             _batch.Line(IsoProjection.WorldToIso(new NVector2(x, 0)), IsoProjection.WorldToIso(new NVector2(x, size.Y)), GridLine);
@@ -240,15 +258,18 @@ public sealed class WorldRenderer
     }
 
     /// <summary>
-    /// Flat placeholder island: a pale shallows ring, a sand beach (the actual collision outline), and a grassy
-    /// interior. Each layer is the outline scaled about the island's center, which stays convex.
+    /// Shallow water bands and a beach at the actual collision outline. Each layer remains convex.
     /// </summary>
     private void DrawIsland(Island island)
     {
         var outline = island.Outline;
         Span<Vector2> layer = stackalloc Vector2[outline.Length];
 
-        ScaledOutline(island, outline, 1f + 1.2f / island.BoundingRadius, layer);
+        ScaledOutline(island, outline, 1f + 1.9f / island.BoundingRadius, layer);
+        _batch.FillConvex(layer, Color.Lerp(Water, Shallows, 0.28f));
+        ScaledOutline(island, outline, 1f + 1.3f / island.BoundingRadius, layer);
+        _batch.FillConvex(layer, Color.Lerp(Water, Shallows, 0.55f));
+        ScaledOutline(island, outline, 1f + 0.7f / island.BoundingRadius, layer);
         _batch.FillConvex(layer, Shallows);
 
         ScaledOutline(island, outline, 1f, layer);
@@ -353,20 +374,26 @@ public sealed class WorldRenderer
         _batch.FillConvex(lane, color);
     }
 
-    private void DrawShip(Ship ship, NVector2 pos, float heading, Color color)
+    /// <summary>Spilled cargo: a little crate riding in the water, with a ring of foam so it shows against the sea.</summary>
+    private void DrawFloatingCrate(NVector2 position)
     {
-        // The same outline the simulation hits against, placed at the interpolated pose and projected.
-        Span<NVector2> outline = stackalloc NVector2[HullShape.PointCount];
-        HullShape.GetWorldOutline(pos, heading, ship.Stats, outline);
-        Span<Vector2> hull = stackalloc Vector2[HullShape.PointCount];
-        for (var i = 0; i < hull.Length; i++)
-            hull[i] = IsoProjection.WorldToIso(outline[i]);
+        DrawGroundCircle(position, 0.8f, AnchorRipple);
+        const float half = 0.35f;
+        const float height = 8f;
+        var top = IsoProjection.WorldToIso(position + new NVector2(-half, -half));
+        var right = IsoProjection.WorldToIso(position + new NVector2(half, -half));
+        var bottom = IsoProjection.WorldToIso(position + new NVector2(half, half));
+        var left = IsoProjection.WorldToIso(position + new NVector2(-half, half));
+        var up = new Vector2(0, -height);
 
-        _batch.FillConvex(hull, color);
-        _batch.Outline(hull, HullOutline);
-
-        var mastBase = IsoProjection.WorldToIso(pos);
-        _batch.Line(mastBase, mastBase - new Vector2(0, MastHeight), HullOutline);
+        Span<Vector2> face = stackalloc Vector2[4];
+        face[0] = left; face[1] = bottom; face[2] = bottom + up; face[3] = left + up;
+        _batch.FillConvex(face, HutWallLit);
+        face[0] = bottom; face[1] = right; face[2] = right + up; face[3] = bottom + up;
+        _batch.FillConvex(face, HutWallShade);
+        face[0] = top + up; face[1] = right + up; face[2] = bottom + up; face[3] = left + up;
+        _batch.FillConvex(face, TradeMarkers.Cargo);
+        _batch.Outline(face, HullOutline);
     }
 
     private void DrawCannonball(Projectile projectile, NVector2 pos)
@@ -472,12 +499,12 @@ public sealed class WorldRenderer
 
     private void DrawHealthBar(Ship ship, NVector2 pos, bool isLocal)
     {
-        var anchor = IsoProjection.WorldToIso(pos) - new Vector2(HealthBarWidth / 2f, MastHeight + 12f);
+        var anchor = IsoProjection.WorldToIso(pos) - new Vector2(HealthBarWidth / 2f, ShipVisuals.HealthHeight);
         var fraction = Math.Clamp(ship.Health / ship.Stats.MaxHealth, 0f, 1f);
 
         FillRect(anchor, new Vector2(HealthBarWidth, HealthBarHeight), HealthBack);
         FillRect(anchor + Vector2.One, new Vector2((HealthBarWidth - 2f) * fraction, HealthBarHeight - 2f),
-            isLocal ? HealthOwn : HealthEnemy);
+            isLocal ? HealthOwn : ship.Team == Team.Players ? HealthCrew : HealthEnemy);
 
         if (ship.IsAnchored)
             DrawAnchorMark(anchor + new Vector2(-9f, HealthBarHeight / 2f));
