@@ -286,15 +286,53 @@ public class ShipMovementTests
         Assert.Equal(expected, MathF.Abs(turned), 4);
     }
 
+    [Theory]
+    [InlineData(1, 1f)]
+    [InlineData(-1, -1f)]
+    public void Rudder_RowsAStoppedShipRoundOnTheSpot(int rudder, float expectedTurnSign)
+    {
+        var (world, ship) = CreateWorld(new Vector2(30, 30));
+
+        world.Enqueue(new SetRudderCommand(PlayerId, rudder));
+        RunTicks(world, SimConstants.TickRate * 2);
+
+        // Two seconds at the rowing rate, without going anywhere.
+        Assert.Equal(expectedTurnSign * ShipMovement.RowingTurnRate * 2f, Angles.Delta(0f, ship.Heading), 3);
+        Assert.Equal(new Vector2(30, 30), ship.Position);
+        Assert.Equal(0f, ship.Speed);
+    }
+
     [Fact]
-    public void Rudder_DoesNotTurnAStoppedShip()
+    public void Rowing_StopsWhenTheHelmIsCentered()
     {
         var (world, ship) = CreateWorld(new Vector2(30, 30));
 
         world.Enqueue(new SetRudderCommand(PlayerId, 1));
-        RunTicks(world, SimConstants.TickRate * 2);
+        RunTicks(world, SimConstants.TickRate);
+        world.Enqueue(new SetRudderCommand(PlayerId, 0));
+        world.Step();
+        var heading = ship.Heading;
+        RunTicks(world, SimConstants.TickRate);
 
-        Assert.Equal(0f, ship.Heading);
+        Assert.Equal(heading, ship.Heading);
+    }
+
+    [Fact]
+    public void Rowing_IsOnlyWithTheSailsFurled_AndNotAtAnchor()
+    {
+        var (world, ship) = CreateWorld(new Vector2(30, 30));
+        Assert.False(ShipMovement.IsRowing(ship)); // helm amidships
+
+        ship.Rudder = 1;
+        Assert.True(ShipMovement.IsRowing(ship));
+        ship.Throttle = 1;
+        Assert.False(ShipMovement.IsRowing(ship)); // under sail it steers along its turning circle
+        ship.Throttle = 0;
+        ship.IsAnchored = true;
+        Assert.False(ShipMovement.IsRowing(ship));
+
+        RunTicks(world, SimConstants.TickRate);
+        Assert.Equal(0f, ship.Heading); // held fast
     }
 
     [Fact]

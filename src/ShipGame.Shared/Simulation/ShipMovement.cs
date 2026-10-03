@@ -3,9 +3,10 @@ using System.Numerics;
 namespace ShipGame.Shared.Simulation;
 
 /// <summary>
-/// Arcade ship handling built on one rule: ships turn along arcs, never in place. Heading can change by at most
+/// Arcade ship handling built on one rule: ships turn along arcs. Heading can change by at most
 /// (distance travelled / turning radius), so a ship needs way on to steer, and the radius tightens as it slows.
-/// Ships always move bow-first.
+/// Ships always move bow-first. The one exception is rowing: with the sails furled, the helm swings the ship round
+/// slowly on the spot (<see cref="RowingTurnRate"/>), so a stopped ship can line up a broadside.
 ///
 /// Steering relies on one geometric fact: turning hard toward a target reaches it if and only if the target lies
 /// outside the turning circle, and since that circle stays put while we sail round it, a target outside it stays
@@ -20,6 +21,12 @@ public static class ShipMovement
 
     /// <summary>Sail setting a stopped ship raises to when given a move order.</summary>
     public const int AutopilotThrottle = 3;
+
+    /// <summary>How fast the crew can row a ship round with the sails furled, in radians per second (20 degrees).</summary>
+    public const float RowingTurnRate = 20f * MathF.PI / 180f;
+
+    /// <summary>Rowing: sails furled, helm over, and no move order (move orders always set sail).</summary>
+    public static bool IsRowing(Ship ship) => !ship.IsAnchored && ship.Throttle == 0 && ship.MoveTarget is null && ship.Rudder != 0;
 
     // Fraction of cruise speed used for turns too tight to make at cruise. Lower speed means a tighter circle;
     // players who want tighter still can shorten sail.
@@ -106,12 +113,13 @@ public static class ShipMovement
             ? MathF.Min(desiredSpeed, ship.Speed + stats.Acceleration * dt)
             : MathF.Max(desiredSpeed, ship.Speed - stats.DecelerationAt(ship.Speed) * dt);
 
-        if (canTurn && ship.Speed > 0f)
-        {
-            // Heading changes by at most arc length / radius: no way on, no turning.
-            var maxTurn = ship.Speed * dt / stats.TurnRadiusAt(ship.Speed);
+        // Heading changes by at most arc length / radius: no way on, no turning. Unless rowing, which turns at least
+        // at the rowing rate (a ship still coasting after furling keeps its faster arc while that lasts).
+        var maxTurn = ship.Speed > 0f ? ship.Speed * dt / stats.TurnRadiusAt(ship.Speed) : 0f;
+        if (IsRowing(ship))
+            maxTurn = MathF.Max(maxTurn, RowingTurnRate * dt);
+        if (canTurn && maxTurn > 0f)
             ship.Heading = Angles.Wrap(ship.Heading + Math.Clamp(headingError, -maxTurn, maxTurn));
-        }
 
         // A ship that isn't making way is set downwind; under way, the sails and keel hold her course.
         var exposure = 1f - MathF.Min(1f, ship.Speed / WindDriftCutoffSpeed);

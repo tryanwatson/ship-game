@@ -19,9 +19,9 @@ public enum MenuAction
 
 /// <summary>
 /// The title menu: play solo, host, or join a server by address (and password, if it has one). Arrow keys and
-/// Enter or the mouse; Tab or Up/Down move between the join page's fields; Esc backs out (and quits from the top
-/// page). Typing goes through <see cref="OnTextInput"/> so keyboard layouts and key repeat behave; Ctrl/Cmd+V pastes
-/// into the focused field and Ctrl/Cmd+C copies the address.
+/// Enter or the mouse; Tab or Up/Down move between the join page's fields; Esc backs out of the join page (it never
+/// quits; that's the Quit button). Typing goes through <see cref="OnTextInput"/> so keyboard layouts and key repeat
+/// behave; Ctrl/Cmd+V pastes into the focused field and Ctrl/Cmd+C copies the address.
 /// <see cref="Message"/> shows why we're back here (refused, dropped, couldn't host).
 /// </summary>
 public sealed class MainMenu
@@ -188,11 +188,12 @@ public sealed class MainMenu
         _blink += dt;
         var items = _page == Page.Main ? MainItems : JoinItems;
 
+        // Esc backs out of the join page; on the top page it does nothing (quitting takes the Quit button), so a
+        // stray second press after leaving a game doesn't close it.
         if (input.WasKeyPressed(Keys.Escape))
         {
-            if (_page == Page.Main)
-                return MenuAction.Quit;
-            GoTo(Page.Main, Array.IndexOf(MainItems, Item.Join));
+            if (_page != Page.Main)
+                GoTo(Page.Main, Array.IndexOf(MainItems, Item.Join));
             return MenuAction.None;
         }
 
