@@ -173,6 +173,9 @@ public sealed class ClientReplica
                 case AreaStrikeImpact impact:
                     World.RemoveStrike(impact.StrikeId);
                     break;
+                case AreaDiscovered discovered:
+                    World.Discovery.Reveal(discovered.Team, discovered.Cells);
+                    break;
                 case RunEnded:
                     World.EndRun();
                     break;

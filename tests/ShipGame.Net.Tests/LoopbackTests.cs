@@ -217,6 +217,21 @@ public sealed class LoopbackTests : IDisposable
     }
 
     [Fact]
+    public void Discovery_ReachesEveryClient_AsOneTeamMap()
+    {
+        var (a, b) = StartTwoPlayerRun();
+        a.Send(new AdjustThrottleCommand(0, 5)); // only a sails; b's map should fill in too
+        PumpFor(3.0);
+
+        var server = _server.World!.Discovery;
+        Assert.True(server.DiscoveredCount(Team.Players) > 0);
+        // Clients draw a little behind the server, so allow for the last few ticks' discoveries still in flight.
+        foreach (var client in new[] { a, b })
+            Assert.InRange(client.Replica.World.Discovery.DiscoveredCount(Team.Players),
+                server.DiscoveredCount(Team.Players) - 40, server.DiscoveredCount(Team.Players));
+    }
+
+    [Fact]
     public void Rejections_GoOnlyToTheSender()
     {
         var (a, b) = StartTwoPlayerRun();

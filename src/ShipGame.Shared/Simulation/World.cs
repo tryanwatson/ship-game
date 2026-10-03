@@ -18,6 +18,7 @@ public sealed class World
     private readonly List<Island> _islands = new();
     private readonly Dictionary<int, int> _plunderCooldowns = new();
     private readonly List<WorldEvent> _events = new();
+    private readonly Dictionary<int, int> _lastSightCell = new();
     private readonly Queue<Command> _pendingCommands = new();
     private readonly Dictionary<int, PlayerState> _players = new();
     private int _nextEntityId = 1;
@@ -32,7 +33,11 @@ public sealed class World
     public World(Vector2 worldSize)
     {
         WorldSize = worldSize;
+        Discovery = new Discovery(worldSize);
     }
+
+    /// <summary>What each team has seen of the map. Player ships reveal it as they sail.</summary>
+    public Discovery Discovery { get; }
 
     /// <summary>Size of the playable area. Move targets are clamped to it; ships may drift into the margin.</summary>
     public Vector2 WorldSize { get; }
@@ -190,7 +195,11 @@ public sealed class World
     public Ship? FindShip(int id) => _ships.Find(s => s.Id == id);
 
     /// <summary>Removes a ship outright (no sinking, no rewards): for disconnects and for mirroring the server.</summary>
-    public bool RemoveShip(int id) => _ships.RemoveAll(s => s.Id == id) > 0;
+    public bool RemoveShip(int id)
+    {
+        _lastSightCell.Remove(id);
+        return _ships.RemoveAll(s => s.Id == id) > 0;
+    }
 
     /// <summary>Adds an already-built projectile, for a client flying the server's shots.</summary>
     public void AddProjectile(Projectile projectile) => _projectiles.Add(projectile);
@@ -282,6 +291,8 @@ public sealed class World
                 Emit(new ShipGrounded(Tick, ship.Id));
         }
 
+        RevealMap();
+
         foreach (var ship in _ships)
             ShipMovement.ClampToBounds(ship, new Vector2(-OutOfBoundsMargin), WorldSize + new Vector2(OutOfBoundsMargin));
 
@@ -320,7 +331,43 @@ public sealed class World
                 Respawning.OnPlayerSunk(this, victim, GetOrAddPlayer(playerId));
         }
 
+        foreach (var ship in _ships)
+        {
+            if (ship.IsSunk)
+                _lastSightCell.Remove(ship.Id);
+        }
         _ships.RemoveAll(s => s.IsSunk);
+    }
+
+    /// <summary>
+    /// Each player ship reveals the map around it for its team; new discoveries are announced once per team per tick.
+    /// Sight is taken from the center of the ship's current cell and only rescanned when it enters a new cell, since
+    /// nothing new can come into view before then.
+    /// </summary>
+    private void RevealMap()
+    {
+        Dictionary<Team, List<int>>? revealed = null;
+        foreach (var ship in _ships)
+        {
+            if (ship.OwnerPlayerId is null)
+                continue; // pirates don't map anything
+            if (Discovery.CellAt(ship.Position) is not { } cell
+                || (_lastSightCell.TryGetValue(ship.Id, out var last) && last == cell))
+                continue;
+            _lastSightCell[ship.Id] = cell;
+
+            var cells = Discovery.RevealAround(ship.Team, Discovery.CellCenter(cell));
+            if (cells.Count == 0)
+                continue;
+            revealed ??= new Dictionary<Team, List<int>>();
+            if (!revealed.TryGetValue(ship.Team, out var list))
+                revealed[ship.Team] = list = new List<int>();
+            list.AddRange(cells);
+        }
+        if (revealed is null)
+            return;
+        foreach (var (team, cells) in revealed)
+            Emit(new AreaDiscovered(Tick, team, cells));
     }
 
     /// <summary>Bursts every shell that's due: hurts each hostile hull within its blast radius.</summary>

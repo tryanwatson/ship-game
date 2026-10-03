@@ -54,6 +54,7 @@ public class WireTests
         new object[] { new ProjectileSpawned(10, 41, 3, Team.Players, new Vector2(1, 2), new Vector2(20, -5), 22f, 19, 0.3f) },
         new object[] { new AreaStrikeLaunched(10, 50, 3, Team.Players, new Vector2(60, 60), new Vector2(75, 61), 2.5f, 35f, 42) },
         new object[] { new AreaStrikeImpact(42, 50, new Vector2(75, 61), 2.5f) },
+        new object[] { new AreaDiscovered(10, Team.Players, new[] { 0, 47, 1200, 2303 }) },
         new object[] { new ProjectileImpact(10, 40, 5) },
         new object[] { new ProjectileImpact(10, 40, null) },
         new object[] { new AbilityCast(10, 3, AbilitySlot.One, 71, 1) },

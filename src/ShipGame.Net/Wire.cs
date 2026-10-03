@@ -119,6 +119,7 @@ public static class Wire
         RunEnded = 14,
         AreaStrikeLaunched = 15,
         AreaStrikeImpact = 16,
+        AreaDiscovered = 17,
     }
 
     public static void PutEvent(this NetDataWriter w, WorldEvent e)
@@ -143,6 +144,13 @@ public static class Wire
                 break;
             case AreaStrikeImpact x:
                 Begin(w, EventTag.AreaStrikeImpact, x); w.Put(x.StrikeId); w.Put(x.Target); w.Put(x.Radius);
+                break;
+            case AreaDiscovered x:
+                Begin(w, EventTag.AreaDiscovered, x);
+                w.Put((byte)x.Team);
+                w.Put((ushort)x.Cells.Count);
+                foreach (var cell in x.Cells)
+                    w.Put((ushort)cell);
                 break;
             case ProjectileImpact x:
                 Begin(w, EventTag.ProjectileImpact, x); w.Put(x.ProjectileId); w.PutOptional(x.ShipId);
@@ -202,6 +210,15 @@ public static class Wire
                 return new AreaStrikeLaunched(tick, r.GetInt(), r.GetInt(), (Team)r.GetByte(), r.GetVector2(), r.GetVector2(), r.GetFloat(), r.GetFloat(), r.GetLong());
             case EventTag.AreaStrikeImpact:
                 return new AreaStrikeImpact(tick, r.GetInt(), r.GetVector2(), r.GetFloat());
+            case EventTag.AreaDiscovered:
+            {
+                var team = (Team)r.GetByte();
+                var count = r.GetUShort();
+                var cells = new int[count];
+                for (var i = 0; i < count; i++)
+                    cells[i] = r.GetUShort();
+                return new AreaDiscovered(tick, team, cells);
+            }
             case EventTag.ProjectileImpact: return new ProjectileImpact(tick, r.GetInt(), r.GetOptionalInt());
             case EventTag.AbilityCast: return new AbilityCast(tick, r.GetInt(), (AbilitySlot)r.GetByte(), r.GetInt(), r.GetByte());
             case EventTag.ShipGrounded: return new ShipGrounded(tick, r.GetInt());

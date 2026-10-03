@@ -58,6 +58,8 @@ public sealed class GameClient : Game
     private IslandOverlays _islandOverlays = null!;
     private ShipyardPanel _shipyardPanel = null!;
     private StatusBanner _statusBanner = null!;
+    private MapView _mapView = null!;
+    private bool _mapOpen;
 
     private bool _cameraLocked = true;
     private NVector2 _lastMoveOrder;
@@ -171,6 +173,7 @@ public sealed class GameClient : Game
         _islandOverlays = new IslandOverlays(_primitives);
         _shipyardPanel = new ShipyardPanel(_primitives);
         _statusBanner = new StatusBanner(_primitives);
+        _mapView = new MapView(_primitives);
     }
 
     protected override void UnloadContent()
@@ -243,6 +246,8 @@ public sealed class GameClient : Game
         var gold = _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
         _hudCounters.Draw(gold, _session.World.Waves?.Wave ?? 0, Hud);
         _shipyardPanel.Draw(_session.World, localShip, _input, Hud);
+        if (_mapOpen)
+            _mapView.Draw(_session.World, LocalPlayerId, Hud);
         DrawStatusBanner();
         base.Draw(gameTime);
     }
@@ -250,6 +255,9 @@ public sealed class GameClient : Game
     private void HandleOrders(double dt)
     {
         UpdateAnchorKey(dt);
+
+        if (_input.WasKeyPressed(Keys.M))
+            _mapOpen = !_mapOpen; // the game carries on underneath
 
         if (_input.WasKeyPressed(Keys.W) || _input.WasKeyPressed(Keys.Space))
             _session.Send(new AdjustThrottleCommand(LocalPlayerId, +1));

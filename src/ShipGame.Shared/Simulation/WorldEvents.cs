@@ -27,6 +27,16 @@ public sealed record AreaStrikeLaunched(
     long Tick, int StrikeId, int OwnerShipId, Team Team, Vector2 Origin, Vector2 Target, float Radius, float Damage, long ImpactTick)
     : WorldEvent(Tick);
 
+/// <summary>Map cells a team has just discovered (see <see cref="Discovery"/>).</summary>
+public sealed record AreaDiscovered(long Tick, Team Team, IReadOnlyList<int> Cells) : WorldEvent(Tick)
+{
+    // Records compare lists by reference; compare the cells themselves.
+    public bool Equals(AreaDiscovered? other) =>
+        other is not null && Tick == other.Tick && Team == other.Team && Cells.SequenceEqual(other.Cells);
+
+    public override int GetHashCode() => HashCode.Combine(Tick, Team, Cells.Count);
+}
+
 /// <summary>A shell burst. Damage arrives via ship health; this is for the explosion.</summary>
 public sealed record AreaStrikeImpact(long Tick, int StrikeId, Vector2 Target, float Radius) : WorldEvent(Tick);
 
