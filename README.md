@@ -9,7 +9,8 @@ Download the zip for your system from [Releases](https://github.com/tryanwatson/
 
 - **Windows**: run `ShipGame\ShipGame.Client.exe`. If SmartScreen says "Windows protected your PC", click
   **More info → Run anyway** (the build isn't code-signed).
-- **macOS (Apple Silicon)**: move `ShipGame.app` to Applications, then run this once in Terminal. The app isn't
+- **macOS (Apple Silicon)**: unzip by double-clicking the zip in Finder (other unzip tools drop the app's
+  signature and it won't open), move `ShipGame.app` to Applications, then run this once in Terminal. The app isn't
   notarized, so without it macOS says the app "is damaged":
   ```sh
   xattr -dr com.apple.quarantine /Applications/ShipGame.app
