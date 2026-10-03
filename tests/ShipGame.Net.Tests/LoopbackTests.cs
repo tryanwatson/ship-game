@@ -263,6 +263,52 @@ public sealed class LoopbackTests : IDisposable
     }
 
     [Fact]
+    public void OwnShots_LeaveTheDrawnHull_ThenJoinTheirTruePath()
+    {
+        var client = Connect(new NetworkConditions(LagMs: 300));
+        PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
+        client.SetReady();
+        PumpUntil(() => client.Replica.World.GetPlayerShip(client.LocalPlayerId) is not null, "our ship");
+        client.Send(new AdjustThrottleCommand(0, 5));
+        PumpFor(3.0); // up to full speed, so the predicted ship is well ahead of the server's timeline
+        client.TakeEvents();
+
+        var serverShip = _server.World!.GetPlayerShip(client.LocalPlayerId)!;
+        var abeam = serverShip.Position + new Vector2(-serverShip.Forward.Y, serverShip.Forward.X) * 6f;
+        client.Send(new CastAbilityCommand(0, AbilitySlot.One, abeam));
+
+        // The frame the volley appears, each ball should sit where it was on the server's hull, but on the hull as
+        // drawn, rather than back where the server's ship was when it fired.
+        var serverTrack = new Dictionary<long, Vector2>();
+        ProjectileSpawned[] volley = Array.Empty<ProjectileSpawned>();
+        PumpUntil(() =>
+        {
+            serverTrack[_server.World.Tick] = serverShip.Position;
+            return (volley = client.TakeEvents().OfType<ProjectileSpawned>().ToArray()).Length > 0;
+        }, "the volley");
+        var drawnShip = client.Replica.World.GetPlayerShip(client.LocalPlayerId)!.Position;
+        foreach (var shot in volley)
+        {
+            var firedFrom = serverTrack[shot.Tick];
+            Assert.True(Vector2.Distance(firedFrom, drawnShip) > 1.5f,
+                $"the drawn ship should be well ahead of where it fired from (else this test proves nothing), was {Vector2.Distance(firedFrom, drawnShip)}");
+            var drawnShot = client.Replica.World.Projectiles.Single(p => p.Id == shot.ProjectileId).Position;
+            var misplaced = Vector2.Distance(drawnShot - drawnShip, shot.Position - firedFrom);
+            Assert.True(misplaced < 0.3f, $"shot drawn {misplaced} tiles off its place on the hull");
+        }
+
+        // Once blended in, they fly exactly where the server says.
+        PumpFor((ClientReplica.ShotConvergeTicks + 2) / SimConstants.TickRate);
+        foreach (var shot in volley)
+        {
+            if (client.Replica.World.Projectiles.FirstOrDefault(p => p.Id == shot.ProjectileId) is not { } projectile)
+                continue;
+            var flown = (float)(client.Replica.RenderTick - shot.Tick) * SimConstants.TickDelta;
+            Assert.True(Vector2.Distance(projectile.Position, shot.Position + shot.Velocity * flown) < 0.01f);
+        }
+    }
+
+    [Fact]
     public void SimulatedLoss_DropsSomeSnapshots_ButNeverReliableMessages()
     {
         var lossy = Connect(new NetworkConditions(LossPercent: 50));

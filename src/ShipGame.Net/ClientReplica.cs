@@ -29,11 +29,26 @@ public sealed class ClientReplica
     // Predict this much further than the round trip alone, since a command waits up to a tick on the server.
     private const double PredictionMarginTicks = 1;
 
+    /// <summary>
+    /// The predicted ship is drawn ahead of where the server fired from, so its own shots would appear behind it.
+    /// They start at the drawn hull instead and blend onto their true path over this many ticks, well before most
+    /// hits (which, like the targets, stay on the server's timeline).
+    /// </summary>
+    public const double ShotConvergeTicks = 12;
+
     private readonly List<Snapshot> _snapshots = new();
     private readonly List<WorldEvent> _pendingEvents = new();
     private readonly List<ShipInfo> _pendingShipInfos = new();
     private readonly List<WorldEvent> _appliedEvents = new();
     private readonly Dictionary<int, ProjectileSpawned> _projectiles = new();
+    private readonly Dictionary<int, Vector2> _shotOffsets = new();
+
+    // Last frame's local ship: where the server's timeline had it, and where it was drawn (predicted).
+    private bool _hasOwnShipFrames;
+    private Vector2 _ownTimelinePosition;
+    private float _ownTimelineHeading;
+    private Vector2 _ownDrawnPosition;
+    private float _ownDrawnHeading;
     private double _clock;
     private bool _clockStarted;
     private double _predictClock;
@@ -80,6 +95,8 @@ public sealed class ClientReplica
         _pendingEvents.Clear();
         _pendingShipInfos.Clear();
         _projectiles.Clear();
+        _shotOffsets.Clear();
+        _hasOwnShipFrames = false;
         _clockStarted = false;
         _predictor = new LocalShipPredictor(start.WorldSize);
         Alpha = 1f;
@@ -174,14 +191,22 @@ public sealed class ClientReplica
         {
             if (ship is null)
                 _predictor.Forget();
+            _hasOwnShipFrames = false;
             return;
         }
+
+        // Where the snapshots put the ship at the render tick, before prediction moves it.
+        _ownTimelinePosition = Vector2.Lerp(ship.PreviousPosition, ship.Position, Alpha);
+        _ownTimelineHeading = Angles.Lerp(ship.PreviousHeading, ship.Heading, Alpha);
 
         _predictor.Update(ship, state, latest.Tick, latest.AckFor(LocalPlayerId), World.Wind, _predictClock, elapsedSeconds);
 
         // Drawn already blended, so previous and current agree whatever the shared alpha is.
         ship.Position = ship.PreviousPosition = _predictor.Position;
         ship.Heading = ship.PreviousHeading = _predictor.Heading;
+        _ownDrawnPosition = _predictor.Position;
+        _ownDrawnHeading = _predictor.Heading;
+        _hasOwnShipFrames = true;
         if (_predictor.Predicted is { } predicted)
         {
             ship.Speed = predicted.Speed;
@@ -217,6 +242,8 @@ public sealed class ClientReplica
                     break;
                 case ProjectileSpawned spawned:
                     _projectiles[spawned.ProjectileId] = spawned;
+                    if (OwnShotOffset(spawned.OwnerShipId, spawned.Position) is { } offset)
+                        _shotOffsets[spawned.ProjectileId] = offset;
                     World.AddProjectile(new Projectile(spawned.ProjectileId, spawned.OwnerShipId, spawned.Team, spawned.Damage, spawned.Radius)
                     {
                         Position = spawned.Position,
@@ -227,6 +254,7 @@ public sealed class ClientReplica
                     break;
                 case ProjectileImpact impact:
                     _projectiles.Remove(impact.ProjectileId);
+                    _shotOffsets.Remove(impact.ProjectileId);
                     World.RemoveProjectile(impact.ProjectileId);
                     break;
                 case AreaStrikeLaunched launched:
@@ -235,7 +263,8 @@ public sealed class ClientReplica
                         Id = launched.StrikeId,
                         OwnerShipId = launched.OwnerShipId,
                         Team = launched.Team,
-                        Origin = launched.Origin,
+                        // From the drawn hull; the shell's flight converges on the true target by itself.
+                        Origin = launched.Origin + (OwnShotOffset(launched.OwnerShipId, launched.Origin) ?? Vector2.Zero),
                         Target = launched.Target,
                         Radius = launched.Radius,
                         Damage = launched.Damage,
@@ -342,6 +371,7 @@ public sealed class ClientReplica
             if (flown >= spawned.LifetimeTicks)
             {
                 _projectiles.Remove(id);
+                _shotOffsets.Remove(id);
                 World.RemoveProjectile(id);
                 continue;
             }
@@ -351,9 +381,28 @@ public sealed class ClientReplica
                 continue;
             // Already at the render tick's position, so it needs no blending: previous and current agree.
             var position = spawned.Position + spawned.Velocity * (float)(Math.Max(0, flown) * SimConstants.TickDelta);
+            if (_shotOffsets.TryGetValue(id, out var offset))
+            {
+                var t = (float)Math.Clamp(flown / ShotConvergeTicks, 0, 1);
+                position += offset * (1f - t * t * (3f - 2f * t)); // smoothstep out
+            }
             projectile.PreviousPosition = position;
             projectile.Position = position;
         }
+    }
+
+    /// <summary>
+    /// For a shot fired by our own (predicted) ship: how far to move its starting point so it leaves the hull where
+    /// the hull is drawn, keeping its place relative to the hull, turned by any difference in heading. Null for
+    /// anyone else's shots.
+    /// </summary>
+    private Vector2? OwnShotOffset(int ownerShipId, Vector2 origin)
+    {
+        if (!_hasOwnShipFrames || World.GetPlayerShip(LocalPlayerId) is not { } ship || ship.Id != ownerShipId)
+            return null;
+        var turn = Matrix3x2.CreateRotation(Angles.Delta(_ownTimelineHeading, _ownDrawnHeading));
+        var drawnOrigin = _ownDrawnPosition + Vector2.Transform(origin - _ownTimelinePosition, turn);
+        return drawnOrigin - origin;
     }
 
     private static World CreateWorld(Vector2 size, Vector2 wind)
