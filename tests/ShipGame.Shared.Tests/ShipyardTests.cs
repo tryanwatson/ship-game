@@ -24,7 +24,7 @@ public class ShipyardTests
         world.Players[PlayerId].Gold = gold;
         if (anchored)
         {
-            world.Enqueue(new ToggleAnchorCommand(PlayerId));
+            ship.IsAnchored = true;
             world.Step();
         }
         return (world, ship);

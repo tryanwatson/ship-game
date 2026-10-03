@@ -475,10 +475,13 @@ public sealed class World
             case AdjustThrottleCommand adjust:
                 ship.Throttle = Math.Clamp(ship.Throttle + adjust.Delta, 0, ShipMovement.ThrottleLevels);
                 return null;
-            case ToggleAnchorCommand when ship.Anchor == AnchorState.Raising:
+            case AnchorKeyCommand { Pressed: false }:
+                Anchoring.ReleaseKey(ship);
+                return null;
+            case AnchorKeyCommand when ship.Anchor == AnchorState.Raising:
                 return RejectionReason.AnchorBusy;
-            case ToggleAnchorCommand:
-                Anchoring.Toggle(ship);
+            case AnchorKeyCommand:
+                Anchoring.PressKey(ship);
                 return null;
             case ChoosePlunderCommand:
                 return Shipyards.TryChoosePlunder(this, ship);

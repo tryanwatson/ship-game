@@ -74,14 +74,15 @@ public sealed class GameClient : Game
     private double _aimHeldSeconds;
     private NVector2 _aimCursor;
 
-    // Dropping anchor takes holding X this long (raising is still a press, then the 10 s haul). After it drops,
-    // X must be released before it does anything else, so the same hold doesn't start raising it again.
-    private const double AnchorHoldSeconds = 2.0;
+    // X goes to the simulation as key-down/key-up (it times the hold that lets the anchor go). Locally we time the
+    // same hold just to draw its progress straight away, without waiting on the server.
+    private bool _anchorKeySent;
+    private bool _lettingGo;
     private double _anchorHeldSeconds;
-    private bool _anchorKeyLatched;
 
     /// <summary>0..1 while X is being held to drop anchor; 0 otherwise.</summary>
-    private float AnchorDropProgress => (float)Math.Clamp(_anchorHeldSeconds / AnchorHoldSeconds, 0, 1);
+    private float AnchorDropProgress =>
+        _lettingGo ? (float)Math.Clamp(_anchorHeldSeconds / Anchoring.DropSeconds, 0, 1) : 0f;
 
     // A right-click that cancelled targeting doesn't turn into drag-to-move while the button stays down.
     private bool _ignoreRightDrag;
@@ -207,8 +208,9 @@ public sealed class GameClient : Game
         _cameraLocked = true;
         _mapOpen = false;
         _aimKeyDown = null;
+        _anchorKeySent = false;
+        _lettingGo = false;
         _anchorHeldSeconds = 0;
-        _anchorKeyLatched = false;
         _ignoreRightDrag = false;
     }
 
@@ -274,7 +276,7 @@ public sealed class GameClient : Game
         if (!IsActive)
         {
             _aimKeyDown = null; // keys released while unfocused are never seen: don't leave an indicator stuck on
-            _anchorHeldSeconds = 0;
+            ReleaseAnchorKey();  // nor the anchor key, or the server would let go on its own
         }
 
         if (IsActive)
@@ -474,36 +476,37 @@ public sealed class GameClient : Game
     }
 
     /// <summary>
-    /// X: with the anchor up, hold it for <see cref="AnchorHoldSeconds"/> to let go; with it down, a press starts
-    /// hauling it in. Mid-haul it does nothing.
+    /// X: with the anchor up, hold it for <see cref="Anchoring.DropSeconds"/> to let go; with it down, a press starts
+    /// hauling it in. Mid-haul it does nothing. The simulation does the timing; this reports the key.
     /// </summary>
     private void UpdateAnchorKey(double dt)
     {
         var anchor = _session.World.GetPlayerShip(LocalPlayerId)?.Anchor;
-        if (!_input.IsKeyDown(Keys.X))
+        if (_input.WasKeyPressed(Keys.X) && anchor is AnchorState.Weighed or AnchorState.Down)
         {
-            _anchorKeyLatched = false;
+            _session.Send(new AnchorKeyCommand(LocalPlayerId, true));
+            _anchorKeySent = true;
+            _lettingGo = anchor == AnchorState.Weighed;
             _anchorHeldSeconds = 0;
-            return;
         }
-        if (_anchorKeyLatched || anchor is null)
-            return;
-
-        if (anchor == AnchorState.Down)
+        else if (!_input.IsKeyDown(Keys.X))
         {
-            _session.Send(new ToggleAnchorCommand(LocalPlayerId)); // start raising
-            _anchorKeyLatched = true;
-            return;
+            ReleaseAnchorKey();
         }
-        if (anchor != AnchorState.Weighed)
-            return;
 
-        _anchorHeldSeconds += dt;
-        if (_anchorHeldSeconds < AnchorHoldSeconds)
-            return;
-        _session.Send(new ToggleAnchorCommand(LocalPlayerId)); // let go
+        if (_lettingGo && anchor == AnchorState.Weighed)
+            _anchorHeldSeconds += dt;
+        else
+            _lettingGo = false; // it's down (or the ship's gone)
+    }
+
+    private void ReleaseAnchorKey()
+    {
+        if (_anchorKeySent)
+            _session.Send(new AnchorKeyCommand(LocalPlayerId, false));
+        _anchorKeySent = false;
+        _lettingGo = false;
         _anchorHeldSeconds = 0;
-        _anchorKeyLatched = true;
     }
 
     private bool IsLocallyReady(NetworkGameSession online) =>

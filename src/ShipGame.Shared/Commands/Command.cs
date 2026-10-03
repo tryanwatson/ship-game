@@ -14,8 +14,12 @@ public sealed record MoveCommand(int PlayerId, Vector2 Target) : Command(PlayerI
 /// <summary>All stop: cancels any move order and furls the sails.</summary>
 public sealed record StopCommand(int PlayerId) : Command(PlayerId);
 
-/// <summary>Drops the anchor if it's up; starts the slow haul to raise it if it's down.</summary>
-public sealed record ToggleAnchorCommand(int PlayerId) : Command(PlayerId);
+/// <summary>
+/// The anchor key went down or up. Pressed with the anchor up starts letting it go, which takes holding the key
+/// for <c>Anchoring.DropSeconds</c> (releasing early cancels); pressed with it down starts the slow haul to raise it.
+/// Sent on change, like the helm.
+/// </summary>
+public sealed record AnchorKeyCommand(int PlayerId, bool Pressed) : Command(PlayerId);
 
 /// <summary>At a shipyard: plunder the island instead of trading (shipyards don't plunder unless asked).</summary>
 public sealed record ChoosePlunderCommand(int PlayerId) : Command(PlayerId);

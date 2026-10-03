@@ -138,9 +138,12 @@ public sealed class Ship
 
     public int AnchorRaiseTicksRemaining { get; set; }
 
+    /// <summary>Ticks of holding the anchor key left before it lets go; 0 when it isn't being held.</summary>
+    public int AnchorDropTicksRemaining { get; set; }
+
     /// <summary>
     /// True while the anchor is down or being raised. Setting it drops or weighs the anchor instantly, which
-    /// NPCs and setup code use; players go through <see cref="Anchoring.Toggle"/> and its slow haul.
+    /// NPCs and setup code use; players go through <see cref="Anchoring.PressKey"/>, its hold, and its slow haul.
     /// </summary>
     public bool IsAnchored
     {

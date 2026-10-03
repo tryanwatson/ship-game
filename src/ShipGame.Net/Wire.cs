@@ -41,7 +41,7 @@ public static class Wire
         AdjustThrottle = 3,
         SetRudder = 4,
         CastAbility = 5,
-        ToggleAnchor = 6,
+        AnchorKey = 6,
         ChoosePlunder = 7,
         PurchaseUpgrade = 8,
     }
@@ -70,8 +70,9 @@ public static class Wire
                 w.Put((byte)cast.Slot);
                 w.Put(cast.Target);
                 break;
-            case ToggleAnchorCommand:
-                w.Put((byte)CommandTag.ToggleAnchor);
+            case AnchorKeyCommand anchor:
+                w.Put((byte)CommandTag.AnchorKey);
+                w.Put(anchor.Pressed);
                 break;
             case ChoosePlunderCommand:
                 w.Put((byte)CommandTag.ChoosePlunder);
@@ -93,7 +94,7 @@ public static class Wire
         CommandTag.AdjustThrottle => new AdjustThrottleCommand(playerId, r.GetSByte()),
         CommandTag.SetRudder => new SetRudderCommand(playerId, r.GetSByte()),
         CommandTag.CastAbility => new CastAbilityCommand(playerId, (AbilitySlot)r.GetByte(), r.GetVector2()),
-        CommandTag.ToggleAnchor => new ToggleAnchorCommand(playerId),
+        CommandTag.AnchorKey => new AnchorKeyCommand(playerId, r.GetBool()),
         CommandTag.ChoosePlunder => new ChoosePlunderCommand(playerId),
         CommandTag.PurchaseUpgrade => new PurchaseUpgradeCommand(playerId, r.GetString(64)),
         var tag => throw new InvalidDataException($"Unknown command tag {tag}."),

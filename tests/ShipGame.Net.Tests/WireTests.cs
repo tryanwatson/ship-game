@@ -19,7 +19,8 @@ public class WireTests
         new object[] { new AdjustThrottleCommand(9, -2) },
         new object[] { new SetRudderCommand(9, 1) },
         new object[] { new CastAbilityCommand(9, AbilitySlot.Three, new Vector2(1, 2)) },
-        new object[] { new ToggleAnchorCommand(9) },
+        new object[] { new AnchorKeyCommand(9, true) },
+        new object[] { new AnchorKeyCommand(9, false) },
         new object[] { new ChoosePlunderCommand(9) },
         new object[] { new PurchaseUpgradeCommand(9, "shot-speed") },
     };

@@ -37,8 +37,8 @@ public class AnchorAndPlunderTests
         ship.Throttle = ShipMovement.ThrottleLevels;
         ship.Speed = ship.CruiseSpeed;
 
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
-        world.Step();
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true));
+        RunTicks(world, Anchoring.DropTicks + 1);
         var anchoredAt = ship.Position;
         Assert.Equal(AnchorState.Down, ship.Anchor);
         Assert.Equal(0f, ship.Speed);
@@ -53,13 +53,75 @@ public class AnchorAndPlunderTests
     }
 
     [Fact]
+    public void LettingGo_TakesHoldingTheKeyForTwoSeconds_WhileTheShipSailsOn()
+    {
+        var (world, ship) = CreateWorld(new Vector2(20, 64));
+        ship.Throttle = ShipMovement.ThrottleLevels;
+        ship.Speed = ship.CruiseSpeed;
+        var start = ship.Position;
+
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true));
+        RunTicks(world, Anchoring.DropTicks);
+        Assert.Equal(AnchorState.Weighed, ship.Anchor);
+        Assert.True(Anchoring.DropProgress(ship) > 0.95f);
+        Assert.True(ship.Position.X > start.X + 1f, "should keep sailing while the anchor is let go");
+
+        world.Step();
+        Assert.Equal(AnchorState.Down, ship.Anchor);
+        Assert.Equal(0f, Anchoring.DropProgress(ship));
+    }
+
+    [Fact]
+    public void ReleasingTheKeyEarly_KeepsTheAnchorUp_AndAFreshPressStartsOver()
+    {
+        var (world, ship) = CreateWorld(new Vector2(20, 64));
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true));
+        RunTicks(world, Anchoring.DropTicks - 5);
+        world.Enqueue(new AnchorKeyCommand(PlayerId, false));
+        RunTicks(world, Anchoring.DropTicks);
+        Assert.Equal(AnchorState.Weighed, ship.Anchor);
+
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true));
+        RunTicks(world, Anchoring.DropTicks - 5);
+        Assert.Equal(AnchorState.Weighed, ship.Anchor); // the earlier hold doesn't count
+        RunTicks(world, 6);
+        Assert.Equal(AnchorState.Down, ship.Anchor);
+    }
+
+    [Fact]
+    public void RepeatedPresses_DoNotRestartOrShortenTheHold()
+    {
+        var (world, ship) = CreateWorld(new Vector2(20, 64));
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true));
+        RunTicks(world, 10);
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true)); // a client sending presses without releases
+        RunTicks(world, Anchoring.DropTicks - 10);
+        Assert.Equal(AnchorState.Weighed, ship.Anchor);
+        world.Step();
+        Assert.Equal(AnchorState.Down, ship.Anchor);
+    }
+
+    [Fact]
+    public void HoldingTheKeyAfterTheDrop_DoesNotStartRaising()
+    {
+        var (world, ship) = CreateWorld(new Vector2(20, 64));
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true));
+        RunTicks(world, Anchoring.DropTicks + SimConstants.TickRate * 3);
+        Assert.Equal(AnchorState.Down, ship.Anchor);
+
+        world.Enqueue(new AnchorKeyCommand(PlayerId, false)); // only a fresh press hauls it in
+        RunTicks(world, 5);
+        Assert.Equal(AnchorState.Down, ship.Anchor);
+    }
+
+    [Fact]
     public void RaisingAnchor_TakesTenSeconds_ThenTheShipSails()
     {
         var (world, ship) = CreateWorld(new Vector2(20, 64));
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        ship.IsAnchored = true;
         world.Step();
-        world.Enqueue(new AdjustThrottleCommand(PlayerId, 3)); // sail can be set while anchored
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));     // start hauling
+        world.Enqueue(new AdjustThrottleCommand(PlayerId, 3));     // sail can be set while anchored
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true));      // start hauling
         world.Step();
         var anchoredAt = ship.Position;
 
@@ -67,7 +129,7 @@ public class AnchorAndPlunderTests
         Assert.Equal(AnchorState.Raising, ship.Anchor);
         Assert.Equal(anchoredAt, ship.Position);
 
-        world.Enqueue(new ToggleAnchorCommand(PlayerId)); // mashing X mid-haul does nothing
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true)); // mashing X mid-haul does nothing
         RunTicks(world, 2);
         Assert.Equal(AnchorState.Weighed, ship.Anchor);
 
@@ -79,9 +141,9 @@ public class AnchorAndPlunderTests
     public void AnchoringNearAnIsland_PlundersItForGold()
     {
         var (world, ship) = CreateWorld(new Vector2(37, 30), Isle()); // 3 tiles off the west shore
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        ship.IsAnchored = true;
 
-        // The anchor drops and the plunder starts on the same tick, so it pays out exactly DurationSeconds later.
+        // The plunder starts on the first tick at anchor, so it pays out exactly DurationSeconds later.
         RunTicks(world, Plundering.DurationTicks - 1);
         Assert.Equal(0, Gold(world));
         Assert.True(Plundering.Progress(ship) > 0.9f);
@@ -96,7 +158,7 @@ public class AnchorAndPlunderTests
     public void PlunderedIsland_YieldsNothingUntilItsCooldownEnds_ThenPaysAgain()
     {
         var (world, ship) = CreateWorld(new Vector2(37, 30), Isle());
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        ship.IsAnchored = true;
         RunTicks(world, Plundering.DurationTicks + 1);
         Assert.Equal(10, Gold(world));
 
@@ -114,10 +176,10 @@ public class AnchorAndPlunderTests
     public void RaisingAnchor_AbandonsAPlunderInProgress()
     {
         var (world, ship) = CreateWorld(new Vector2(37, 30), Isle());
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        ship.IsAnchored = true;
         RunTicks(world, Plundering.DurationTicks / 2);
 
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        world.Enqueue(new AnchorKeyCommand(PlayerId, true));
         RunTicks(world, Plundering.DurationTicks);
 
         Assert.Equal(0, Gold(world));
@@ -128,8 +190,8 @@ public class AnchorAndPlunderTests
     [Fact]
     public void AnchoringOutOfRange_PlundersNothing()
     {
-        var (world, _) = CreateWorld(new Vector2(40f - Plundering.Range - 1.5f, 30), Isle());
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        var (world, ship) = CreateWorld(new Vector2(40f - Plundering.Range - 1.5f, 30), Isle());
+        ship.IsAnchored = true;
 
         RunTicks(world, Plundering.DurationTicks * 2);
 
@@ -140,8 +202,8 @@ public class AnchorAndPlunderTests
     public void Cooldowns_ArePerIsland()
     {
         // Two islands side by side with the ship anchored between them, in range of both.
-        var (world, _) = CreateWorld(new Vector2(51, 30), Isle(1, 40f), Isle(2, 54f));
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        var (world, ship) = CreateWorld(new Vector2(51, 30), Isle(1, 40f), Isle(2, 54f));
+        ship.IsAnchored = true;
 
         RunTicks(world, Plundering.DurationTicks * 2 + 4);
 
@@ -171,7 +233,7 @@ public class AnchorAndPlunderTests
         Assert.Same(island, Plundering.PlunderableFrom(world, new Vector2(40f - Plundering.Range + 0.1f, 30)));
         Assert.Null(Plundering.PlunderableFrom(world, new Vector2(40f - Plundering.Range - 0.1f, 30)));
 
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        ship.IsAnchored = true;
         RunTicks(world, Plundering.DurationTicks + 1);
         Assert.Null(Plundering.PlunderableFrom(world, ship.Position)); // on cooldown now
     }

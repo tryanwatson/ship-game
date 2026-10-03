@@ -104,8 +104,7 @@ public class WorldEventTests
     {
         var world = new World(new Vector2(128, 128)) { Wind = Vector2.Zero };
         world.AddIsland(new Island(7, new[] { new Vector2(40, 26), new Vector2(48, 26), new Vector2(48, 34), new Vector2(40, 34) }));
-        world.SpawnShip(new Vector2(37, 30), 0f, ShipStats.Sloop, PlayerId);
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        world.SpawnShip(new Vector2(37, 30), 0f, ShipStats.Sloop, PlayerId).IsAnchored = true;
 
         var events = StepAndDrain(world, Plundering.DurationTicks + 1);
 
@@ -122,7 +121,7 @@ public class WorldEventTests
         world.AddIsland(new Island(1, new[] { new Vector2(40, 26), new Vector2(48, 26), new Vector2(48, 34), new Vector2(40, 34) }, hasShipyard: true));
         var ship = world.SpawnShip(new Vector2(37, 30), 0f, ShipStats.Sloop, PlayerId);
         world.Players[PlayerId].Gold = 50;
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        ship.IsAnchored = true;
         world.Step();
         var version = ship.StatsVersion;
 
@@ -183,7 +182,7 @@ public class WorldEventTests
     {
         new object[] { "sunk", (Func<World, Ship, Command>)((w, s) => { s.Health = 0; w.Step(); return new MoveCommand(PlayerId, Vector2.One); }), RejectionReason.NoShip },
         new object[] { "move at anchor", (Func<World, Ship, Command>)((w, s) => { s.IsAnchored = true; return new MoveCommand(PlayerId, Vector2.One); }), RejectionReason.Anchored },
-        new object[] { "anchor mid-raise", (Func<World, Ship, Command>)((w, s) => { s.IsAnchored = true; Anchoring.Toggle(s); return new ToggleAnchorCommand(PlayerId); }), RejectionReason.AnchorBusy },
+        new object[] { "anchor mid-raise", (Func<World, Ship, Command>)((w, s) => { s.IsAnchored = true; Anchoring.PressKey(s); return new AnchorKeyCommand(PlayerId, true); }), RejectionReason.AnchorBusy },
         new object[] { "bad slot", (Func<World, Ship, Command>)((w, s) => new CastAbilityCommand(PlayerId, (AbilitySlot)42, Vector2.Zero)), RejectionReason.InvalidSlot },
         new object[] { "on cooldown", (Func<World, Ship, Command>)((w, s) => { w.TryCastAbility(s, AbilitySlot.One, Vector2.Zero); return new CastAbilityCommand(PlayerId, AbilitySlot.One, Vector2.Zero); }), RejectionReason.OnCooldown },
         new object[] { "shop at sea", (Func<World, Ship, Command>)((w, s) => new PurchaseUpgradeCommand(PlayerId, "speed")), RejectionReason.NotAtShipyard },
@@ -208,8 +207,7 @@ public class WorldEventTests
         var world = new World(new Vector2(128, 128)) { Wind = Vector2.Zero };
         var yard = new Island(1, new[] { new Vector2(40, 26), new Vector2(48, 26), new Vector2(48, 34), new Vector2(40, 34) }, hasShipyard: true);
         world.AddIsland(yard);
-        world.SpawnShip(new Vector2(37, 30), 0f, ShipStats.Sloop, PlayerId);
-        world.Enqueue(new ToggleAnchorCommand(PlayerId));
+        world.SpawnShip(new Vector2(37, 30), 0f, ShipStats.Sloop, PlayerId).IsAnchored = true;
         world.Step();
         world.StartPlunderCooldown(yard, 100);
         world.DrainEvents();

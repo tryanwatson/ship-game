@@ -12,19 +12,26 @@ public enum AnchorState
     Raising,
 }
 
-/// <summary>Anchor handling: dropping is instant, weighing takes <see cref="RaiseSeconds"/>.</summary>
+/// <summary>
+/// Anchor handling. Players let go by holding the anchor key for <see cref="DropSeconds"/> (the ship sails on
+/// meanwhile), and weighing takes <see cref="RaiseSeconds"/>. The hold is timed here, not on the client, so nobody
+/// can anchor instantly.
+/// </summary>
 public static class Anchoring
 {
+    public const float DropSeconds = 2f;
+    public static readonly int DropTicks = (int)(DropSeconds * SimConstants.TickRate);
+
     public const float RaiseSeconds = 10f;
     public static readonly int RaiseTicks = (int)(RaiseSeconds * SimConstants.TickRate);
 
-    /// <summary>The X key: drop the anchor if it's up, start hauling it in if it's down. Ignored mid-raise.</summary>
-    public static void Toggle(Ship ship)
+    /// <summary>The anchor key went down: start letting go if the anchor's up, start hauling it in if it's down.</summary>
+    public static void PressKey(Ship ship)
     {
         switch (ship.Anchor)
         {
-            case AnchorState.Weighed:
-                Drop(ship);
+            case AnchorState.Weighed when ship.AnchorDropTicksRemaining == 0:
+                ship.AnchorDropTicksRemaining = DropTicks;
                 break;
             case AnchorState.Down:
                 ship.Anchor = AnchorState.Raising;
@@ -33,11 +40,15 @@ public static class Anchoring
         }
     }
 
+    /// <summary>The anchor key came up: a drop that hasn't happened yet is called off.</summary>
+    public static void ReleaseKey(Ship ship) => ship.AnchorDropTicksRemaining = 0;
+
     /// <summary>Lets go the anchor: the ship is brought up short where it is.</summary>
     public static void Drop(Ship ship)
     {
         ship.Anchor = AnchorState.Down;
         ship.AnchorRaiseTicksRemaining = 0;
+        ship.AnchorDropTicksRemaining = 0;
         ship.Speed = 0f;
         ship.WindDrift = default;
         ship.MoveTarget = null;
@@ -49,15 +60,20 @@ public static class Anchoring
     {
         ship.Anchor = AnchorState.Weighed;
         ship.AnchorRaiseTicksRemaining = 0;
+        ship.AnchorDropTicksRemaining = 0;
     }
 
     public static void Tick(Ship ship)
     {
-        if (ship.Anchor != AnchorState.Raising)
-            return;
-        if (--ship.AnchorRaiseTicksRemaining <= 0)
+        if (ship.AnchorDropTicksRemaining > 0 && --ship.AnchorDropTicksRemaining == 0)
+            Drop(ship);
+        if (ship.Anchor == AnchorState.Raising && --ship.AnchorRaiseTicksRemaining <= 0)
             Weigh(ship);
     }
+
+    /// <summary>0..1 while the key is held to let go; 0 otherwise.</summary>
+    public static float DropProgress(Ship ship) =>
+        ship.AnchorDropTicksRemaining > 0 ? 1f - (float)ship.AnchorDropTicksRemaining / DropTicks : 0f;
 
     /// <summary>0 when the haul starts, 1 when the anchor is up.</summary>
     public static float RaiseProgress(Ship ship) =>
