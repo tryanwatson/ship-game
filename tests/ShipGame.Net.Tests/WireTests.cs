@@ -118,6 +118,15 @@ public class WireTests
     }
 
     [Fact]
+    public void Lobby_CarriesTheStartingGold()
+    {
+        var writer = new NetDataWriter();
+        writer.PutLobby(new LobbyState(false, new[] { new LobbyPlayer(1, false) }, StartingGold: 2500));
+
+        Assert.Equal(2500, ReaderFor(writer).GetLobby().StartingGold);
+    }
+
+    [Fact]
     public void Lobby_CarriesEachPlayersStartingWeapon()
     {
         var players = new[] { new LobbyPlayer(1, true, "mortar"), new LobbyPlayer(2, false) };

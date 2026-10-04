@@ -339,6 +339,7 @@ public static class Wire
     {
         w.Put(lobby.RunInProgress);
         w.Put(lobby.FriendlyFire);
+        w.Put(lobby.StartingGold);
         w.Put((byte)lobby.Players.Count);
         foreach (var player in lobby.Players)
         {
@@ -352,6 +353,7 @@ public static class Wire
     {
         var running = r.GetBool();
         var friendlyFire = r.GetBool();
+        var startingGold = r.GetInt();
         var count = r.GetByte();
         var players = new List<LobbyPlayer>(count);
         for (var i = 0; i < count; i++)
@@ -361,7 +363,7 @@ public static class Wire
             var weapon = r.GetString(64);
             players.Add(new LobbyPlayer(id, ready, weapon.Length == 0 ? null : weapon));
         }
-        return new LobbyState(running, players, friendlyFire);
+        return new LobbyState(running, players, friendlyFire, startingGold);
     }
 
     public static void PutRunStart(this NetDataWriter w, RunStart start)

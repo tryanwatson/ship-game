@@ -74,6 +74,9 @@ public sealed class GameClient : Game
     // Solo: choosing the starting weapon, before the run starts (online, the lobby does this).
     private bool _pickingSoloWeapon;
 
+    // Starting gold, a playtesting option: - and = step through these on the weapon choice (solo) or in the lobby.
+    private static readonly int[] StartingGoldSteps = { 0, 50, 100, 250, 500, 1000, 2500, 10000 };
+
     private bool _cameraLocked = true;
     private NVector2 _lastMoveOrder;
 
@@ -201,7 +204,7 @@ public sealed class GameClient : Game
     /// <summary>A fresh run: the player's ship at the southern edge carrying <paramref name="weapon"/>, the seas ahead.</summary>
     private void StartRun(WeaponOffer weapon)
     {
-        var world = Runs.Create(Environment.TickCount, new[] { (SoloPlayerId, weapon.Ability) });
+        var world = Runs.Create(Environment.TickCount, new[] { (SoloPlayerId, weapon.Ability) }, startingGold: _settings.SoloStartingGold);
 
         _session = new LocalGameSession(world, SoloPlayerId);
         ResetControls();
@@ -313,6 +316,11 @@ public sealed class GameClient : Game
         if (_pickingSoloWeapon)
         {
             _session.Update(dt); // the sea (or the last run's wreckage) behind the choice
+            if (IsActive && StartingGoldStep() is { } step)
+            {
+                _settings.SoloStartingGold = StepStartingGold(_settings.SoloStartingGold, step);
+                _settings.Save();
+            }
             if (IsActive && _weaponPicker.Update(_input, Hud) is { } weapon)
             {
                 _pickingSoloWeapon = false;
@@ -326,6 +334,8 @@ public sealed class GameClient : Game
         // In the lobby: choose a starting weapon (clicks or 1-3), then Enter to ready up.
         if (IsActive && Online is { Connection.Status: ConnectionStatus.Lobby } inLobby && _weaponPicker.Update(_input, Hud) is { } choice)
             inLobby.Connection.ChooseStartingWeapon(choice.Id);
+        if (IsActive && Online is { Connection.Status: ConnectionStatus.Lobby } goldLobby && StartingGoldStep() is { } goldStep)
+            goldLobby.Connection.SetStartingGold(StepStartingGold(goldLobby.Connection.Lobby?.StartingGold ?? 0, goldStep));
 
         // Enter: online, ready up in the lobby (once a weapon is chosen); offline, choose a weapon for a new run once
         // this one is over.
@@ -425,7 +435,8 @@ public sealed class GameClient : Game
         if (_pickingSoloWeapon)
         {
             _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
-            _statusBanner.Draw("CHOOSE YOUR WEAPON", "THE OTHERS CAN BE BOUGHT AT SHIPYARDS  -  ESC FOR THE MENU", Hud);
+            _statusBanner.Draw("CHOOSE YOUR WEAPON",
+                $"THE OTHERS CAN BE BOUGHT AT SHIPYARDS  -  {StartingGoldLabel(_settings.SoloStartingGold)}  -  ESC FOR THE MENU", Hud);
             _weaponPicker.Draw(_input, Hud, null);
             base.Draw(gameTime);
             return;
@@ -611,6 +622,19 @@ public sealed class GameClient : Game
         online.Connection.Lobby?.Players.Any(p => p.PlayerId == online.LocalPlayerId && p.Ready) == true;
 
     /// <summary>The starting weapon the server has us down for, if we've chosen one.</summary>
+    /// <summary>-1 or +1 if a starting gold key went down this frame (- and =, or the keypad's - and +).</summary>
+    private int? StartingGoldStep() =>
+        _input.WasKeyPressed(Keys.OemMinus) || _input.WasKeyPressed(Keys.Subtract) ? -1
+        : _input.WasKeyPressed(Keys.OemPlus) || _input.WasKeyPressed(Keys.Add) ? 1
+        : null;
+
+    /// <summary>The next of <see cref="StartingGoldSteps"/> above (+1) or below (-1) <paramref name="gold"/>, or the end it's at.</summary>
+    private static int StepStartingGold(int gold, int step) => step > 0
+        ? StartingGoldSteps.FirstOrDefault(g => g > gold, StartingGoldSteps[^1])
+        : StartingGoldSteps.LastOrDefault(g => g < gold, StartingGoldSteps[0]);
+
+    private static string StartingGoldLabel(int gold) => $"START GOLD {gold} [- +]";
+
     private static string? LocalStartingWeapon(NetworkGameSession online) =>
         online.Connection.Lobby?.Players.FirstOrDefault(p => p.PlayerId == online.LocalPlayerId)?.StartingWeaponId;
 
@@ -669,7 +693,8 @@ public sealed class GameClient : Game
                     : "PRESS ENTER WHEN READY";
                 var title = _session.World.IsRunOver ? RunOverTitle(_session.World) : "LOBBY";
                 var mode = connection.Lobby?.FriendlyFire == true ? "FRIENDLY FIRE ON" : "CO-OP";
-                _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {mode}  -  {prompt}", Hud);
+                var gold = StartingGoldLabel(connection.Lobby?.StartingGold ?? 0);
+                _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {mode}  -  {gold}  -  {prompt}", Hud);
                 _weaponPicker.Draw(_input, Hud, weapon);
                 return true;
             }

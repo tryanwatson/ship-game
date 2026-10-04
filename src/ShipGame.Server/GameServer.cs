@@ -82,6 +82,9 @@ public sealed class GameServer : IDisposable
     /// <summary>PvP: players' shots hurt other players. Applies from the next run.</summary>
     public bool FriendlyFire { get; set; }
 
+    /// <summary>Gold every player starts a run with. Set from the lobby by any player, for playtesting.</summary>
+    public int StartingGold { get; private set; }
+
     /// <summary>The run in progress, or null in the lobby.</summary>
     public World? World { get; private set; }
 
@@ -190,7 +193,7 @@ public sealed class GameServer : IDisposable
     {
         var lobby = new LobbyState(World is not null,
             _byPeerId.Values.OrderBy(p => p.PlayerId).Select(p => new LobbyPlayer(p.PlayerId, p.Ready, p.StartingWeapon?.Id)).ToList(),
-            FriendlyFire);
+            FriendlyFire, StartingGold);
         _writer.Reset();
         _writer.Put((byte)MessageType.Lobby);
         _writer.PutLobby(lobby);
@@ -207,7 +210,7 @@ public sealed class GameServer : IDisposable
         var crew = players
             .Select(p => (p.PlayerId, (p.StartingWeapon ?? WeaponCatalog.Broadside).Ability)) // everyone ready means everyone chose
             .ToList();
-        var world = Runs.Create(seed, crew, FriendlyFire);
+        var world = Runs.Create(seed, crew, FriendlyFire, StartingGold);
         foreach (var player in players)
         {
             player.Ready = false;
@@ -217,7 +220,7 @@ public sealed class GameServer : IDisposable
         World = world;
         _sentStatsVersions.Clear();
         _relevance.Clear();
-        _log($"Run started with {players.Count} player(s), friendly fire {(FriendlyFire ? "on" : "off")}");
+        _log($"Run started with {players.Count} player(s), friendly fire {(FriendlyFire ? "on" : "off")}, starting gold {StartingGold}");
 
         _writer.Reset();
         _writer.Put((byte)MessageType.RunStarted);
@@ -344,6 +347,17 @@ public sealed class GameServer : IDisposable
                     player.Ready = reader.GetBool() && player.StartingWeapon is not null;
                     BroadcastLobby();
                     break;
+                case MessageType.SetStartingGold when World is null:
+                {
+                    var gold = Math.Clamp(reader.GetInt(), 0, Runs.MaxStartingGold);
+                    if (gold != StartingGold)
+                    {
+                        StartingGold = gold;
+                        _log($"Player {player.PlayerId} set starting gold to {gold}");
+                        BroadcastLobby();
+                    }
+                    break;
+                }
                 case MessageType.ChooseStartingWeapon when World is null:
                     if (WeaponCatalog.Find(reader.GetString(64)) is { } chosen)
                     {

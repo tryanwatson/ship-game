@@ -14,9 +14,10 @@ public static class Runs
 
     /// <summary>
     /// A fresh run: the map's islands and markets, the crew lined up abreast at the southern edge facing north (each
-    /// with their chosen weapon), the pirates at sea, and the storm and raids to come.
+    /// with their chosen weapon and <paramref name="startingGold"/>), the pirates at sea, and the storm and raids to come.
     /// </summary>
-    public static World Create(int seed, IReadOnlyList<(int PlayerId, Ability Weapon)> crew, bool friendlyFire = false)
+    /// <param name="startingGold">Gold each player starts with: 0 normally, more for playtesting (up to <see cref="MaxStartingGold"/>).</param>
+    public static World Create(int seed, IReadOnlyList<(int PlayerId, Ability Weapon)> crew, bool friendlyFire = false, int startingGold = 0)
     {
         var world = CreateMap();
         world.Director = new RunDirector(seed, world.WorldSize);
@@ -26,10 +27,17 @@ public static class Runs
         for (var i = 0; i < crew.Count; i++)
             world.SpawnShip(StartPosition(i, crew.Count), Archipelago.StartHeading, ShipStats.Sloop, crew[i].PlayerId,
                 Loadouts.Starting(crew[i].Weapon));
+        startingGold = Math.Clamp(startingGold, 0, MaxStartingGold);
+        if (startingGold > 0)
+            foreach (var (playerId, _) in crew)
+                world.AddGold(playerId, startingGold);
 
         PirateCamps.Populate(world, seed: seed);
         return world;
     }
+
+    /// <summary>The most gold a run can be set to start with (a playtesting option).</summary>
+    public const int MaxStartingGold = 99_999;
 
     /// <summary>The map's islands on open water, with nothing else: for menus, mirrors, and tests.</summary>
     public static World CreateMap()

@@ -334,6 +334,15 @@ public sealed class World
         Tick++;
     }
 
+    /// <summary>Notes who just hit <paramref name="victim"/>: the last hitter takes the kill, and every player shares in it.</summary>
+    private void RecordHit(Ship victim, int attackerShipId)
+    {
+        victim.LastHitByShipId = attackerShipId;
+        victim.LastHitTick = Tick;
+        if (FindShip(attackerShipId)?.OwnerPlayerId is { } playerId)
+            victim.RecordPlayerHit(playerId, Tick);
+    }
+
     private void ResolveSinkings()
     {
         foreach (var victim in _ships)
@@ -428,8 +437,7 @@ public sealed class World
                 if (Geometry.DistanceToConvex(hull, strike.Target) > strike.Radius)
                     continue;
                 ship.Health = MathF.Max(0f, ship.Health - strike.Damage);
-                ship.LastHitByShipId = strike.OwnerShipId;
-                ship.LastHitTick = Tick;
+                RecordHit(ship, strike.OwnerShipId);
             }
             Emit(new AreaStrikeImpact(Tick, strike.Id, strike.Target, strike.Radius));
 
@@ -474,8 +482,7 @@ public sealed class World
                 var effects = projectile.Effects;
                 var distance = Vector2.Distance(projectile.Origin, projectile.Position);
                 ship.Health = MathF.Max(0f, ship.Health - projectile.Damage * effects.DamageMultiplier(distance));
-                ship.LastHitByShipId = projectile.OwnerShipId;
-                ship.LastHitTick = Tick;
+                RecordHit(ship, projectile.OwnerShipId);
                 projectile.RecordHit(ship.Id);
 
                 if (effects.LongRangeRefund > 0f && effects.IsLongRange(distance) && effects.AbilityId is { } abilityId)

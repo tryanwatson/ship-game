@@ -21,6 +21,9 @@ public sealed class ClientSettings
     /// <summary>Whether to host with friendly fire on.</summary>
     public bool HostFriendlyFire { get; set; } = true;
 
+    /// <summary>Gold to start solo runs with (a playtesting option; 0 normally).</summary>
+    public int SoloStartingGold { get; set; }
+
     private static string FilePath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ShipGame", "client.json");
 

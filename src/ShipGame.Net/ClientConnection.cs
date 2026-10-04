@@ -117,6 +117,17 @@ public sealed class ClientConnection : IDisposable
         SendToServer(_writer, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>In the lobby: the gold everyone starts the next run with. A playtesting option, open to every player.</summary>
+    public void SetStartingGold(int gold)
+    {
+        if (_server is null)
+            return;
+        _writer.Reset();
+        _writer.Put((byte)MessageType.SetStartingGold);
+        _writer.Put(gold);
+        SendToServer(_writer, DeliveryMethod.ReliableOrdered);
+    }
+
     public IReadOnlyList<WorldEvent> TakeEvents() => Replica.TakeEvents();
 
     public void Dispose() => _net.Stop();

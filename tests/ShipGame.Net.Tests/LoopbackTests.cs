@@ -129,6 +129,28 @@ public sealed class LoopbackTests : IDisposable
     }
 
     [Fact]
+    public void StartingGold_SetInTheLobby_IsSharedAndPaidAtTheStart()
+    {
+        var a = Connect();
+        var b = Connect();
+        PumpUntil(() => a.Lobby?.Players.Count == 2 && b.Lobby?.Players.Count == 2, "lobby of two");
+
+        b.SetStartingGold(Runs.MaxStartingGold + 1); // clamped
+        PumpUntil(() => a.Lobby!.StartingGold == Runs.MaxStartingGold, "a to see b's setting");
+        b.SetStartingGold(500);
+        PumpUntil(() => a.Lobby!.StartingGold == 500, "a to see the new setting");
+
+        foreach (var client in new[] { a, b })
+        {
+            client.ChooseStartingWeapon(BroadsideVolley.AbilityId);
+            client.SetReady();
+        }
+        PumpUntil(() => a.Status == ConnectionStatus.InRun, "run to start");
+        PumpUntil(() => a.Replica.World.Players.TryGetValue(a.LocalPlayerId, out var p) && p.Gold == 500, "a's gold to arrive");
+        Assert.Equal(500, _server.World!.Players[b.LocalPlayerId].Gold);
+    }
+
+    [Fact]
     public void ReadyingUp_IsRefused_UntilAStartingWeaponIsChosen()
     {
         var client = Connect();

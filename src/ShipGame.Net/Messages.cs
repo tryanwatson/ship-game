@@ -6,7 +6,8 @@ using ShipGame.Shared.Stats;
 namespace ShipGame.Net;
 
 /// <summary>Who's connected and who's ready, plus whether a run is underway (no joining mid-run).</summary>
-public sealed record LobbyState(bool RunInProgress, IReadOnlyList<LobbyPlayer> Players, bool FriendlyFire = false);
+/// <param name="StartingGold">Gold everyone starts the next run with; any player in the lobby can set it (for playtesting).</param>
+public sealed record LobbyState(bool RunInProgress, IReadOnlyList<LobbyPlayer> Players, bool FriendlyFire = false, int StartingGold = 0);
 
 /// <param name="StartingWeaponId">The weapon they've chosen to start the run with; null until they choose.</param>
 public sealed record LobbyPlayer(int PlayerId, bool Ready, string? StartingWeaponId = null);

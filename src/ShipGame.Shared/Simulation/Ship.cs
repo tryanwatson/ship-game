@@ -139,6 +139,13 @@ public sealed class Ship
     /// <summary>The tick a weapon last damaged this ship (see <see cref="LastHitByShipId"/> for whose); null if never.</summary>
     public long? LastHitTick { get; set; }
 
+    private readonly Dictionary<int, long> _playerHits = new();
+
+    /// <summary>The tick each player's weapons last damaged this ship, by player id, for sharing out the kill.</summary>
+    public IReadOnlyDictionary<int, long> PlayerHits => _playerHits;
+
+    public void RecordPlayerHit(int playerId, long tick) => _playerHits[playerId] = tick;
+
     /// <summary>Ships only damage, and NPCs only hunt, ships of other teams.</summary>
     public Team Team { get; set; }
 

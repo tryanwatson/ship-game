@@ -5,12 +5,16 @@ namespace ShipGame.Shared.Progression;
 
 /// <summary>
 /// Players plunder an island by riding at anchor close off its shore for <see cref="DurationSeconds"/>. Each
-/// island then lies fallow for <see cref="CooldownSeconds"/> before it can be plundered again.
+/// island then lies fallow for <see cref="CooldownSeconds"/> before it can be plundered again. The gold is split evenly
+/// between the plunderer and every other player afloat within <see cref="ShareRange"/> of the shore when it's taken.
 /// </summary>
 public static class Plundering
 {
     /// <summary>How close (tiles from ship center to shore) a ship must anchor to plunder an island.</summary>
     public const float Range = 4f;
+
+    /// <summary>How close (tiles from ship center to shore) another player must be to share in a plunder.</summary>
+    public const float ShareRange = 12f;
 
     public const float DurationSeconds = 5f;
     public const float CooldownSeconds = 60f;
@@ -50,7 +54,7 @@ public static class Plundering
             if (++ship.PlunderTicks < DurationTicks)
                 continue;
 
-            world.AddGold(playerId, island.PlunderGold);
+            GoldShares.Pay(world, island.PlunderGold, playerId, Nearby(world, island, playerId));
             world.StartPlunderCooldown(island, CooldownTicks);
             world.Emit(new IslandPlundered(world.Tick, island.Id, playerId, island.PlunderGold, CooldownTicks));
             ship.PlunderConsentIslandId = null;
@@ -58,6 +62,12 @@ public static class Plundering
             ship.PlunderTicks = 0;
         }
     }
+
+    /// <summary>Players other than <paramref name="plundererId"/> close enough to <paramref name="island"/> to share its gold.</summary>
+    public static IEnumerable<int> Nearby(World world, Island island, int plundererId) =>
+        world.Ships
+            .Where(s => s.OwnerPlayerId is { } id && id != plundererId && !s.IsSunk && island.DistanceTo(s.Position) <= ShareRange)
+            .Select(s => s.OwnerPlayerId!.Value);
 
     /// <summary>0..1 progress of the ship's current plunder; 0 when it isn't plundering.</summary>
     public static float Progress(Ship ship) => ship.PlunderIslandId is null ? 0f : (float)ship.PlunderTicks / DurationTicks;
