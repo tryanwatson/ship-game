@@ -44,7 +44,8 @@ public sealed class StatModifiers
         MinTurnRadius = Apply(StatId.TurnRadius, baseStats.MinTurnRadius),
         TurnRadiusAtMaxSpeed = Apply(StatId.TurnRadius, baseStats.TurnRadiusAtMaxSpeed),
         CargoCapacity = Apply(StatId.CargoCapacity, baseStats.CargoCapacity),
-        HealthRegen = Apply(StatId.HealthRegen, baseStats.HealthRegen),
+        HealthRegen = Apply(StatId.HealthRegen, baseStats.HealthRegen)
+            + Apply(StatId.HealthRegenFraction, 0f) * Apply(StatId.MaxHealth, baseStats.MaxHealth),
     };
 
     /// <summary>How many modifiers come from <paramref name="source"/> (e.g. levels bought of an upgrade).</summary>

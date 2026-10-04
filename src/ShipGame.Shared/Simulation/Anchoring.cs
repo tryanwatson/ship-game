@@ -43,13 +43,14 @@ public static class Anchoring
     /// <summary>The anchor key came up: a drop that hasn't happened yet is called off.</summary>
     public static void ReleaseKey(Ship ship) => ship.AnchorDropTicksRemaining = 0;
 
-    /// <summary>Lets go the anchor: the ship is brought up short where it is.</summary>
+    /// <summary>Lets go the anchor: the ship is brought up short where it is, sails furled.</summary>
     public static void Drop(Ship ship)
     {
         ship.Anchor = AnchorState.Down;
         ship.AnchorRaiseTicksRemaining = 0;
         ship.AnchorDropTicksRemaining = 0;
         ship.Speed = 0f;
+        ship.Throttle = 0;
         ship.WindDrift = default;
         ship.MoveTarget = null;
         ship.IsHoldingCourse = false;

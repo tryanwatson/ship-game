@@ -526,7 +526,7 @@ public sealed class World
 
         switch (command)
         {
-            case MoveCommand when ship.IsAnchored:
+            case MoveCommand or AdjustThrottleCommand when ship.IsAnchored:
                 return RejectionReason.Anchored; // held fast: no sailing anywhere until the anchor is up
             case MoveCommand move:
                 ship.MoveTarget = Vector2.Clamp(move.Target, Vector2.Zero, WorldSize);

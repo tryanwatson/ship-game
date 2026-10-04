@@ -186,6 +186,7 @@ public class WorldEventTests
     {
         new object[] { "sunk", (Func<World, Ship, Command>)((w, s) => { s.Health = 0; w.Step(); return new MoveCommand(PlayerId, Vector2.One); }), RejectionReason.NoShip },
         new object[] { "move at anchor", (Func<World, Ship, Command>)((w, s) => { s.IsAnchored = true; return new MoveCommand(PlayerId, Vector2.One); }), RejectionReason.Anchored },
+        new object[] { "sail at anchor", (Func<World, Ship, Command>)((w, s) => { s.IsAnchored = true; return new AdjustThrottleCommand(PlayerId, 1); }), RejectionReason.Anchored },
         new object[] { "anchor mid-raise", (Func<World, Ship, Command>)((w, s) => { s.IsAnchored = true; Anchoring.PressKey(s); return new AnchorKeyCommand(PlayerId, true); }), RejectionReason.AnchorBusy },
         new object[] { "bad slot", (Func<World, Ship, Command>)((w, s) => new CastAbilityCommand(PlayerId, (AbilitySlot)42, Vector2.Zero)), RejectionReason.InvalidSlot },
         new object[] { "on cooldown", (Func<World, Ship, Command>)((w, s) => { w.TryCastAbility(s, AbilitySlot.One, Vector2.Zero); return new CastAbilityCommand(PlayerId, AbilitySlot.One, Vector2.Zero); }), RejectionReason.OnCooldown },

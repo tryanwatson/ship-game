@@ -24,12 +24,12 @@ public sealed class Mortar : Ability
 
     /// <summary>In a salvo, each shell after the first lands this much later, this far from the aim point.</summary>
     public const int SalvoGapTicks = 6;
-    public const float SalvoSpread = 2.2f;
+    public const float SalvoSpread = 1.5f;
 
     // Bomblets: a ring just outside the blast, each a fraction of the shell, going off a moment after it.
     public const float ClusterSpreadFraction = 1.1f;
     public const float ClusterRadiusFraction = 0.5f;
-    public const float ClusterDamageFraction = 0.35f;
+    public const float ClusterDamageFraction = 0.25f;
     public const int ClusterDelayTicks = 8;
 
     public override string Id => AbilityId;
@@ -40,7 +40,7 @@ public sealed class Mortar : Ability
 
     public override bool IsAimed => true;
 
-    public override int CooldownTicks => (int)(12f * SimConstants.TickRate);
+    public override int CooldownTicks => (int)(6f * SimConstants.TickRate);
 
     public static float RangeFor(Ship ship) => Range * ship.Stats.WeaponRange * ship.AbilityValue(AbilityId, AbilityStat.Range, 1f);
 

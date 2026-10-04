@@ -5,8 +5,8 @@ using static ShipGame.Shared.Upgrades.SkillEffect;
 namespace ShipGame.Shared.Upgrades;
 
 /// <summary>
-/// Every weapon's skill tree. Each is two mutually exclusive branches of two skills, crowned by a capstone either
-/// branch leads to, so a ship can own at most three of a tree's five. Add a skill by adding a row: its effects are
+/// Every weapon's skill tree. Each has two mutually exclusive branches of three skills,
+/// each with its own capstone, so a ship can own at most three of a tree's six. Add a skill by adding a row: its effects are
 /// read by the ability (see <see cref="AbilityStat"/>), and the shipyard lays the tree out from the prerequisites.
 /// Rows are listed tier by tier, left branch first.
 /// </summary>
@@ -14,87 +14,102 @@ public static class SkillTrees
 {
     public static readonly IReadOnlyList<SkillDefinition> All = new SkillDefinition[]
     {
-        // ---- Broadside: a brawler's heavy weight of metal, or a skirmisher's quick, mobile fire ----------------
-        new("heavy-volley", "HEAVY VOLLEY", BroadsideVolley.AbilityId, 20, "+2 CANNON PER VOLLEY. RELOADS 30% SLOWER.")
+        // Broadside: concentrated volleys or continuous pressure, independent of ship speed.
+        new("heavy-volley", "HEAVY VOLLEY", BroadsideVolley.AbilityId, 20, "+2 CANNON PER VOLLEY. +20% RELOAD TIME.")
         {
             Excludes = new[] { "rapid-guns" },
-            Effects = new[] { Flat(ShotCount, 2), Percent(Cooldown, 0.3f) },
+            Effects = new[] { Flat(ShotCount, 2), Percent(Cooldown, 0.2f) },
         },
-        new("rapid-guns", "RAPID GUNS", BroadsideVolley.AbilityId, 20, "1 FEWER CANNON PER VOLLEY. RELOADS 40% FASTER.")
+        new("rapid-guns", "RAPID GUNS", BroadsideVolley.AbilityId, 20, "1 FEWER CANNON PER VOLLEY. -30% RELOAD TIME.")
         {
             Excludes = new[] { "heavy-volley" },
-            Effects = new[] { Flat(ShotCount, -1), Percent(Cooldown, -0.4f) },
+            Effects = new[] { Flat(ShotCount, -1), Percent(Cooldown, -0.3f) },
         },
-        new("point-blank", "POINT BLANK", BroadsideVolley.AbilityId, 35, "+60% DAMAGE TO SHIPS WITHIN HALF RANGE.")
+        new("point-blank", "POINT BLANK", BroadsideVolley.AbilityId, 35, "+50% DAMAGE TO SHIPS WITHIN HALF RANGE.")
         {
             Requires = new[] { "heavy-volley" },
-            Effects = new[] { Flat(CloseRangeDamage, 0.6f) },
+            Effects = new[] { Flat(CloseRangeDamage, 0.5f) },
         },
-        new("running-guns", "RUNNING GUNS", BroadsideVolley.AbilityId, 35, "+40% DAMAGE WHEN FIRED NEAR FULL SPEED.")
+        new("improved-powder", "IMPROVED POWDER", BroadsideVolley.AbilityId, 35, "+25% DAMAGE AT ANY SPEED.")
         {
             Requires = new[] { "rapid-guns" },
-            Effects = new[] { Flat(SpeedDamage, 0.4f) },
+            Effects = new[] { Percent(Damage, 0.25f) },
         },
-        new("devastating-volley", "DEVASTATING VOLLEY", BroadsideVolley.AbilityId, 60,
-            "+4 CANNON AND +25% DAMAGE. RELOADS 80% SLOWER.")
+        new("thunderous-volley", "THUNDEROUS VOLLEY", BroadsideVolley.AbilityId, 60,
+            "+2 MORE CANNON, +25% DAMAGE AND +20% RELOAD TIME.")
         {
-            RequiresAny = new[] { "point-blank", "running-guns" },
-            Effects = new[] { Flat(ShotCount, 4), Percent(Damage, 0.25f), Percent(Cooldown, 0.8f) },
+            Requires = new[] { "point-blank" },
+            Effects = new[] { Flat(ShotCount, 2), Percent(Damage, 0.25f), Percent(Cooldown, 0.2f) },
+        },
+        new("rolling-thunder", "ROLLING THUNDER", BroadsideVolley.AbilityId, 60, "+1 CANNON AND -20% RELOAD TIME.")
+        {
+            Requires = new[] { "improved-powder" },
+            Effects = new[] { Flat(ShotCount, 1), Percent(Cooldown, -0.2f) },
         },
 
-        // ---- Long gun: a reach-and-reload sniper, or a slow, heavy shot that punches through ------------------
-        new("rifled-barrel", "RIFLED BARREL", LongGun.AbilityId, 20, "+40% SHOT SPEED AND +35% RANGE.")
+        // Long gun: precision at distance or penetration through formations.
+        new("rifled-barrel", "RIFLED BARREL", LongGun.AbilityId, 20, "+40% SHOT SPEED AND +25% RANGE.")
         {
             Excludes = new[] { "heavy-shot" },
-            Effects = new[] { Percent(ProjectileSpeed, 0.4f), Percent(AbilityStat.Range, 0.35f) },
+            Effects = new[] { Percent(ProjectileSpeed, 0.4f), Percent(AbilityStat.Range, 0.25f) },
         },
-        new("heavy-shot", "HEAVY SHOT", LongGun.AbilityId, 20, "+60% DAMAGE. 15% SLOWER SHOT, RELOADS 40% SLOWER.")
+        new("heavy-shot", "HEAVY SHOT", LongGun.AbilityId, 20, "+50% DAMAGE. +20% RELOAD TIME.")
         {
             Excludes = new[] { "rifled-barrel" },
-            Effects = new[] { Percent(Damage, 0.6f), Percent(ProjectileSpeed, -0.15f), Percent(Cooldown, 0.4f) },
+            Effects = new[] { Percent(Damage, 0.5f), Percent(Cooldown, 0.2f) },
         },
-        new("rangefinder", "RANGEFINDER", LongGun.AbilityId, 35, "LONG RANGE HITS REFUND HALF THE RELOAD.")
+        new("rangefinder", "RANGEFINDER", LongGun.AbilityId, 35, "LONG RANGE HITS REFUND 35% OF THE FULL RELOAD.")
         {
             Requires = new[] { "rifled-barrel" },
-            Effects = new[] { Flat(LongRangeRefund, 0.5f) },
+            Effects = new[] { Flat(LongRangeRefund, 0.35f) },
         },
         new("piercing-shot", "PIERCING SHOT", LongGun.AbilityId, 35, "THE SHOT PASSES THROUGH ONE SHIP AND FLIES ON.")
         {
             Requires = new[] { "heavy-shot" },
             Effects = new[] { Flat(Pierce, 1) },
         },
-        new("deadeye", "DEADEYE", LongGun.AbilityId, 60, "+80% DAMAGE AT LONG RANGE. RELOADS 25% SLOWER.")
+        new("deadeye", "DEADEYE", LongGun.AbilityId, 60, "+75% DAMAGE AT LONG RANGE.")
         {
-            RequiresAny = new[] { "rangefinder", "piercing-shot" },
-            Effects = new[] { Flat(LongRangeDamage, 0.8f), Percent(Cooldown, 0.25f) },
+            Requires = new[] { "rangefinder" },
+            Effects = new[] { Flat(LongRangeDamage, 0.75f) },
+        },
+        new("hullbreaker", "HULLBREAKER", LongGun.AbilityId, 60, "+35% DAMAGE. PASSES THROUGH ONE ADDITIONAL SHIP.")
+        {
+            Requires = new[] { "piercing-shot" },
+            Effects = new[] { Percent(Damage, 0.35f), Flat(Pierce, 1) },
         },
 
-        // ---- Mortar: big lingering blasts, or fast and many shells ----------------------------------------
-        new("heavy-shell", "HEAVY SHELL", Mortar.AbilityId, 20, "+40% BLAST RADIUS. RELOADS 20% SLOWER.")
+        // Mortar: large area destruction or repeated bombardment.
+        new("heavy-shell", "HEAVY SHELL", Mortar.AbilityId, 20, "+30% BLAST RADIUS.")
         {
             Excludes = new[] { "quick-fuse" },
-            Effects = new[] { Percent(BlastRadius, 0.4f), Percent(Cooldown, 0.2f) },
+            Effects = new[] { Percent(BlastRadius, 0.3f) },
         },
-        new("quick-fuse", "QUICK FUSE", Mortar.AbilityId, 20, "SHELLS LAND 45% SOONER. 15% SMALLER BLAST.")
+        new("quick-fuse", "QUICK FUSE", Mortar.AbilityId, 20, "SHELLS LAND 35% SOONER.")
         {
             Excludes = new[] { "heavy-shell" },
-            Effects = new[] { Percent(FlightTime, -0.45f), Percent(BlastRadius, -0.15f) },
+            Effects = new[] { Percent(FlightTime, -0.35f) },
         },
-        new("cluster-shell", "CLUSTER SHELL", Mortar.AbilityId, 35, "EACH IMPACT SCATTERS 4 SMALL BLASTS AROUND IT.")
+        new("cluster-shell", "CLUSTER SHELL", Mortar.AbilityId, 35, "EACH IMPACT SCATTERS 4 BLASTS, EACH AT 25% DAMAGE.")
         {
             Requires = new[] { "heavy-shell" },
             Effects = new[] { Flat(ClusterCount, 4) },
         },
-        new("bombardment", "BOMBARDMENT", Mortar.AbilityId, 35, "FIRES 3 SHELLS IN SEQUENCE. -45% DAMAGE EACH.")
+        new("bombardment", "BOMBARDMENT", Mortar.AbilityId, 35, "FIRES 3 SHELLS IN SEQUENCE AT 50% DAMAGE EACH.")
         {
             Requires = new[] { "quick-fuse" },
-            Effects = new[] { Flat(ShotCount, 2), Percent(Damage, -0.45f) },
+            Effects = new[] { Flat(ShotCount, 2), Percent(Damage, -0.5f) },
         },
-        new("siege-artillery", "SIEGE ARTILLERY", Mortar.AbilityId, 60,
-            "+60% RANGE, +30% BLAST AND +25% DAMAGE. RELOADS 60% SLOWER.")
+        new("earthshaker", "EARTHSHAKER", Mortar.AbilityId, 60,
+            "+40% DAMAGE, +20% BLAST RADIUS AND +15% RELOAD TIME.")
         {
-            RequiresAny = new[] { "cluster-shell", "bombardment" },
-            Effects = new[] { Percent(AbilityStat.Range, 0.6f), Percent(BlastRadius, 0.3f), Percent(Damage, 0.25f), Percent(Cooldown, 0.6f) },
+            Requires = new[] { "cluster-shell" },
+            Effects = new[] { Percent(Damage, 0.4f), Percent(BlastRadius, 0.2f), Percent(Cooldown, 0.15f) },
+        },
+        new("rain-of-fire", "RAIN OF FIRE", Mortar.AbilityId, 60, "SALVO SHELLS DEAL 60% BASE DAMAGE. -25% RELOAD TIME.")
+        {
+            Requires = new[] { "bombardment" },
+            Effects = new[] { Percent(Damage, 0.1f), Percent(Cooldown, -0.25f) },
         },
     };
 

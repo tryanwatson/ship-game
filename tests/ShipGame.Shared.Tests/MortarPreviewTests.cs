@@ -22,8 +22,8 @@ public class MortarPreviewTests
             Loadouts.Starting(WeaponCatalog.Mortar.Ability));
         foreach (var id in branch switch
         {
-            "bombardment" => new[] { "quick-fuse", "bombardment", "siege-artillery" },
-            "cluster-shell" => new[] { "heavy-shell", "cluster-shell", "siege-artillery" },
+            "bombardment" => new[] { "quick-fuse", "bombardment", "rain-of-fire" },
+            "cluster-shell" => new[] { "heavy-shell", "cluster-shell", "earthshaker" },
             _ => Array.Empty<string>(),
         })
             ship.AddSkill(SkillTrees.Find(id)!);

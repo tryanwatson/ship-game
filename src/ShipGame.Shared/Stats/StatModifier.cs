@@ -26,6 +26,9 @@ public enum StatId
 
     /// <summary>Health recovered per second.</summary>
     HealthRegen,
+
+    /// <summary>Fraction of maximum health recovered per second, added to flat regeneration.</summary>
+    HealthRegenFraction,
 }
 
 public enum ModifierKind

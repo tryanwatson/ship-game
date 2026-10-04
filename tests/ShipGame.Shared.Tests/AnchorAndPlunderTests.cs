@@ -42,14 +42,17 @@ public class AnchorAndPlunderTests
         var anchoredAt = ship.Position;
         Assert.Equal(AnchorState.Down, ship.Anchor);
         Assert.Equal(0f, ship.Speed);
+        Assert.Equal(0, ship.Throttle); // sails furled as she brings up
 
         world.Enqueue(new SetRudderCommand(PlayerId, 1));
         world.Enqueue(new MoveCommand(PlayerId, new Vector2(100, 100)));
+        world.Enqueue(new AdjustThrottleCommand(PlayerId, 3));
         RunTicks(world, SimConstants.TickRate * 10);
 
         Assert.Equal(anchoredAt, ship.Position);
         Assert.Equal(0f, ship.Heading);
         Assert.Null(ship.MoveTarget);
+        Assert.Equal(0, ship.Throttle);
     }
 
     [Fact]
@@ -120,8 +123,8 @@ public class AnchorAndPlunderTests
         var (world, ship) = CreateWorld(new Vector2(20, 64));
         ship.IsAnchored = true;
         world.Step();
-        world.Enqueue(new AdjustThrottleCommand(PlayerId, 3));     // sail can be set while anchored
         world.Enqueue(new AnchorKeyCommand(PlayerId, true));      // start hauling
+        world.Enqueue(new AdjustThrottleCommand(PlayerId, 3));     // no setting sail until the anchor is up
         world.Step();
         var anchoredAt = ship.Position;
 
@@ -132,7 +135,9 @@ public class AnchorAndPlunderTests
         world.Enqueue(new AnchorKeyCommand(PlayerId, true)); // mashing X mid-haul does nothing
         RunTicks(world, 2);
         Assert.Equal(AnchorState.Weighed, ship.Anchor);
+        Assert.Equal(0, ship.Throttle);
 
+        world.Enqueue(new AdjustThrottleCommand(PlayerId, 3));
         RunTicks(world, SimConstants.TickRate * 2);
         Assert.True(ship.Position.X > anchoredAt.X + 1f, "should be under way after the anchor is up");
     }

@@ -115,8 +115,34 @@ public class ProgressionTests
         for (var i = 0; i < SimConstants.TickRate; i++)
             world.Step();
 
-        Assert.Equal(ShipStats.Sloop.HealthRegen + 2 * repairs.ValuePerLevel, player.Stats.HealthRegen, 4);
+        Assert.Equal(ShipStats.Sloop.HealthRegen + 2 * repairs.ValuePerLevel * player.Stats.MaxHealth, player.Stats.HealthRegen, 4);
         Assert.Equal(50f + player.Stats.HealthRegen, player.Health, 2);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Repairs_ScaleWithHull_RegardlessOfPurchaseOrder(bool repairsFirst)
+    {
+        var (world, player) = CreateWorld();
+        var repairs = UpgradeCatalog.Find("repairs")!;
+        var hull = UpgradeCatalog.Find("hull")!;
+        var upgrades = repairsFirst ? new[] { repairs, hull } : new[] { hull, repairs };
+        foreach (var upgrade in upgrades)
+            player.AddModifier(upgrade.Modifier);
+
+        Assert.Equal(120f, player.Stats.MaxHealth);
+        Assert.Equal(1.1f, player.Stats.HealthRegen, 4);
+        player.Health = 50f;
+        for (var i = 0; i < SimConstants.TickRate * 10; i++)
+            world.Step();
+        Assert.Equal(61f, player.Health, 2);
+
+        player.AddModifier(hull.Modifier);
+        Assert.Equal(1.2f, player.Stats.HealthRegen, 4);
+        player.Health = player.Stats.MaxHealth - 0.001f;
+        world.Step();
+        Assert.Equal(player.Stats.MaxHealth, player.Health);
     }
 
     [Fact]

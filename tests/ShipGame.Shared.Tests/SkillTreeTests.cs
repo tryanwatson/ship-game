@@ -150,11 +150,11 @@ public class SkillTreeTests
         var (world, _) = Docked();
 
         Assert.Equal(RejectionReason.MissingPrerequisite, Buy(world, "point-blank"));
-        Assert.Equal(RejectionReason.MissingPrerequisite, Buy(world, "devastating-volley"));
+        Assert.Equal(RejectionReason.MissingPrerequisite, Buy(world, "thunderous-volley"));
         Assert.Null(Buy(world, "heavy-volley"));
-        Assert.Equal(RejectionReason.MissingPrerequisite, Buy(world, "devastating-volley")); // still needs a tier-2 skill
+        Assert.Equal(RejectionReason.MissingPrerequisite, Buy(world, "thunderous-volley")); // still needs a tier-2 skill
         Assert.Null(Buy(world, "point-blank"));
-        Assert.Null(Buy(world, "devastating-volley"));
+        Assert.Null(Buy(world, "thunderous-volley"));
     }
 
     [Fact]
@@ -164,16 +164,16 @@ public class SkillTreeTests
         var heavy = SkillTrees.Find("heavy-volley")!;
 
         // Before buying, the shipyard can say what the choice would shut out.
-        Assert.Equal(new[] { "rapid-guns", "running-guns" }, SkillTrees.WouldCloseOff(Array.Empty<string>(), heavy).Select(s => s.Id));
+        Assert.Equal(new[] { "rapid-guns", "improved-powder", "rolling-thunder" }, SkillTrees.WouldCloseOff(Array.Empty<string>(), heavy).Select(s => s.Id));
 
         Assert.Null(Buy(world, "heavy-volley"));
 
         Assert.Equal(SkillStatus.Excluded, Shipyards.StatusOf(ship, SkillTrees.Find("rapid-guns")!));
-        Assert.Equal(SkillStatus.Excluded, Shipyards.StatusOf(ship, SkillTrees.Find("running-guns")!));
+        Assert.Equal(SkillStatus.Excluded, Shipyards.StatusOf(ship, SkillTrees.Find("improved-powder")!));
         Assert.Equal(SkillStatus.Available, Shipyards.StatusOf(ship, SkillTrees.Find("point-blank")!));
-        Assert.Equal(SkillStatus.NeedsPrerequisite, Shipyards.StatusOf(ship, SkillTrees.Find("devastating-volley")!));
+        Assert.Equal(SkillStatus.NeedsPrerequisite, Shipyards.StatusOf(ship, SkillTrees.Find("thunderous-volley")!));
         Assert.Equal(RejectionReason.ExcludedByChoice, Buy(world, "rapid-guns"));
-        Assert.Equal(RejectionReason.ExcludedByChoice, Buy(world, "running-guns"));
+        Assert.Equal(RejectionReason.ExcludedByChoice, Buy(world, "improved-powder"));
     }
 
     [Theory]
@@ -225,7 +225,7 @@ public class SkillTreeTests
 
         Assert.Equal(BroadsideVolley.CannonCount + 2, world.Projectiles.Count);
         var broadside = ship.GetAbility(AbilitySlot.One)!;
-        Assert.Equal(new BroadsideVolley().CooldownTicks * 1.3f, broadside.DurationTicks(BroadsideVolley.StarboardChannel), 0);
+        Assert.Equal(new BroadsideVolley().CooldownTicks * 1.2f, broadside.DurationTicks(BroadsideVolley.StarboardChannel), 0);
     }
 
     [Fact]
@@ -236,12 +236,12 @@ public class SkillTreeTests
         world.TryCastAbility(ship, AbilitySlot.One, ship.Position + new Vector2(0, 5));
 
         Assert.Equal(BroadsideVolley.CannonCount - 1, world.Projectiles.Count);
-        Assert.Equal(new BroadsideVolley().CooldownTicks * 0.6f,
+        Assert.Equal(MathF.Round(new BroadsideVolley().CooldownTicks * 0.7f),
             ship.GetAbility(AbilitySlot.One)!.DurationTicks(BroadsideVolley.StarboardChannel), 0);
     }
 
     [Theory]
-    [InlineData(3f, 1.6f)]  // within half the broadside's range: point blank
+    [InlineData(3f, 1.5f)]  // within half the broadside's range: point blank
     [InlineData(6.5f, 1f)]  // further out: no bonus
     public void PointBlank_HitsHarder_UpClose(float distance, float expectedMultiplier)
     {
@@ -260,29 +260,28 @@ public class SkillTreeTests
     }
 
     [Fact]
-    public void RunningGuns_HitHarder_NearFullSail()
+    public void ImprovedPowder_HitsHarder_AtRestAndAtFullSail()
     {
-        var (world, ship) = Range("rapid-guns", "running-guns");
+        var (world, ship) = Range("rapid-guns", "improved-powder");
 
         world.TryCastAbility(ship, AbilitySlot.One, ship.Position + new Vector2(0, 5));
-        Assert.All(world.Projectiles, p => Assert.Equal(BroadsideVolley.Damage, p.Damage, 3)); // at rest: no bonus
+        Assert.All(world.Projectiles, p => Assert.Equal(12.5f, p.Damage, 3));
 
         ship.Speed = ship.Stats.MaxSpeed;
         world.TryCastAbility(ship, AbilitySlot.One, ship.Position + new Vector2(0, -5));
-        var running = world.Projectiles.Skip(BroadsideVolley.CannonCount - 1).ToList();
-        Assert.All(running, p => Assert.Equal(BroadsideVolley.Damage * 1.4f, p.Damage, 3));
+        Assert.All(world.Projectiles, p => Assert.Equal(12.5f, p.Damage, 3));
     }
 
     [Fact]
-    public void DevastatingVolley_IsABigSpike_WithABigReload()
+    public void ThunderousVolley_AddsBurst_WithoutLosingItsBranchIdentity()
     {
-        var (world, ship) = Range("heavy-volley", "point-blank", "devastating-volley");
+        var (world, ship) = Range("heavy-volley", "point-blank", "thunderous-volley");
 
         world.TryCastAbility(ship, AbilitySlot.One, ship.Position + new Vector2(0, 5));
 
-        Assert.Equal(BroadsideVolley.CannonCount + 6, world.Projectiles.Count);
+        Assert.Equal(BroadsideVolley.CannonCount + 4, world.Projectiles.Count);
         Assert.All(world.Projectiles, p => Assert.Equal(BroadsideVolley.Damage * 1.25f, p.Damage, 3));
-        Assert.Equal(new BroadsideVolley().CooldownTicks * 2.1f,
+        Assert.Equal(new BroadsideVolley().CooldownTicks * 1.4f,
             ship.GetAbility(AbilitySlot.One)!.DurationTicks(BroadsideVolley.StarboardChannel), 0);
     }
 
@@ -294,7 +293,7 @@ public class SkillTreeTests
         var (_, plain) = Range();
         var (world, ship) = Range("rifled-barrel");
 
-        Assert.Equal(LongGun.Range * 1.35f, LongGun.RangeFor(ship), 3);
+        Assert.Equal(LongGun.Range * 1.25f, LongGun.RangeFor(ship), 3);
         world.TryCastAbility(ship, AbilitySlot.Two, ship.Position + new Vector2(0, 10));
         Assert.Equal(LongGun.SpeedFor(plain) * 1.4f, world.Projectiles[0].Velocity.Length(), 2);
     }
@@ -314,14 +313,14 @@ public class SkillTreeTests
         StepUntil(plain, () => plain.Projectiles.Count == 0);
         StepUntil(skilled, () => skilled.Projectiles.Count == 0);
 
-        Assert.Equal(LongGun.Damage * 1.6f, Damage(plainNear), 2);
+        Assert.Equal(LongGun.Damage * 1.5f, Damage(plainNear), 2);
         Assert.Equal(0f, Damage(plainFar));
-        Assert.Equal(LongGun.Damage * 1.6f, Damage(skilledNear), 2);
-        Assert.Equal(LongGun.Damage * 1.6f, Damage(skilledFar), 2);
+        Assert.Equal(LongGun.Damage * 1.5f, Damage(skilledNear), 2);
+        Assert.Equal(LongGun.Damage * 1.5f, Damage(skilledFar), 2);
     }
 
     [Fact]
-    public void Rangefinder_LongRangeHits_GiveBackHalfTheReload()
+    public void Rangefinder_LongRangeHits_Refund35PercentOfFullReload()
     {
         var (world, ship) = Range("rifled-barrel", "rangefinder");
         Target(world, ship.Position + new Vector2(0, 18)); // beyond 60% of the rifled gun's reach
@@ -333,7 +332,7 @@ public class SkillTreeTests
         for (; world.Projectiles.Count > 0; ticks++)
             world.Step();
 
-        var expected = duration - ticks - (int)MathF.Round(duration * 0.5f);
+        var expected = duration - ticks - (int)MathF.Round(duration * 0.35f);
         Assert.InRange(gun.RemainingTicks(0), expected - 1, expected + 1);
     }
 
@@ -354,7 +353,7 @@ public class SkillTreeTests
     }
 
     [Theory]
-    [InlineData(18f, 1.8f)] // long range
+    [InlineData(18f, 1.75f)] // long range
     [InlineData(5f, 1f)]    // short range: no bonus
     public void Deadeye_HitsHarder_AtLongRange(float distance, float expectedMultiplier)
     {
@@ -376,7 +375,7 @@ public class SkillTreeTests
 
         world.TryCastAbility(ship, AbilitySlot.Three, ship.Position + new Vector2(10, 0));
 
-        Assert.Equal(Mortar.BlastRadius * 1.4f, world.Strikes.Single().Radius, 3);
+        Assert.Equal(Mortar.BlastRadius * 1.3f, world.Strikes.Single().Radius, 3);
     }
 
     [Fact]
@@ -388,7 +387,7 @@ public class SkillTreeTests
         world.TryCastAbility(ship, AbilitySlot.Three, ship.Position + new Vector2(20, 0));
 
         var strike = world.Strikes.Single();
-        Assert.True(strike.ImpactTick - strike.LaunchTick < Mortar.FlightTicks(plain, 20f) * 0.6f);
+        Assert.True(strike.ImpactTick - strike.LaunchTick < Mortar.FlightTicks(plain, 20f) * 0.7f);
     }
 
     [Fact]
@@ -421,21 +420,80 @@ public class SkillTreeTests
 
         var shells = world.Strikes.OrderBy(s => s.ImpactTick).ToList();
         Assert.Equal(3, shells.Count);
-        Assert.All(shells, s => Assert.Equal(Mortar.Damage * 0.55f, s.Damage, 3));
+        Assert.All(shells, s => Assert.Equal(Mortar.Damage * 0.5f, s.Damage, 3));
         Assert.Equal(Mortar.SalvoGapTicks, shells[1].ImpactTick - shells[0].ImpactTick);
         Assert.Equal(Mortar.SalvoGapTicks, shells[2].ImpactTick - shells[1].ImpactTick);
         Assert.Equal(3, shells.Select(s => s.Target).Distinct().Count());
     }
 
     [Fact]
-    public void SiegeArtillery_ReachesFurther_ButReloadsSlowly()
+    public void Earthshaker_AmplifiesMainBlastAndBomblets_WithAModerateReload()
     {
-        var (world, ship) = Range("heavy-shell", "cluster-shell", "siege-artillery");
+        var (world, ship) = Range("heavy-shell", "cluster-shell", "earthshaker");
+        var aim = ship.Position + new Vector2(80, 0);
+        world.TryCastAbility(ship, AbilitySlot.Three, aim);
 
-        world.TryCastAbility(ship, AbilitySlot.Three, ship.Position + new Vector2(80, 0));
+        var shell = world.Strikes.Single();
+        Assert.Equal(Mortar.Range, Vector2.Distance(ship.Position, shell.Target), 2);
+        Assert.Equal(3.75f, shell.Radius, 3);
+        Assert.Equal(49f, shell.Damage, 3);
+        Assert.Equal(207, ship.GetAbility(AbilitySlot.Three)!.DurationTicks(0));
+        StepUntil(world, () => world.Strikes.All(s => s.Id != shell.Id));
+        Assert.Equal(4, world.Strikes.Count);
+        Assert.All(world.Strikes, s => Assert.Equal(12.25f, s.Damage, 3));
+    }
 
-        Assert.Equal(Mortar.Range * 1.6f, Vector2.Distance(ship.Position, world.Strikes.Single().Target), 2);
-        Assert.Equal(Mortar.BlastRadius * 1.7f, world.Strikes.Single().Radius, 3);
-        Assert.Equal(new Mortar().CooldownTicks * 1.8f, ship.GetAbility(AbilitySlot.Three)!.DurationTicks(0), 0);
+    [Fact]
+    public void RollingThunder_MaintainsRapidFire_AtAnySpeed()
+    {
+        var (world, ship) = Range("rapid-guns", "improved-powder", "rolling-thunder");
+        world.TryCastAbility(ship, AbilitySlot.One, ship.Position + new Vector2(0, 5));
+
+        Assert.Equal(4, world.Projectiles.Count);
+        Assert.All(world.Projectiles, p => Assert.Equal(12.5f, p.Damage, 3));
+        Assert.Equal(38, ship.GetAbility(AbilitySlot.One)!.DurationTicks(BroadsideVolley.StarboardChannel));
+    }
+
+    [Fact]
+    public void Hullbreaker_HitsThreeShips_WithFullDamage_ThenStops()
+    {
+        var (world, ship) = Range("heavy-shot", "piercing-shot", "hullbreaker");
+        var targets = Enumerable.Range(1, 4).Select(i => Target(world, ship.Position + new Vector2(0, i * 3))).ToArray();
+        world.TryCastAbility(ship, AbilitySlot.Two, ship.Position + new Vector2(0, 16));
+        Assert.Equal(180, ship.GetAbility(AbilitySlot.Two)!.DurationTicks(0));
+        StepUntil(world, () => world.Projectiles.Count == 0);
+
+        Assert.All(targets.Take(3), target => Assert.Equal(40.7f, Damage(target), 2));
+        Assert.Equal(0f, Damage(targets[3]));
+    }
+
+    [Fact]
+    public void RainOfFire_FiresThreeStrongerShells_EveryFourAndAHalfSeconds()
+    {
+        var (world, ship) = Range("quick-fuse", "bombardment", "rain-of-fire");
+        world.TryCastAbility(ship, AbilitySlot.Three, ship.Position + new Vector2(15, 0));
+
+        Assert.Equal(3, world.Strikes.Count);
+        Assert.All(world.Strikes, s => Assert.Equal(21f, s.Damage, 3));
+        Assert.Equal(135, ship.GetAbility(AbilitySlot.Three)!.DurationTicks(0));
+        foreach (var shell in world.Strikes.Skip(1))
+            Assert.Equal(1.5f, Vector2.Distance(world.Strikes[0].Target, shell.Target), 3);
+    }
+
+    [Theory]
+    [InlineData("heavy-volley", "thunderous-volley", "rolling-thunder")]
+    [InlineData("rapid-guns", "rolling-thunder", "thunderous-volley")]
+    [InlineData("rifled-barrel", "deadeye", "hullbreaker")]
+    [InlineData("heavy-shot", "hullbreaker", "deadeye")]
+    [InlineData("heavy-shell", "earthshaker", "rain-of-fire")]
+    [InlineData("quick-fuse", "rain-of-fire", "earthshaker")]
+    public void BranchChoices_LockOutTheOppositeCapstone(string root, string ownCapstone, string otherCapstone)
+    {
+        var skill = SkillTrees.Find(root)!;
+        var (world, ship) = Docked(WeaponCatalog.Find(skill.AbilityId));
+        Assert.Null(Buy(world, root));
+        Assert.Equal(SkillStatus.NeedsPrerequisite, Shipyards.StatusOf(ship, SkillTrees.Find(ownCapstone)!));
+        Assert.Equal(RejectionReason.ExcludedByChoice, Buy(world, otherCapstone));
+        Assert.Contains(SkillTrees.WouldCloseOff(Array.Empty<string>(), skill), s => s.Id == otherCapstone);
     }
 }
