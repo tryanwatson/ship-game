@@ -14,7 +14,7 @@ public abstract record PirateOrders;
 /// <param name="IslandId">The island it guards, if any.</param>
 public sealed record GuardPost(Vector2 Center, float Radius, float MinRadius = 0f, float Watch = 0f, int? IslandId = null) : PirateOrders;
 
-/// <summary>Roams a band of sea running the map's width, sailing from one end of it to another.</summary>
-/// <param name="North">World Y of the band's northern edge (north is -Y).</param>
-/// <param name="South">World Y of its southern edge.</param>
-public sealed record RoamOrders(float North, float South) : PirateOrders;
+/// <summary>Roams a ring of sea round <paramref name="Center"/>, sailing from one part of it to another.</summary>
+/// <param name="InnerRadius">How close to the center it comes.</param>
+/// <param name="OuterRadius">How far from the center it goes.</param>
+public sealed record RoamOrders(Vector2 Center, float InnerRadius, float OuterRadius) : PirateOrders;

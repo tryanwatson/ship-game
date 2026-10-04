@@ -11,10 +11,11 @@ public sealed class Island
     public const int DefaultPlunderGold = 10;
 
     public Island(int id, IReadOnlyList<Vector2> outline, int plunderGold = DefaultPlunderGold, bool hasShipyard = false, string? name = null,
-        int level = 1)
+        int level = 1, bool isFortress = false)
     {
         Name = name ?? $"ISLE {id}";
         Level = level;
+        IsFortress = isFortress;
         PlunderGold = plunderGold;
         HasShipyard = hasShipyard;
         if (outline.Count < 3)
@@ -38,8 +39,17 @@ public sealed class Island
     /// <summary>Gold a player earns for plundering this island.</summary>
     public int PlunderGold { get; }
 
-    /// <summary>The level of the waters it lies in (see <c>Archipelago.Seas</c>): richer plunder, and better shipyard stock.</summary>
+    /// <summary>
+    /// The level of the waters it lies in (see <c>Archipelago.Seas</c>), or a fortress's own level: richer plunder,
+    /// better shipyard stock, and a fortress's stronger defenses.
+    /// </summary>
     public int Level { get; }
+
+    /// <summary>
+    /// Held by pirates: guns on its shore and ships at sea (see <c>Fortresses</c>). Taking it (sinking every gun) wins
+    /// each player a card; it can't be plundered until it's taken.
+    /// </summary>
+    public bool IsFortress { get; }
 
     /// <summary>Players anchored here can spend gold on upgrades; plundering it is opt-in.</summary>
     public bool HasShipyard { get; }
@@ -57,12 +67,28 @@ public sealed class Island
     /// <summary>Distance from a point to the shore; 0 on land.</summary>
     public float DistanceTo(Vector2 point) => Geometry.DistanceToConvex(_outline, point);
 
+    /// <summary>Where the shore lies straight out from the center along <paramref name="direction"/> (a unit vector).</summary>
+    public Vector2 ShoreToward(Vector2 direction)
+    {
+        // The outline is convex, so the center is inside it and the ray crosses the shore exactly once.
+        float inside = 0f, outside = BoundingRadius + 1f;
+        for (var i = 0; i < 24; i++)
+        {
+            var middle = (inside + outside) / 2f;
+            if (DistanceTo(Center + direction * middle) <= 0f)
+                inside = middle;
+            else
+                outside = middle;
+        }
+        return Center + direction * inside;
+    }
+
     /// <summary>
     /// An island built from a hand-drawn outline: rotated, and scaled so its area is exactly
     /// <paramref name="area"/> square tiles, then centered on <paramref name="center"/>.
     /// </summary>
     public static Island FromTemplate(int id, IReadOnlyList<Vector2> template, Vector2 center, float area, float rotation, bool hasShipyard = false,
-        string? name = null, int plunderGold = DefaultPlunderGold, int level = 1)
+        string? name = null, int plunderGold = DefaultPlunderGold, int level = 1, bool isFortress = false)
     {
         var templateCenter = Geometry.Centroid(template.ToArray());
         var scale = MathF.Sqrt(area / Geometry.Area(template.ToArray()));
@@ -73,6 +99,6 @@ public sealed class Island
             var local = (p - templateCenter) * scale;
             return center + new Vector2(local.X * cos - local.Y * sin, local.X * sin + local.Y * cos);
         }).ToList();
-        return new Island(id, outline, plunderGold, hasShipyard, name, level);
+        return new Island(id, outline, plunderGold, hasShipyard, name, level, isFortress);
     }
 }

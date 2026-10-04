@@ -14,7 +14,9 @@ public static class GoldShares
         var remainder = total % crew.Count;
         for (var i = 0; i < crew.Count; i++)
         {
-            var gold = share + (i < remainder ? 1 : 0);
+            // A privateer's share comes with a bonus on top, out of nobody else's.
+            var bonus = world.GetPlayerShip(crew[i])?.PerkValue(Upgrades.Perk.GoldBonus) ?? 0f;
+            var gold = (int)MathF.Round((share + (i < remainder ? 1 : 0)) * (1f + bonus));
             if (gold > 0)
                 world.AddGold(crew[i], gold);
         }

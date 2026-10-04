@@ -4,7 +4,7 @@ using ShipGame.Shared.Simulation;
 namespace ShipGame.Net;
 
 /// <summary>
-/// Which ships the server sends. The map is long and its pirates wait all along it, so only ships near some player
+/// Which ships the server sends. The map is big and its pirates are spread all over it, so only ships near some player
 /// are worth sending: everyone's own ships always, and pirates within <see cref="EnterRange"/> of a player ship
 /// (comfortably beyond what any screen shows). A shown ship stays shown until it's beyond <see cref="LeaveRange"/>,
 /// so one hovering at the edge doesn't flicker in and out. Every client gets the same set, so crewmates far apart

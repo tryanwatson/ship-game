@@ -41,6 +41,12 @@ public enum ModifierKind
     /// rather than compound, so ten +5% bonuses make +50%.
     /// </summary>
     Percent,
+
+    /// <summary>
+    /// Multiplies the final value, after flat and percentage bonuses: 0.5 halves it, 2 doubles it. Multipliers
+    /// compound, so two halvings make a quarter, and a value can't be pushed through zero by stacking them.
+    /// </summary>
+    Multiplier,
 }
 
 /// <param name="Source">

@@ -87,16 +87,13 @@ public sealed class CombatVisuals
                         var muzzle = owner is null ? shot.Position : owner.Position + direction * owner.Stats.Beam / 2f;
                         Fire(muzzle, direction, 1.4f);
                     }
-                    break;
-                case AbilityCast cast when TryPose(world, cast.ShipId, out var caster)
-                    && caster.Ship.GetAbility(cast.Slot)?.Definition is BroadsideVolley:
-                    var forward = new NVector2(MathF.Cos(caster.Heading), MathF.Sin(caster.Heading));
-                    var outward = new NVector2(-forward.Y, forward.X) * (cast.Channel == BroadsideVolley.StarboardChannel ? 1f : -1f);
-                    var cannons = BroadsideVolley.CannonCountFor(caster.Ship);
-                    for (var i = 0; i < cannons; i++)
+                    else if (TryPose(world, shot.OwnerShipId, out var gunner))
                     {
-                        var along = cannons == 1 ? 0f : BroadsideVolley.HalfSpan(caster.Ship) * (2f * i / (cannons - 1f) - 1f);
-                        Fire(caster.Position + forward * along + outward * caster.Ship.Stats.Beam / 2f, outward, 1f);
+                        // A broadside ball, from its own muzzle along the hull (moved to where the ship's drawn, and on
+                        // with it if it's arrived late), pointing where it was laid: its velocity less the way the ship gave it.
+                        var carried = gunner.Ship.Forward * gunner.Ship.Speed;
+                        var late = MathF.Max(0f, world.Tick - shot.Tick) * SimConstants.TickDelta;
+                        Fire(shot.Position + carried * late + (gunner.Position - gunner.Ship.Position), SafeDirection(shot.Velocity - carried), 1f);
                     }
                     break;
                 case AreaStrikeLaunched launch:
@@ -131,6 +128,17 @@ public sealed class CombatVisuals
                 case ShipGrounded grounded when TryPose(world, grounded.ShipId, out var ship):
                     Hit(ship.Position, true);
                     _hits[grounded.ShipId] = HitSeconds;
+                    break;
+                case ShipRammed rammed when TryPose(world, rammed.TargetShipId, out var rammedShip):
+                    Hit(rammedShip.Position, true);
+                    _hits[rammed.TargetShipId] = HitSeconds;
+                    break;
+                case ShipSunk sunk when TryPose(world, sunk.ShipId, out var lost) && lost.Ship.IsFort:
+                    // A fort doesn't sink: it blows up, and the stones fly.
+                    Explosion(lost.Position, 2.2f);
+                    for (var i = 0; i < 10; i++)
+                        Add(new Particle(Kind.Splinter, lost.Position, Direction() * (0.5f + Random()), 7, 22 + Random() * 24,
+                            3.5f, new Color(150, 146, 128), 1.4f));
                     break;
                 case ShipSunk sunk when TryPose(world, sunk.ShipId, out var lost):
                     var ghost = new Ship(lost.Ship.Id, lost.Ship.OwnerPlayerId, lost.Ship.Stats)

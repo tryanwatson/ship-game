@@ -35,27 +35,31 @@ public class PirateRoleTests
     }
 
     [Fact]
-    public void PlayersAndTheFlagship_HaveNoRole()
+    public void PlayersBossesAndForts_HaveNoRole()
     {
         var world = new World(new Vector2(64, 64));
         var player = world.SpawnShip(new Vector2(10, 10), 0f, ShipStats.Sloop, PlayerId, Loadouts.Starting(new LongGun()));
         var flagship = world.SpawnShip(new Vector2(40, 40), 0f, ShipStats.Flagship, abilities: Loadouts.Pirate);
         flagship.IsBoss = true;
+        var fort = world.SpawnShip(new Vector2(20, 40), 0f, ShipStats.Fort, abilities: Loadouts.Starting(new LongGun()));
+        fort.FortIslandId = 1;
 
         Assert.Null(PirateRoles.Of(player));
         Assert.Null(PirateRoles.Of(flagship));
+        Assert.Null(PirateRoles.Of(fort));
     }
 
     [Fact]
-    public void ARun_PutsEveryRoleToSea_AndTheFlagshipKeepsItsBroadside()
+    public void ARun_PutsEveryRoleToSea_AndBossesLeadWithABroadside()
     {
-        var world = Runs.Create(seed: 1, new List<(int, Ability)> { (PlayerId, new BroadsideVolley()) });
-        var pirates = world.Ships.Where(s => s.Team == Team.Pirates).ToList();
+        var world = Runs.Create(seed: 1, new List<(int, string)> { (PlayerId, "ANNE") });
+        var pirates = world.Ships.Where(s => s.Team == Team.Pirates && !s.IsFort).ToList();
 
-        var roles = pirates.Where(s => !s.IsBoss).Select(s => PirateRoles.Of(s)).ToList();
+        var roles = pirates.Select(s => PirateRoles.Of(s)).ToList();
         Assert.All(roles, r => Assert.NotNull(r));
         Assert.Equal(PirateRoles.All.OrderBy(r => r), roles.Distinct().Select(r => r!.Value).OrderBy(r => r));
-        Assert.IsType<BroadsideVolley>(pirates.Single(s => s.IsBoss).Abilities[0]!.Definition);
+        for (var round = 1; round <= RunDirector.BossCount; round++)
+            Assert.IsType<BroadsideVolley>(RunDirector.BossLoadout(round)[0]);
     }
 
     [Fact]
@@ -64,6 +68,7 @@ public class PirateRoleTests
         var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
         var player = world.SpawnShip(new Vector2(60, 100), 0f, ShipStats.Sloop, PlayerId);
         player.Throttle = ShipMovement.ThrottleLevels; // sailing east, straight on
+        player.Speed = player.Stats.MaxSpeed;
         var sniper = SpawnPirate(world, new Vector2(60, 86), PirateRole.Sniper);
 
         var closest = float.MaxValue;

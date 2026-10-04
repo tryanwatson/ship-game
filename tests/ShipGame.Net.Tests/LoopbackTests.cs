@@ -81,11 +81,12 @@ public sealed class LoopbackTests : IDisposable
         var a = Connect();
         var b = Connect();
         PumpUntil(() => a.Status == ConnectionStatus.Lobby && b.Status == ConnectionStatus.Lobby, "both in the lobby");
-        a.ReadyUp(weaponA);
-        b.ReadyUp();
+        a.ReadyUp("ANNE");
+        b.ReadyUp("MARY");
         PumpUntil(() => a.Status == ConnectionStatus.InRun && b.Status == ConnectionStatus.InRun, "run to start");
         PumpUntil(() => a.Replica.World.Ships.Count(s => s.OwnerPlayerId is not null) == 2
                         && b.Replica.World.Ships.Count(s => s.OwnerPlayerId is not null) == 2, "both ships on both clients");
+        PumpUntil(() => a.SetSail(weaponA) & b.SetSail() && !_server.World!.IsPaused, "the run to get under way");
         return (a, b);
     }
 
@@ -141,30 +142,32 @@ public sealed class LoopbackTests : IDisposable
         PumpUntil(() => a.Lobby!.StartingGold == 500, "a to see the new setting");
 
         foreach (var client in new[] { a, b })
-        {
-            client.ChooseStartingWeapon(BroadsideVolley.AbilityId);
-            client.SetReady();
-        }
+            client.ReadyUp();
         PumpUntil(() => a.Status == ConnectionStatus.InRun, "run to start");
         PumpUntil(() => a.Replica.World.Players.TryGetValue(a.LocalPlayerId, out var p) && p.Gold == 500, "a's gold to arrive");
         Assert.Equal(500, _server.World!.Players[b.LocalPlayerId].Gold);
     }
 
     [Fact]
-    public void ReadyingUp_IsRefused_UntilAStartingWeaponIsChosen()
+    public void ReadyingUp_IsRefused_UntilNamed_AndTheRunOpensWithTheStartingChoices()
     {
         var client = Connect();
         PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
 
         client.SetReady();
+        client.SetName("!!");
         PumpFor(0.3);
         Assert.Null(_server.World);
         Assert.False(client.Lobby!.Players.Single().Ready);
 
-        client.ChooseStartingWeapon(Mortar.AbilityId);
-        PumpUntil(() => client.Lobby!.Players.Single().StartingWeaponId == Mortar.AbilityId, "the choice to show in the lobby");
+        client.SetName("calico jack");
+        PumpUntil(() => client.Lobby!.Players.Single().Name == "CALICO JACK", "the name to show in the lobby");
         client.SetReady();
         PumpUntil(() => _server.World is not null, "run to start");
+        PumpUntil(() => client.Replica.World.IsPaused, "the starting choices on the client");
+        Assert.Equal("CALICO JACK", client.Replica.World.Players[client.LocalPlayerId].Name);
+        Assert.True(client.Replica.World.Players[client.LocalPlayerId].NeedsStartingWeapon);
+        PumpUntil(() => client.SetSail(Mortar.AbilityId), "the run to get under way");
 
         // Only the chosen weapon, on 1; the rest are bought later.
         var ship = _server.World!.GetPlayerShip(client.LocalPlayerId)!;
@@ -242,7 +245,7 @@ public sealed class LoopbackTests : IDisposable
     public void MortarShells_AreVisibleToEveryone_WhileInTheAir()
     {
         var (a, b) = StartTwoPlayerRun(Mortar.AbilityId);
-        var aim = _server.World!.GetPlayerShip(a.LocalPlayerId)!.Position + new Vector2(20, 0);
+        var aim = _server.World!.GetPlayerShip(a.LocalPlayerId)!.Position + new Vector2(15, 0);
 
         a.Send(new CastAbilityCommand(0, AbilitySlot.One, aim));
         PumpUntil(() => b.Replica.World.Strikes.Count == 1, "b to see a's shell in the air");
@@ -305,6 +308,7 @@ public sealed class LoopbackTests : IDisposable
         PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
         client.ReadyUp();
         PumpUntil(() => client.Replica.World.GetPlayerShip(client.LocalPlayerId) is not null, "our ship");
+        PumpUntil(() => client.SetSail(), "the run to get under way");
         client.Send(new AdjustThrottleCommand(0, 3));
         PumpFor(2.0);
 
@@ -327,48 +331,38 @@ public sealed class LoopbackTests : IDisposable
     }
 
     [Fact]
-    public void OwnShots_LeaveTheDrawnHull_ThenJoinTheirTruePath()
+    public void OwnShots_LeaveTheDrawnHull_TheMomentTheyreFired_AndKeepPaceWithIt()
     {
         var client = Connect(new NetworkConditions(LagMs: 300));
         PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
         client.ReadyUp();
         PumpUntil(() => client.Replica.World.GetPlayerShip(client.LocalPlayerId) is not null, "our ship");
+        PumpUntil(() => client.SetSail(), "the run to get under way");
         client.Send(new AdjustThrottleCommand(0, 5));
         PumpFor(3.0); // up to full speed, so the predicted ship is well ahead of the server's timeline
         client.TakeEvents();
 
-        var serverShip = _server.World!.GetPlayerShip(client.LocalPlayerId)!;
-        var abeam = serverShip.Position + new Vector2(-serverShip.Forward.Y, serverShip.Forward.X) * 6f;
+        var drawn = client.Replica.World.GetPlayerShip(client.LocalPlayerId)!;
+        var abeam = drawn.Position + new Vector2(-drawn.Forward.Y, drawn.Forward.X) * 6f;
         client.Send(new CastAbilityCommand(0, AbilitySlot.One, abeam));
 
-        // The frame the volley appears, each ball should sit where it was on the server's hull, but on the hull as
-        // drawn, rather than back where the server's ship was when it fired.
-        var serverTrack = new Dictionary<long, Vector2>();
-        ProjectileSpawned[] volley = Array.Empty<ProjectileSpawned>();
-        PumpUntil(() =>
-        {
-            serverTrack[_server.World.Tick] = serverShip.Position;
-            return (volley = client.TakeEvents().OfType<ProjectileSpawned>().ToArray()).Length > 0;
-        }, "the volley");
-        var drawnShip = client.Replica.World.GetPlayerShip(client.LocalPlayerId)!.Position;
-        foreach (var shot in volley)
-        {
-            var firedFrom = serverTrack[shot.Tick];
-            Assert.True(Vector2.Distance(firedFrom, drawnShip) > 1.5f,
-                $"the drawn ship should be well ahead of where it fired from (else this test proves nothing), was {Vector2.Distance(firedFrom, drawnShip)}");
-            var drawnShot = client.Replica.World.Projectiles.Single(p => p.Id == shot.ProjectileId).Position;
-            var misplaced = Vector2.Distance(drawnShot - drawnShip, shot.Position - firedFrom);
-            Assert.True(misplaced < 0.3f, $"shot drawn {misplaced} tiles off its place on the hull");
-        }
+        // Fired here and now, from the hull as drawn: no waiting a round trip for the server.
+        var volley = client.Replica.World.Projectiles.Where(p => p.OwnerShipId == drawn.Id).ToArray();
+        Assert.Equal(BroadsideVolley.CannonCount, volley.Length);
+        var along = volley.ToDictionary(p => p.Id, p => Vector2.Dot(p.Position - drawn.Position, drawn.Forward));
+        Assert.All(volley, p => Assert.True(Vector2.Distance(p.Position, drawn.Position) < drawn.Stats.Length,
+            $"shot fired {Vector2.Distance(p.Position, drawn.Position)} tiles from the drawn ship"));
 
-        // Once blended in, they fly exactly where the server says.
-        PumpFor((ClientReplica.ShotConvergeTicks + 2) / SimConstants.TickRate);
-        foreach (var shot in volley)
+        // After the server's answered, the same balls (not a second volley) are still abeam of the ship as drawn,
+        // where they'd be had there been no lag at all.
+        PumpFor(0.45); // a 300 ms round trip, and short of the balls' ~0.57 s flight
+        var flying = client.Replica.World.Projectiles.Where(p => p.OwnerShipId == drawn.Id).ToArray();
+        Assert.Equal(volley.Select(p => p.Id).Order(), flying.Select(p => p.Id).Order());
+        drawn = client.Replica.World.GetPlayerShip(client.LocalPlayerId)!;
+        foreach (var ball in flying)
         {
-            if (client.Replica.World.Projectiles.FirstOrDefault(p => p.Id == shot.ProjectileId) is not { } projectile)
-                continue;
-            var flown = (float)(client.Replica.RenderTick - shot.Tick) * SimConstants.TickDelta;
-            Assert.True(Vector2.Distance(projectile.Position, shot.Position + shot.Velocity * flown) < 0.01f);
+            var drift = Vector2.Dot(ball.Position - drawn.Position, drawn.Forward) - along[ball.Id];
+            Assert.True(MathF.Abs(drift) < 0.4f, $"ball fell {drift} tiles fore/aft of its gun");
         }
     }
 
@@ -379,6 +373,7 @@ public sealed class LoopbackTests : IDisposable
         PumpUntil(() => lossy.Status == ConnectionStatus.Lobby, "the lobby");
         lossy.ReadyUp();
         PumpUntil(() => lossy.Replica.World.GetPlayerShip(lossy.LocalPlayerId) is not null, "our ship");
+        PumpUntil(() => lossy.SetSail(), "the run to get under way");
 
         var startTick = lossy.Replica.LatestSnapshotTick;
         var snapshots = 0;
@@ -469,30 +464,83 @@ public sealed class LoopbackTests : IDisposable
         var (a, _) = StartTwoPlayerRun();
         var world = _server.World!;
 
-        // The whole map's pirates are at sea from the start, but none is near the start line, so none is sent.
+        // The whole map's pirates are at sea from the start, but only those near the crew are sent.
         PumpFor(0.5);
-        Assert.Contains(world.Ships, s => s.Team == Team.Pirates);
-        Assert.DoesNotContain(a.Replica.World.Ships, s => s.Team == Team.Pirates);
-
-        // Sail a's ship (by fiat) up beside a camp: its guards come into view, with their levels.
-        var camp = Archipelago.Camps[0];
         var ship = world.GetPlayerShip(a.LocalPlayerId)!;
-        ship.Position = ship.PreviousPosition = camp.Position + new Vector2(0f, Relevance.EnterRange - 10f);
-        PumpUntil(() => a.Replica.World.Ships.Any(s => s.Team == Team.Pirates), "the camp to show up");
-        var seen = a.Replica.World.Ships.First(s => s.Team == Team.Pirates);
+        var far = Archipelago.Camps.MaxBy(c => Vector2.Distance(c.Position, Archipelago.Start))!;
+        Assert.True(a.Replica.World.Ships.Count(s => s.Team == Team.Pirates) < world.Ships.Count(s => s.Team == Team.Pirates) / 4);
+        bool Near(Ship pirate, Vector2 point) => Vector2.Distance(pirate.Position, point) <= Relevance.LeaveRange + 10f;
+        Assert.DoesNotContain(a.Replica.World.Ships, s => s.Team == Team.Pirates && Near(s, far.Position));
+
+        // Sail a's ship (by fiat) out beside a far-off pack: it comes into view, with its level.
+        ship.Position = ship.PreviousPosition = far.Position + new Vector2(0f, Relevance.EnterRange - 10f);
+        PumpUntil(() => a.Replica.World.Ships.Any(s => s.Team == Team.Pirates && s.Level == far.Level && Near(s, far.Position)), "the pack to show up");
+        var seen = a.Replica.World.Ships.First(s => s.Team == Team.Pirates && Near(s, far.Position));
         Assert.Equal(world.FindShip(seen.Id)!.Level, seen.Level);
-        Assert.Equal(camp.Level, seen.Level);
-        Assert.True(a.Replica.World.Ships.Count(s => s.Team == Team.Pirates) < world.Ships.Count(s => s.Team == Team.Pirates));
-        Assert.All(a.Replica.World.Ships.Where(s => s.Team == Team.Pirates), p => Assert.Equal(NpcStance.Patrolling, p.Stance));
 
         // The forecast comes along too.
-        Assert.Equal(world.Director!.StormY, a.Replica.World.Director!.StormY, 1);
-        Assert.InRange(a.Replica.World.Director!.TicksUntilStorm, 1, (int)(RunDirector.StormDelaySeconds * SimConstants.TickRate));
+        Assert.Equal(world.Director!.Status, a.Replica.World.Director!.Status);
 
-        // Back to the start: the camp is hidden again (though still afloat on the server).
+        // Back to the start: the pack is hidden again (though still afloat on the server).
         ship.Position = ship.PreviousPosition = Archipelago.Start;
-        PumpUntil(() => !a.Replica.World.Ships.Any(s => s.Team == Team.Pirates), "the camp to be hidden");
+        PumpUntil(() => a.Replica.World.FindShip(seen.Id) is null, "the pack to be hidden");
         Assert.NotNull(world.FindShip(seen.Id));
+    }
+
+    [Fact]
+    public void TakingAFortress_ReachesTheClients_AndTheirCardChoicesReachTheServer()
+    {
+        var (a, b) = StartTwoPlayerRun();
+        var world = _server.World!;
+        var fortress = world.Islands.Where(i => i.IsFortress).MinBy(i => Vector2.Distance(i.Center, Archipelago.Start))!;
+
+        // Raze it (by fiat), with a parked alongside so its forts are sent to the client.
+        var ship = world.GetPlayerShip(a.LocalPlayerId)!;
+        ship.AddModifier(new ShipGame.Shared.Stats.StatModifier(ShipGame.Shared.Stats.StatId.MaxHealth, ShipGame.Shared.Stats.ModifierKind.Flat, 1e6f, "test"));
+        ship.Position = ship.PreviousPosition = fortress.ShoreToward(Vector2.UnitY) + Vector2.UnitY * 30f;
+        PumpUntil(() => a.Replica.World.Ships.Any(s => s.FortIslandId == fortress.Id), "the forts to show up");
+        foreach (var fort in world.Ships.Where(s => s.FortIslandId == fortress.Id))
+            fort.Health = 0f;
+        PumpUntil(() => !a.Replica.World.IsHeld(fortress) && !b.Replica.World.IsHeld(fortress), "the fortress taken on both clients");
+        Assert.DoesNotContain(a.Replica.World.Ships, s => s.FortIslandId == fortress.Id);
+
+        // Both clients see a's offer, the same as the server dealt it.
+        var offer = world.Players[a.LocalPlayerId].CardOffers.Single();
+        PumpUntil(() => a.Replica.World.Players.TryGetValue(a.LocalPlayerId, out var p) && p.CardOffers.Count == 1, "a's offer");
+        Assert.Equal(offer, a.Replica.World.Players[a.LocalPlayerId].CardOffers.Single());
+        Assert.Equal(1, a.Replica.World.Director!.FortressesTaken);
+
+        // The game stops, on the server and both clients, until everyone has chosen.
+        PumpUntil(() => a.Replica.World.IsPaused && b.Replica.World.IsPaused, "the pause on both clients");
+        Assert.True(world.IsPaused);
+        var pausedAt = world.Tick;
+        var drawnAt = a.Replica.World.FindShip(ship.Id)!.Position;
+        PumpFor(0.5);
+        Assert.Equal(pausedAt, world.Tick);
+        Assert.Equal(drawnAt, a.Replica.World.FindShip(ship.Id)!.Position);
+
+        // a pays to reroll: the fresh hand, and the bill, reach a's client.
+        world.AddGold(a.LocalPlayerId, CardRewards.RerollBaseCost);
+        a.Send(new RerollCardsCommand(0));
+        PumpUntil(() => a.Replica.World.Players[a.LocalPlayerId].Rerolls == 1, "the reroll on a's client");
+        offer = world.Players[a.LocalPlayerId].CardOffers.Single();
+        Assert.Equal(offer, a.Replica.World.Players[a.LocalPlayerId].CardOffers.Single());
+        PumpUntil(() => a.Replica.World.Players[a.LocalPlayerId].Gold == world.Players[a.LocalPlayerId].Gold, "the bill on a's client");
+
+        // a chooses: the card is played on the server, and the ship's new cards come back to both clients.
+        a.Send(new ChooseCardCommand(0, offer.Cards[1].Id));
+        PumpUntil(() => new[] { a, b }.All(c => c.Replica.World.FindShip(ship.Id)?.Cards.Count == 2), "the card on both clients"); // and the starting card
+        Assert.Equal(offer.Cards[1], ship.Cards[^1]);
+        Assert.Equal(offer.Cards[1], a.Replica.World.FindShip(ship.Id)!.Cards[^1]); // the same level and roll
+        Assert.Equal(ship.Stats, a.Replica.World.FindShip(ship.Id)!.Stats);
+        Assert.Empty(a.Replica.World.Players[a.LocalPlayerId].CardOffers);
+        Assert.Equal(offer.Cards[1], a.Replica.World.Players[a.LocalPlayerId].Cards[^1]);
+        Assert.Single(b.Replica.World.Players[b.LocalPlayerId].CardOffers); // b hasn't chosen yet...
+        Assert.True(world.IsPaused && a.Replica.World.IsPaused);              // ...so everyone waits
+
+        b.Send(new ChooseCardCommand(0, world.Players[b.LocalPlayerId].CardOffers[0].Cards[0].Id));
+        PumpUntil(() => !a.Replica.World.IsPaused && !b.Replica.World.IsPaused, "play to resume on both clients");
+        PumpUntil(() => world.Tick > pausedAt + 15 && a.Replica.LatestSnapshotTick > pausedAt + 15, "the clock to run again");
     }
 
     [Fact]

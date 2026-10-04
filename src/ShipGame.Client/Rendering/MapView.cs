@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using ShipGame.Shared.Maps;
+using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Trading;
 using NVector2 = System.Numerics.Vector2;
@@ -13,12 +14,12 @@ namespace ShipGame.Client.Rendering;
 public sealed record RoutePreview(Island Origin, IReadOnlyList<TradeContract> Offers, int? HighlightedContractId);
 
 /// <summary>
-/// The full map (M): the whole run of seas from south to north, drawn through the same projection as the game view,
-/// so directions on the map match what you see at sea. Only what your team has discovered is filled in: discovered
-/// water is blue and discovered islands appear (shipyards marked); everything else is blank parchment. The map's
-/// border, the boundaries between seas (named, with their levels), and the storm are always drawn. Your ship is
-/// an arrow along its heading; teammates are dots. Where the cargo in your hold is bound is always marked, and while
-/// choosing a trade contract the map is drawn in an inset beside the panel with each offer's route on it.
+/// The full map (M): the whole square sea, drawn through the same projection as the game view, so directions on the
+/// map match what you see at sea. Only what your team has discovered is filled in: discovered water is blue and
+/// discovered islands appear (shipyards marked); everything else is blank parchment. The map's border is always drawn.
+/// Only discovered islands are labeled: discovered fortresses show their level while held and a tick once taken. Your ship is an arrow along its heading; teammates are dots; a boss in sight is a red diamond.
+/// Where the cargo in your hold is bound is always marked, and while choosing a trade contract the map is drawn in an
+/// inset beside the panel with each offer's route on it.
 /// </summary>
 public sealed class MapView
 {
@@ -39,9 +40,9 @@ public sealed class MapView
     private static readonly Color Crew = new(120, 230, 140);
     private static readonly Color Title = new(240, 220, 160);
     private static readonly Color Hint = new(190, 190, 200);
-    private static readonly Color SeaLine = new Color(70, 50, 30) * 0.6f;
-    private static readonly Color SeaName = new(226, 210, 160);
-    private static readonly Color Storm = new Color(20, 24, 40) * 0.7f;
+    private static readonly Color FortressHeld = new(220, 70, 55);
+    private static readonly Color FortressTaken = new(120, 230, 140);
+    private static readonly Color Boss = new(255, 80, 60);
 
     private readonly PrimitiveBatch _batch;
 
@@ -94,21 +95,19 @@ public sealed class MapView
         foreach (var island in world.Islands)
         {
             if (world.Discovery.IsDiscovered(team, island))
-                DrawIsland(island);
+                DrawIsland(island, world.IsPort(island));
         }
-        foreach (var sea in Archipelago.Seas)
-        {
-            if (sea.South < size.Y)
-                _batch.Line(IsoProjection.WorldToIso(new NVector2(0, sea.South)), IsoProjection.WorldToIso(new NVector2(size.X, sea.South)), SeaLine);
-        }
-        if (world.Director is { } director && director.StormY < size.Y)
-            FillWorldRect(new NVector2(0, MathF.Max(0f, director.StormY)), size, Storm);
         DrawWorldOutline(size);
         _batch.Flush();
 
         // Ships last, sized in screen terms so they stay visible at map scale.
         foreach (var ship in world.Ships)
         {
+            if (ship.IsBoss)
+            {
+                DrawDiamond(IsoProjection.WorldToIso(ship.Position), 9f / scale, Boss);
+                continue;
+            }
             if (ship.OwnerPlayerId is null || ship.Team != team)
                 continue;
             if (ship.OwnerPlayerId == localPlayerId)
@@ -118,35 +117,59 @@ public sealed class MapView
         }
         _batch.Flush();
 
-        // Trade on top: destinations are charted whether or not the island has been discovered yet.
+        // Trade on top: destinations are marked whether or not the island has been discovered yet, but only named once it has.
         _batch.Begin(hud.Transform);
         Vector2 ToHud(NVector2 point) => Vector2.Transform(IsoProjection.WorldToIso(point), toHud);
         if (area is null)
-            DrawSeaNames(size, ToHud);
+            DrawFortresses(world, team, ToHud);
+        DrawCrewNames(world, team, localPlayerId, ToHud);
         if (routes is { } preview)
-            DrawRoutes(world, preview, ToHud);
+            DrawRoutes(world, team, preview, ToHud);
         if (localShip is not null)
         {
-            DrawCargoDestinations(world, localShip, ToHud);
+            DrawCargoDestinations(world, team, localShip, ToHud);
             if (area is null)
                 DrawHoldLegend(world, localShip, frame);
         }
         _batch.Flush();
     }
 
-    /// <summary>Each sea's name and level, beside the map's eastern edge, level with the middle of the sea.</summary>
-    private void DrawSeaNames(NVector2 size, Func<NVector2, Vector2> toHud)
+    /// <summary>Each discovered fortress: a red badge with its level while it's held, a green tick once taken.</summary>
+    private void DrawFortresses(World world, Team team, Func<NVector2, Vector2> toHud)
     {
-        const float scale = 1.5f;
-        foreach (var sea in Archipelago.Seas)
+        foreach (var island in world.Islands)
         {
-            var at = toHud(new NVector2(size.X, (sea.North + sea.South) / 2f)) + new Vector2(10f, -PixelFont.Height(scale) / 2f);
-            PixelFont.Draw(_batch, $"{sea.Name} {sea.Level}", at, scale, SeaName);
+            if (!island.IsFortress || !world.Discovery.IsDiscovered(team, island))
+                continue;
+            var at = toHud(island.Center);
+            if (world.IsHeld(island))
+            {
+                var text = $"{island.Level} {CardRewards.RewardLabel(island.Level)}";
+                var width = PixelFont.Measure(text, 2f);
+                FillRect(at - new Vector2(width / 2f + 5f, 10f), new Vector2(width + 10f, 20f), FortressHeld);
+                PixelFont.Draw(_batch, text, at - new Vector2(width / 2f, PixelFont.Height(2f) / 2f), 2f, Title);
+            }
+            else
+            {
+                TradeMarkers.ThickLine(_batch, at + new Vector2(-7f, 0f), at + new Vector2(-2f, 6f), 3f, FortressTaken);
+                TradeMarkers.ThickLine(_batch, at + new Vector2(-2f, 6f), at + new Vector2(8f, -7f), 3f, FortressTaken);
+            }
+        }
+    }
+
+    /// <summary>Each crewmate's name under their marker (ours in our color).</summary>
+    private void DrawCrewNames(World world, Team team, int localPlayerId, Func<NVector2, Vector2> toHud)
+    {
+        foreach (var ship in world.Ships)
+        {
+            if (ship.OwnerPlayerId is not { } owner || ship.Team != team || !world.Players.TryGetValue(owner, out var player) || player.Name.Length == 0)
+                continue;
+            DrawLabel(player.Name, toHud(ship.Position) + new Vector2(0f, 12f), 1.5f, owner == localPlayerId ? You : Crew);
         }
     }
 
     /// <summary>A line from the trading post to each offer's destination, lettered and colored to match the panel.</summary>
-    private void DrawRoutes(World world, RoutePreview preview, Func<NVector2, Vector2> toHud)
+    private void DrawRoutes(World world, Team team, RoutePreview preview, Func<NVector2, Vector2> toHud)
     {
         var origin = toHud(preview.Origin.Center);
         var anyHighlighted = preview.HighlightedContractId is not null;
@@ -173,14 +196,15 @@ public sealed class MapView
                     continue;
                 }
                 TradeMarkers.DrawBadge(_batch, to, TradeMarkers.Letter(i), color, highlighted ? 22f : 16f, highlighted ? 2f : 1.5f);
-                DrawLabel(destination.Name, to + new Vector2(0f, highlighted ? 16f : 13f), 1.5f, color);
+                if (world.Discovery.IsDiscovered(team, destination))
+                    DrawLabel(destination.Name, to + new Vector2(0f, highlighted ? 16f : 13f), 1.5f, color);
             }
         }
         DrawDot(origin, 5f, You);
     }
 
     /// <summary>Where the cargo in our hold is bound: a crate on each destination, with a line from the ship.</summary>
-    private void DrawCargoDestinations(World world, Ship ship, Func<NVector2, Vector2> toHud)
+    private void DrawCargoDestinations(World world, Team team, Ship ship, Func<NVector2, Vector2> toHud)
     {
         var from = toHud(ship.Position);
         foreach (var lot in ship.Cargo)
@@ -190,7 +214,8 @@ public sealed class MapView
             var to = toHud(destination.Center);
             TradeMarkers.ThickLine(_batch, from, to, 1.5f, TradeMarkers.Cargo * 0.6f);
             TradeMarkers.DrawCrate(_batch, to, 14f, TradeMarkers.Cargo);
-            DrawLabel(destination.Name, to + new Vector2(0f, 12f), 1.5f, TradeMarkers.Cargo);
+            if (world.Discovery.IsDiscovered(team, destination))
+                DrawLabel(destination.Name, to + new Vector2(0f, 12f), 1.5f, TradeMarkers.Cargo);
         }
     }
 
@@ -238,7 +263,8 @@ public sealed class MapView
         }
     }
 
-    private void DrawIsland(Island island)
+    /// <param name="port">Shipyards and taken fortresses: ships can trade there.</param>
+    private void DrawIsland(Island island, bool port)
     {
         var outline = island.Outline;
         Span<Vector2> points = stackalloc Vector2[outline.Length];
@@ -251,25 +277,23 @@ public sealed class MapView
             points[i] = IsoProjection.WorldToIso(island.Center + (outline[i] - island.Center) * 0.7f);
         _batch.FillConvex(points, Grass);
 
-        if (island.HasShipyard)
+        if (port)
         {
-            // A little roof so shipyards stand out at map scale.
+            // A little roof so ports stand out at map scale.
             var c = IsoProjection.WorldToIso(island.Center);
             Span<Vector2> roof = stackalloc Vector2[] { c + new Vector2(0, -90), c + new Vector2(80, 10), c + new Vector2(-80, 10) };
             _batch.FillConvex(roof, Hut);
         }
     }
 
-    private void FillWorldRect(NVector2 min, NVector2 max, Color color)
+    private void DrawDiamond(Vector2 center, float radius, Color color)
     {
-        Span<Vector2> corners = stackalloc Vector2[]
+        Span<Vector2> points = stackalloc Vector2[]
         {
-            IsoProjection.WorldToIso(min),
-            IsoProjection.WorldToIso(new NVector2(max.X, min.Y)),
-            IsoProjection.WorldToIso(max),
-            IsoProjection.WorldToIso(new NVector2(min.X, max.Y)),
+            center + new Vector2(0, -radius), center + new Vector2(radius, 0), center + new Vector2(0, radius), center + new Vector2(-radius, 0),
         };
-        _batch.FillConvex(corners, color);
+        _batch.FillConvex(points, color);
+        _batch.Outline(points, Border);
     }
 
     private void DrawWorldOutline(NVector2 size)

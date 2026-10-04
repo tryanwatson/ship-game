@@ -74,11 +74,11 @@ public class PirateLifeTests
     }
 
     [Fact]
-    public void Rover_TravelsItsSea_AndStaysInIt()
+    public void Rover_TravelsItsRing_AndStaysInIt()
     {
-        var world = new World(new Vector2(96, 300)) { Wind = Vector2.Zero };
-        var orders = new RoamOrders(100f, 200f);
-        var pirate = SpawnPirate(world, new Vector2(48, 150), orders);
+        var world = new World(new Vector2(300, 300)) { Wind = Vector2.Zero };
+        var orders = new RoamOrders(new Vector2(150, 150), 60f, 110f);
+        var pirate = SpawnPirate(world, new Vector2(235, 150), orders);
 
         var travelled = 0f;
         for (var t = 0; t < SimConstants.TickRate * 120; t++)
@@ -86,7 +86,7 @@ public class PirateLifeTests
             var before = pirate.Position;
             world.Step();
             travelled += Vector2.Distance(before, pirate.Position);
-            Assert.InRange(pirate.Position.Y, orders.North - 6f, orders.South + 6f);
+            Assert.InRange(Vector2.Distance(pirate.Position, orders.Center), orders.InnerRadius - 8f, orders.OuterRadius + 8f);
         }
 
         Assert.True(travelled > 100f, $"only sailed {travelled} tiles in two minutes");
@@ -97,7 +97,7 @@ public class PirateLifeTests
     public void Rover_LeashedFromWhereTheChaseBegan_GoesBackToRoaming()
     {
         var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
-        var pirate = SpawnPirate(world, new Vector2(100, 100), new RoamOrders(20f, 170f));
+        var pirate = SpawnPirate(world, new Vector2(100, 100), new RoamOrders(new Vector2(96, 96), 0f, 80f));
         var player = world.SpawnShip(new Vector2(110, 100), 0f, ShipStats.Sloop, PlayerId);
         player.Health = 1e6f;
         var behavior = (HunterBehavior)pirate.Behavior!;
@@ -120,7 +120,7 @@ public class PirateLifeTests
     {
         var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
         var group = new PirateGroup();
-        var orders = new RoamOrders(20f, 170f);
+        var orders = new RoamOrders(new Vector2(96, 96), 0f, 80f);
         var members = Enumerable.Range(0, 3).Select(i => SpawnPirate(world, new Vector2(100 + 5 * i, 100), orders, seed: i, group)).ToList();
         // Well out of everyone's sight.
         var player = world.SpawnShip(new Vector2(100, 100 + HunterBehavior.AggroRange + 10f), 0f, ShipStats.Sloop, PlayerId);
@@ -143,10 +143,10 @@ public class PirateLifeTests
     [Fact]
     public void Group_FollowsItsLeader_AndCarriesOnWhenItSinks()
     {
-        var world = new World(new Vector2(96, 300)) { Wind = Vector2.Zero };
+        var world = new World(new Vector2(300, 300)) { Wind = Vector2.Zero };
         var group = new PirateGroup();
-        var orders = new RoamOrders(60f, 240f);
-        var members = Enumerable.Range(0, 3).Select(i => SpawnPirate(world, new Vector2(40 + 4 * i, 150), orders, seed: i, group)).ToList();
+        var orders = new RoamOrders(new Vector2(150, 150), 0f, 120f);
+        var members = Enumerable.Range(0, 3).Select(i => SpawnPirate(world, new Vector2(140 + 4 * i, 150), orders, seed: i, group)).ToList();
 
         RunTicks(world, SimConstants.TickRate * 60);
         Assert.Same(members[0], group.Leader(world));
@@ -165,9 +165,9 @@ public class PirateLifeTests
     [Fact]
     public void Populate_MixesGuardsRoversAndGroups_FromTheSeed()
     {
-        var crew = new List<(int, Ability)> { (PlayerId, new BroadsideVolley()) };
+        var crew = new List<(int, string)> { (PlayerId, "ANNE") };
         var world = Runs.Create(seed: 1, crew);
-        var behaviors = world.Ships.Where(s => s.Team == Team.Pirates && !s.IsBoss).Select(s => (HunterBehavior)s.Behavior!).ToList();
+        var behaviors = world.Ships.Where(s => s.Team == Team.Pirates && !s.IsFort).Select(s => (HunterBehavior)s.Behavior!).ToList();
 
         Assert.Contains(behaviors, b => b.Orders is GuardPost { IslandId: not null });
         Assert.Contains(behaviors, b => b.Orders is RoamOrders);
@@ -175,32 +175,15 @@ public class PirateLifeTests
         Assert.Contains(behaviors, b => b.Group is null);
         Assert.All(behaviors, b => Assert.True(b.Group is null || b.Group.MemberIds.Count <= PirateCamps.MaxGroupSize));
 
-        // Nobody guards a shipyard, and nobody roams down to the start.
-        Assert.All(behaviors.Select(b => b.Orders).OfType<GuardPost>(), p => Assert.False(world.FindIsland(p.IslandId!.Value)!.HasShipyard));
-        Assert.All(behaviors.Select(b => b.Orders).OfType<RoamOrders>(), r => Assert.True(r.South <= Archipelago.Start.Y - PirateCamps.StartBerth));
+        // Only fortresses are guarded, and nobody roams in to the start.
+        Assert.All(behaviors.Select(b => b.Orders).OfType<GuardPost>(), p => Assert.True(world.FindIsland(p.IslandId!.Value)!.IsFortress));
+        Assert.All(behaviors.Select(b => b.Orders).OfType<RoamOrders>(), r =>
+            Assert.True(r.Center == Archipelago.Start && r.InnerRadius >= PirateCamps.StartBerth && r.OuterRadius > r.InnerRadius));
 
         // The same seed deals the same hand; another deals a different one.
-        static string Hand(World w) => string.Join(";", w.Ships.Where(s => s.Team == Team.Pirates)
+        static string Hand(World w) => string.Join(";", w.Ships.Where(s => s.Team == Team.Pirates && !s.IsFort)
             .Select(s => (HunterBehavior)s.Behavior!).Select(b => $"{b.Orders}/{b.Group?.MemberIds.Count ?? 1}"));
         Assert.Equal(Hand(world), Hand(Runs.Create(seed: 1, crew)));
         Assert.NotEqual(Hand(world), Hand(Runs.Create(seed: 2, crew)));
-    }
-
-    [Fact]
-    public void Flagship_PatrolsItsWaters()
-    {
-        var crew = new List<(int, Ability)> { (PlayerId, new BroadsideVolley()) };
-        var world = Runs.Create(seed: 1, crew);
-        var flagship = world.Ships.Single(s => s.IsBoss);
-
-        var furthest = 0f;
-        for (var t = 0; t < SimConstants.TickRate * 20; t++)
-        {
-            world.Step();
-            furthest = MathF.Max(furthest, Vector2.Distance(flagship.Position, Archipelago.BossPosition));
-        }
-
-        Assert.True(furthest > 1f, "the flagship should be under way");
-        Assert.True(furthest <= PirateCamps.FlagshipPatrolRadius + 4f);
     }
 }

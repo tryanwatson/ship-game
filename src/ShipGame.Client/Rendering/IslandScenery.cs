@@ -18,7 +18,12 @@ public sealed class IslandScenery
     public IReadOnlyList<Item> Items => _items;
 
     public IslandScenery(PrimitiveBatch batch) => _batch = batch;
-    public static float MarkerHeight(Island island) => island.HasShipyard ? 58f : island.Name is "OLD FORT" or "WINDWARD" ? 78f : 56f;
+    public static float MarkerHeight(Island island) => island.HasShipyard ? 58f : island.IsFortress || HasBeacon(island) ? 78f : 56f;
+
+    // Plain islands' looks, picked from their ids so every client agrees.
+    private static bool HasBeacon(Island island) => !island.HasShipyard && !island.IsFortress && island.Id % 6 == 4;
+    private static bool IsRocky(Island island) => !island.HasShipyard && island.Id % 3 == 0;
+    private static bool IsDense(Island island) => !IsRocky(island) && island.Id % 5 == 1;
 
     public void EnsureWorld(World world)
     {
@@ -32,10 +37,9 @@ public sealed class IslandScenery
     private void Build(Island island)
     {
         var rng = new Random(island.Id * 7919);
-        var rocky = island.Name is "BRIMSTONE" or "GULL ROCK" or "SKERRY" or "CINDER ISLE" or "GREY TOR" or "THE TEETH"
-            or "BONEYARD" or "IRONSIDE" or "WRECKERS REEF";
-        var dense = island.Name is "MANGROVE" or "SHIVER ISLE";
-        var dark = island.Name is "BRIMSTONE" or "CINDER ISLE" or "IRONSIDE";
+        var rocky = IsRocky(island);
+        var dense = IsDense(island);
+        var dark = rocky && island.Level >= 5;
         if (island.HasShipyard)
         {
             _items.Add(new Item(Kind.Boathouse, island.Center, 1f, island.Id));
@@ -46,26 +50,27 @@ public sealed class IslandScenery
                 foreach (var sign in new[] { -1f, 1f })
                     _items.Add(new Item(Kind.DockPost, shore + outward * along + side * sign * 0.42f, 1f, 0));
         }
-        else if (island.Name is "OLD FORT" or "THE CITADEL" or "DREAD HOLD")
-            _items.Add(new Item(Kind.Fort, island.Center, island.Name == "OLD FORT" ? 1f : 1.2f, 0));
-        else if (island.Name is "WINDWARD" or "LANTERN ROCK")
+        else if (island.IsFortress)
+            _items.Add(new Item(Kind.Fort, island.Center, 1.1f + 0.05f * island.Level, 0)); // the keep; its guns are on the shore
+        else if (HasBeacon(island))
             _items.Add(new Item(Kind.Beacon, island.Center, 1f, 0));
         else if (rocky)
             _items.Add(new Item(Kind.Rock, island.Center, dark ? 2.2f : 1.6f, dark ? 1 : 0));
-        else if (island.Name is "DEAD MANS REST" or "GALLOWS KEY")
-            _items.Add(new Item(Kind.Fort, island.Center, 0.65f, 1));
 
         var patches = new List<(NVector2 Position, float Size, Color Color)>();
         _patches.Add(island.Id, patches);
-        for (var i = 0; i < 8; i++)
+        // Big islands get more of everything, about as densely spread as on the small ones.
+        var size = Math.Max(1f, island.Area / 60f);
+        for (var i = 0; i < (int)(8 * MathF.Sqrt(size)); i++)
         {
             var point = InteriorPoint(island, rng, 0.2f, 0.62f);
             patches.Add((point, 10f + (float)rng.NextDouble() * 15f,
                 i % 2 == 0 ? new Color(113, 155, 78) : new Color(75, 121, 68)));
         }
-        var palms = rocky ? 2 : dense ? 8 : Math.Clamp((int)(island.Area / 17f), 3, 6);
-        var rocks = rocky ? 7 : 3;
-        for (var i = 0; i < palms + rocks + (dense ? 9 : 5); i++)
+        var palms = (int)((rocky ? 2 : dense ? 8 : Math.Clamp((int)(island.Area / 17f), 3, 6)) * size / 2f) + 2;
+        var rocks = (int)((rocky ? 7 : 3) * MathF.Sqrt(size));
+        var bushes = (int)((dense ? 9 : 5) * MathF.Sqrt(size));
+        for (var i = 0; i < palms + rocks + bushes; i++)
         {
             var kind = i < palms ? Kind.Palm : i < palms + rocks ? Kind.Rock : Kind.Bush;
             for (var attempt = 0; attempt < 12; attempt++)

@@ -114,7 +114,7 @@ public static class ShipMovement
         else
         {
             // Manual sailing: hold cruise speed (or row astern) and steer by the rudder at full lock.
-            desiredSpeed = ship.Throttle < 0 ? -RowAsternSpeed : ship.CruiseSpeed;
+            desiredSpeed = ship.Throttle < 0 ? -RowAsternSpeed * Oars(ship) : ship.CruiseSpeed;
             headingError = ship.Rudder * MathF.PI;
             canTurn = ship.Rudder != 0;
         }
@@ -124,7 +124,7 @@ public static class ShipMovement
             // Rowing astern, or easing out of it. Any headway is carried off by drag before the oars bite.
             ship.Speed = ship.Speed > 0f
                 ? MathF.Max(0f, ship.Speed - stats.DecelerationAt(ship.Speed) * dt)
-                : MoveTowards(ship.Speed, desiredSpeed, RowingAcceleration * dt);
+                : MoveTowards(ship.Speed, desiredSpeed, RowingAcceleration * Oars(ship) * dt);
         }
         else
         {
@@ -137,7 +137,7 @@ public static class ShipMovement
         // at the rowing rate (a ship still coasting after furling keeps its faster arc while that lasts).
         var maxTurn = ship.Speed > 0f ? ship.Speed * dt / stats.TurnRadiusAt(ship.Speed) : 0f;
         if (IsRowing(ship))
-            maxTurn = MathF.Max(maxTurn, RowingTurnRate * dt);
+            maxTurn = MathF.Max(maxTurn, RowingTurnRate * Oars(ship) * dt);
         if (canTurn && maxTurn > 0f)
             ship.Heading = Angles.Wrap(ship.Heading + Math.Clamp(headingError, -maxTurn, maxTurn));
 
@@ -165,7 +165,11 @@ public static class ShipMovement
     }
 
     /// <summary>Pushes overlapping ships apart. Circle colliders are a placeholder until hulls get proper shapes.</summary>
-    public static void ResolveCollisions(IReadOnlyList<Ship> ships)
+    /// <summary>How much faster than usual the crew rows (the Rowers card): 1 normally.</summary>
+    private static float Oars(Ship ship) => 1f + ship.PerkValue(Upgrades.Perk.RowingSpeed);
+
+    /// <param name="contacts">Gets each pair of ships that touched, if given.</param>
+    public static void ResolveCollisions(IReadOnlyList<Ship> ships, List<(Ship A, Ship B)>? contacts = null)
     {
         for (var i = 0; i < ships.Count; i++)
         {
@@ -178,10 +182,21 @@ public static class ShipMovement
                 var minDistance = a.Stats.Radius + b.Stats.Radius;
                 if (distance >= minDistance || distance < 1e-5f)
                     continue;
+                contacts?.Add((a, b));
 
-                var push = offset / distance * ((minDistance - distance) / 2f);
-                a.Position -= push;
-                b.Position += push;
+                // Forts stand fast: whoever runs into one takes the whole push.
+                if (a.IsFort && b.IsFort)
+                    continue;
+                var overlap = offset / distance * (minDistance - distance);
+                if (a.IsFort)
+                    b.Position += overlap;
+                else if (b.IsFort)
+                    a.Position -= overlap;
+                else
+                {
+                    a.Position -= overlap / 2f;
+                    b.Position += overlap / 2f;
+                }
             }
         }
     }

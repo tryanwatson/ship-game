@@ -66,8 +66,12 @@ public static class Navigation
         return bestHeading;
     }
 
-    /// <summary>Whether a straight line between two points is blocked by land (for line-of-fire checks).</summary>
-    public static bool LineBlockedByLand(World world, Vector2 from, Vector2 to) => world.LineHitsLand(from, to, Projectile.DefaultRadius);
+    /// <summary>
+    /// Whether a straight line between two points is blocked by land (for line-of-fire checks), other than
+    /// <paramref name="ignoredIslandId"/>.
+    /// </summary>
+    public static bool LineBlockedByLand(World world, Vector2 from, Vector2 to, int? ignoredIslandId = null) =>
+        world.LineHitsLand(from, to, Projectile.DefaultRadius, ignoredIslandId);
 
     /// <summary>
     /// Seconds of the preview before the ship would come within <see cref="Clearance"/> of land: turning onto

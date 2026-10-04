@@ -41,15 +41,19 @@ public static class HullShape
     /// <paramref name="to"/> this tick touches the hull. Testing the whole path rather than the end point
     /// stops fast shots skipping through the narrow bow between ticks.
     /// </summary>
-    public static bool SegmentHits(Ship ship, Vector2 from, Vector2 to, float radius)
+    public static bool SegmentHits(Ship ship, Vector2 from, Vector2 to, float radius) =>
+        SegmentHits(ship, ship.Position, ship.Heading, from, to, radius);
+
+    /// <summary>As <see cref="SegmentHits(Ship, Vector2, Vector2, float)"/>, with the hull at another position and heading.</summary>
+    public static bool SegmentHits(Ship ship, Vector2 position, float heading, Vector2 from, Vector2 to, float radius)
     {
         // Cheap reject: the path can't reach anything within the hull's bounding circle.
         var reach = ship.Stats.Length / 2f + radius;
-        if (Geometry.DistanceToSegment(ship.Position, from, to) > reach)
+        if (Geometry.DistanceToSegment(position, from, to) > reach)
             return false;
 
         Span<Vector2> hull = stackalloc Vector2[PointCount];
-        GetWorldOutline(ship.Position, ship.Heading, ship.Stats, hull);
+        GetWorldOutline(position, heading, ship.Stats, hull);
         return Geometry.SegmentTouchesConvex(hull, from, to, radius);
     }
 }

@@ -3,6 +3,7 @@ using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Ai;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Simulation;
+using ShipGame.Shared.Stats;
 
 namespace ShipGame.Shared.Tests;
 
@@ -48,7 +49,8 @@ public class HunterTests
         var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
         var player = world.SpawnShip(new Vector2(100, 100), 0f, ShipStats.Sloop, PlayerId, Loadouts.FullArsenal);
         player.IsAnchored = true;
-        var distance = Mortar.Range - 2f; // well past aggro, and past the range at which a chase is given up
+        player.AddModifier(new StatModifier(StatId.WeaponRange, ModifierKind.Percent, 0.6f, "test")); // a mortar out-ranging sight
+        var distance = Mortar.RangeFor(player) - 2f; // well past aggro, and past the range at which a chase is given up
         var (hunter, behavior) = SpawnHunter(world, new Vector2(100 + distance, 100), MathF.PI);
         Assert.True(distance > HunterBehavior.DisengageRange - 5f);
 
@@ -107,10 +109,15 @@ public class HunterTests
 
         world.Step();
 
-        Assert.Contains(world.Projectiles, p => p.OwnerShipId == hunter.Id);
+        var warning = Assert.Single(world.Warnings); // the starboard lane lights up first...
+        Assert.Equal(BroadsideVolley.StarboardChannel, warning.Channel);
         var broadside = hunter.GetAbility(AbilitySlot.One)!;
         Assert.False(broadside.IsChannelReady(BroadsideVolley.StarboardChannel)); // starboard deck spent...
         Assert.True(broadside.IsChannelReady(BroadsideVolley.PortChannel));       // port still loaded
+
+        for (var t = 0; t < BroadsideVolley.PirateWindupTicks; t++)
+            world.Step();
+        Assert.Contains(world.Projectiles, p => p.OwnerShipId == hunter.Id);
         Assert.All(world.Projectiles, p => Assert.True(p.Velocity.Y > 0f)); // ...out of the starboard side, toward the player
     }
 

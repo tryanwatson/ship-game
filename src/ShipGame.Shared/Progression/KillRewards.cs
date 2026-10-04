@@ -11,6 +11,12 @@ public static class KillRewards
     /// <summary>Gold for a level 1 kill; higher levels pay more (see <see cref="PirateLevels.KillGold"/>).</summary>
     public const int Gold = 5;
 
+    /// <summary>A fort pays this many times a ship of its level: it's a bigger prize.</summary>
+    public const int FortMultiplier = 3;
+
+    /// <summary>A boss pays this many times a ship of its level.</summary>
+    public const int BossMultiplier = 10;
+
     /// <summary>A hit this recent before the sinking earns a share of the gold.</summary>
     public const float AssistSeconds = 15f;
     public static readonly int AssistTicks = (int)(AssistSeconds * SimConstants.TickRate);
@@ -20,9 +26,17 @@ public static class KillRewards
         if (killer.OwnerPlayerId is not { } playerId)
             return; // NPC kills earn nothing
 
-        GoldShares.Pay(world, PirateLevels.KillGold(victim.Level), playerId, Assists(world, victim, playerId));
+        GoldShares.Pay(world, GoldFor(victim), playerId, Assists(world, victim, playerId));
         world.GetOrAddPlayer(playerId).Kills++;
+
+        // A prize crew patches up the ship from what's taken.
+        if (!killer.IsSunk && killer.PerkValue(Upgrades.Perk.PrizeCrewHeal) is > 0f and var heal)
+            killer.Health = MathF.Min(killer.Stats.MaxHealth, killer.Health + heal * killer.Stats.MaxHealth);
     }
+
+    /// <summary>The gold for sinking <paramref name="victim"/>, before it's shared out.</summary>
+    public static int GoldFor(Ship victim) =>
+        PirateLevels.KillGold(victim.Level) * (victim.IsBoss ? BossMultiplier : victim.IsFort ? FortMultiplier : 1);
 
     /// <summary>The players other than <paramref name="killerId"/> who hit <paramref name="victim"/> recently enough to share.</summary>
     public static IEnumerable<int> Assists(World world, Ship victim, int killerId) =>

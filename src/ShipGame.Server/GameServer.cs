@@ -27,8 +27,8 @@ public sealed class GameServer : IDisposable
         public required int PlayerId { get; init; }
         public bool Ready { get; set; }
 
-        /// <summary>The weapon chosen for the next run; it has to be chosen before readying up, and anew each run.</summary>
-        public WeaponOffer? StartingWeapon { get; set; }
+        /// <summary>What they're called; it has to be given before readying up, and carries over from run to run.</summary>
+        public string Name { get; set; } = "";
 
         /// <summary>Messages this player may still send right now; refills every tick (a token bucket).</summary>
         public float MessageBudget { get; set; } = MessageBurst;
@@ -59,6 +59,8 @@ public sealed class GameServer : IDisposable
     private readonly Action<string> _log;
     private readonly byte[]? _password;
     private int _nextPlayerId = 1;
+    private uint _snapshotSequence;
+    private long _stepsThisRun;
     private int _runSeed = Environment.TickCount;
 
     /// <param name="password">Required to join; null or empty for an open server.</param>
@@ -90,7 +92,7 @@ public sealed class GameServer : IDisposable
 
     public int PlayerCount => _byPeerId.Count;
 
-    /// <summary>Seed for the next run's waves; tests fix it for reproducibility.</summary>
+    /// <summary>Seed for the next run; tests fix it for reproducibility.</summary>
     public int NextRunSeed { set => _runSeed = value; }
 
     /// <summary>Handles network traffic without advancing the game. Cheap; call as often as you like.</summary>
@@ -111,12 +113,13 @@ public sealed class GameServer : IDisposable
         }
 
         World.Step();
+        _stepsThisRun++;
         foreach (var player in _byPeerId.Values)
             player.LastCommandApplied = player.LastCommandReceived; // every queued command was applied in that step
         SendWorldOutput(World);
 
         if (World.IsRunOver)
-            EndRun(World.IsVictory ? "the flagship was sunk" : "the crew was sunk");
+            EndRun(World.IsVictory ? "the last boss was sunk" : "the crew was sunk");
     }
 
     public void Dispose() => _net.Stop();
@@ -192,7 +195,7 @@ public sealed class GameServer : IDisposable
     private void BroadcastLobby()
     {
         var lobby = new LobbyState(World is not null,
-            _byPeerId.Values.OrderBy(p => p.PlayerId).Select(p => new LobbyPlayer(p.PlayerId, p.Ready, p.StartingWeapon?.Id)).ToList(),
+            _byPeerId.Values.OrderBy(p => p.PlayerId).Select(p => new LobbyPlayer(p.PlayerId, p.Ready, p.Name)).ToList(),
             FriendlyFire, StartingGold);
         _writer.Reset();
         _writer.Put((byte)MessageType.Lobby);
@@ -205,16 +208,15 @@ public sealed class GameServer : IDisposable
     private void StartRun()
     {
         var seed = _runSeed++;
-        // Line the crew up abreast at the southern edge, facing north.
+        // Line the crew up abreast in the middle of the map, facing north.
         var players = _byPeerId.Values.OrderBy(p => p.PlayerId).ToList();
         var crew = players
-            .Select(p => (p.PlayerId, (p.StartingWeapon ?? WeaponCatalog.Broadside).Ability)) // everyone ready means everyone chose
+            .Select(p => (p.PlayerId, p.Name)) // everyone ready means everyone's named
             .ToList();
         var world = Runs.Create(seed, crew, FriendlyFire, StartingGold);
         foreach (var player in players)
         {
             player.Ready = false;
-            player.StartingWeapon = null; // next run is a fresh choice
         }
 
         World = world;
@@ -224,7 +226,7 @@ public sealed class GameServer : IDisposable
 
         _writer.Reset();
         _writer.Put((byte)MessageType.RunStarted);
-        _writer.PutRunStart(new RunStart(world.Tick, world.WorldSize, world.Wind, world.FriendlyFire));
+        _writer.PutRunStart(new RunStart(world.Tick, world.WorldSize, world.Wind, world.FriendlyFire, crew));
         SendToAll(_writer, DeliveryMethod.ReliableOrdered);
         BroadcastLobby();
         SendWorldOutput(world); // the starting ships, before the first snapshot
@@ -286,9 +288,11 @@ public sealed class GameServer : IDisposable
                 SendEvents(new[] { rejection }, recipient.Peer);
         }
 
-        if (world.Tick % Protocol.SnapshotEveryTicks == 0 || world.IsRunOver)
+        // Counted in steps rather than world ticks, which stand still while the game is paused for cards.
+        if (_stepsThisRun % Protocol.SnapshotEveryTicks == 0 || world.IsRunOver)
         {
             var snapshot = Snapshot.Capture(world, ship => _relevance.IsShown(ship.Id));
+            snapshot.Sequence = ++_snapshotSequence;
             foreach (var player in _byPeerId.Values)
                 snapshot.CommandAcks.Add((player.PlayerId, player.LastCommandApplied));
             foreach (var chunk in Wire.WriteSnapshotChunks(snapshot))
@@ -343,8 +347,8 @@ public sealed class GameServer : IDisposable
                     break;
                 }
                 case MessageType.Ready when World is null:
-                    // No readying up without a starting weapon.
-                    player.Ready = reader.GetBool() && player.StartingWeapon is not null;
+                    // No readying up without a name.
+                    player.Ready = reader.GetBool() && player.Name.Length > 0;
                     BroadcastLobby();
                     break;
                 case MessageType.SetStartingGold when World is null:
@@ -358,13 +362,18 @@ public sealed class GameServer : IDisposable
                     }
                     break;
                 }
-                case MessageType.ChooseStartingWeapon when World is null:
-                    if (WeaponCatalog.Find(reader.GetString(64)) is { } chosen)
+                case MessageType.SetName when World is null:
+                {
+                    var name = PlayerNames.Clean(reader.GetString(64));
+                    if (name != player.Name)
                     {
-                        player.StartingWeapon = chosen;
+                        player.Name = name;
+                        if (name.Length == 0)
+                            player.Ready = false;
                         BroadcastLobby();
                     }
                     break;
+                }
             }
         }
         catch (Exception ex) when (ex is InvalidDataException or ArgumentException or IndexOutOfRangeException)

@@ -16,7 +16,7 @@ public class GoldShareTests
     [Fact]
     public void Runs_CanStartWithGold_ForPlaytesting()
     {
-        var crew = new List<(int, Ability)> { (1, new BroadsideVolley()), (2, new Mortar()) };
+        var crew = new List<(int, string)> { (1, "ANNE"), (2, "MARY") };
 
         Assert.Equal(0, Gold(Runs.Create(seed: 1, crew), 1));
         var world = Runs.Create(seed: 1, crew, startingGold: 750);

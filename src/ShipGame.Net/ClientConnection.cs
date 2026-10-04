@@ -28,7 +28,7 @@ public sealed class ClientConnection : IDisposable
     private readonly EventBasedNetListener _listener = new();
     private readonly NetManager _net;
     private readonly NetDataWriter _writer = new();
-    private readonly Dictionary<long, (Snapshot Assembled, int Received, int Expected)> _partialSnapshots = new();
+    private readonly Dictionary<uint, (Snapshot Assembled, int Received, int Expected)> _partialSnapshots = new();
     private NetPeer? _server;
 
     // Simulated network conditions (null: none). Messages wait in these queues until due.
@@ -86,6 +86,9 @@ public sealed class ClientConnection : IDisposable
     {
         if (_server is null || Status != ConnectionStatus.InRun)
             return;
+        // A shot strikes ships where we're drawing them, behind the server: say how far behind.
+        if (command is CastAbilityCommand cast)
+            command = cast with { ViewTick = (long)Math.Round(Replica.RenderTick) };
         _writer.Reset();
         var sequence = ++_commandSequence;
         _writer.Put((byte)MessageType.Command);
@@ -106,14 +109,14 @@ public sealed class ClientConnection : IDisposable
         SendToServer(_writer, DeliveryMethod.ReliableOrdered);
     }
 
-    /// <summary>In the lobby: the weapon to start the next run with (one of <c>WeaponCatalog</c>). Required before readying up.</summary>
-    public void ChooseStartingWeapon(string abilityId)
+    /// <summary>In the lobby: what to call this player (see <c>PlayerNames</c>). Required before readying up.</summary>
+    public void SetName(string name)
     {
         if (_server is null)
             return;
         _writer.Reset();
-        _writer.Put((byte)MessageType.ChooseStartingWeapon);
-        _writer.Put(abilityId);
+        _writer.Put((byte)MessageType.SetName);
+        _writer.Put(name);
         SendToServer(_writer, DeliveryMethod.ReliableOrdered);
     }
 
@@ -243,21 +246,22 @@ public sealed class ClientConnection : IDisposable
     /// <summary>Collects a snapshot's chunks; hands it to the replica once all have arrived. Incomplete ones are dropped once a newer one completes.</summary>
     private void OnSnapshotChunk(Wire.SnapshotChunk chunk)
     {
-        if (chunk.Tick <= Replica.LatestSnapshotTick)
+        if (chunk.Sequence <= Replica.LatestSnapshotSequence)
             return;
 
-        if (!_partialSnapshots.TryGetValue(chunk.Tick, out var entry))
-            entry = (new Snapshot { Tick = chunk.Tick }, 0, chunk.Count);
+        if (!_partialSnapshots.TryGetValue(chunk.Sequence, out var entry))
+            entry = (new Snapshot { Tick = chunk.Tick, Sequence = chunk.Sequence }, 0, chunk.Count);
 
         var assembled = entry.Assembled;
         if (chunk.Index == 0)
         {
             assembled.Wind = chunk.Partial.Wind;
             assembled.Run = chunk.Partial.Run;
+            assembled.Paused = chunk.Partial.Paused;
             assembled.RunOver = chunk.Partial.RunOver;
             assembled.Victory = chunk.Partial.Victory;
             assembled.Players = chunk.Partial.Players;
-            assembled.IslandCooldowns = chunk.Partial.IslandCooldowns;
+            assembled.PlunderedIslands = chunk.Partial.PlunderedIslands;
             assembled.CommandAcks = chunk.Partial.CommandAcks;
         }
         assembled.Ships.AddRange(chunk.Partial.Ships);
@@ -265,12 +269,12 @@ public sealed class ClientConnection : IDisposable
 
         if (entry.Received < entry.Expected)
         {
-            _partialSnapshots[chunk.Tick] = entry;
+            _partialSnapshots[chunk.Sequence] = entry;
             return;
         }
 
-        _partialSnapshots.Remove(chunk.Tick);
-        foreach (var stale in _partialSnapshots.Keys.Where(t => t < chunk.Tick).ToList())
+        _partialSnapshots.Remove(chunk.Sequence);
+        foreach (var stale in _partialSnapshots.Keys.Where(s => s < chunk.Sequence).ToList())
             _partialSnapshots.Remove(stale);
         Replica.AddSnapshot(assembled);
     }

@@ -45,6 +45,18 @@ public abstract class Ability
     public virtual int ChannelFor(Ship caster, Vector2 target) => 0;
 
     /// <summary>
+    /// How long <paramref name="caster"/> takes to fire after deciding to: 0 fires at once. Otherwise the cast is a
+    /// public <see cref="ShotWarning"/> until it goes off, so whoever's in the way can get out of it.
+    /// </summary>
+    public virtual int WindupTicksFor(Ship caster) => 0;
+
+    /// <summary>
+    /// Fires a shot laid <see cref="WindupTicksFor"/> ago, from where the ship is now. By default it's cast at the
+    /// warning's target; abilities whose aim depends on how the ship lies (the broadside's side) keep what was shown.
+    /// </summary>
+    public virtual bool CastWarned(World world, Ship caster, ShotWarning warning) => Cast(world, caster, warning.Target);
+
+    /// <summary>
     /// Performs the ability. <paramref name="target"/> is the cursor's world position at cast time;
     /// abilities that aren't targeted ignore it. Returns false if the cast was rejected (no cooldown is spent).
     /// </summary>

@@ -61,18 +61,18 @@ public class ShipyardTests
             world.Step();
         Assert.Equal(1000 + Island.DefaultPlunderGold, Gold(world));
 
-        // Consent is per plunder: when the cooldown ends, it doesn't start again on its own.
-        for (var t = 0; t < Plundering.CooldownTicks + Plundering.DurationTicks * 2; t++)
+        // Once plundered, it never pays again.
+        for (var t = 0; t < Plundering.DurationTicks * 4; t++)
             world.Step();
         Assert.Equal(1000 + Island.DefaultPlunderGold, Gold(world));
         Assert.Equal(0f, Plundering.Progress(ship));
     }
 
     [Fact]
-    public void ChoosingPlunder_IsIgnoredWhileTheIslandIsOnCooldown()
+    public void ChoosingPlunder_IsIgnoredOnceTheIslandIsPlundered()
     {
         var (world, ship) = Docked();
-        world.StartPlunderCooldown(world.Islands[0], 100);
+        world.MarkPlundered(world.Islands[0]);
 
         world.Enqueue(new ChoosePlunderCommand(PlayerId));
         world.Step();
@@ -157,8 +157,8 @@ public class ShipyardTests
         world.TryCastAbility(ship, AbilitySlot.One, Vector2.Zero);
         var shot = world.Projectiles[0];
 
-        Assert.Equal(BroadsideVolley.ProjectileSpeed * 1.1f, MathF.Abs(shot.Velocity.Y), 3);
-        var reach = shot.RemainingTicks * SimConstants.TickDelta * MathF.Abs(shot.Velocity.Y);
+        Assert.Equal(BroadsideVolley.ProjectileSpeed * 1.1f, shot.Velocity.Length(), 3);
+        var reach = shot.RemainingTicks * SimConstants.TickDelta * shot.Velocity.Length();
         Assert.InRange(reach, BroadsideVolley.Range * 1.1f, BroadsideVolley.Range * 1.1f + 0.6f);
         Assert.Equal(BroadsideVolley.Range * 1.1f, BroadsideVolley.RangeFor(ship), 4);
     }

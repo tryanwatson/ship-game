@@ -73,6 +73,8 @@ public sealed class SeaVisuals
         }
         foreach (var ship in world.Ships)
         {
+            if (ship.IsFort)
+                continue; // built on land: no wake, no shadow on the water
             var position = NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha);
             var heading = Angles.Lerp(ship.PreviousHeading, ship.Heading, alpha);
             var forward = new NVector2(MathF.Cos(heading), MathF.Sin(heading));

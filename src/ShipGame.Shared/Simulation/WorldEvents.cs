@@ -1,7 +1,9 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Progression;
 using ShipGame.Shared.Trading;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Simulation;
 
@@ -28,6 +30,13 @@ public sealed record AreaStrikeLaunched(
     long Tick, int StrikeId, int OwnerShipId, Team Team, Vector2 Origin, Vector2 Target, float Radius, float Damage, long ImpactTick)
     : WorldEvent(Tick);
 
+/// <summary>
+/// A ship has laid a gun on <paramref name="Target"/> and fires at <paramref name="FireTick"/> (see <see cref="ShotWarning"/>):
+/// everyone can see where it's pointed. The shot itself arrives as usual when it fires, with its <see cref="AbilityCast"/>.
+/// </summary>
+/// <param name="Channel">The cooldown channel it was laid with (the broadside's side; 0 for most).</param>
+public sealed record ShotWarned(long Tick, int ShipId, AbilitySlot Slot, Vector2 Target, long FireTick, int Channel = 0) : WorldEvent(Tick);
+
 /// <summary>Map cells a team has just discovered (see <see cref="Discovery"/>).</summary>
 public sealed record AreaDiscovered(long Tick, Team Team, IReadOnlyList<int> Cells) : WorldEvent(Tick)
 {
@@ -52,7 +61,7 @@ public sealed record ShipGrounded(long Tick, int ShipId) : WorldEvent(Tick);
 
 public sealed record GoldChanged(long Tick, int PlayerId, int Gold, int Delta) : WorldEvent(Tick);
 
-public sealed record IslandPlundered(long Tick, int IslandId, int PlayerId, int Gold, int CooldownTicks) : WorldEvent(Tick);
+public sealed record IslandPlundered(long Tick, int IslandId, int PlayerId, int Gold) : WorldEvent(Tick);
 
 public sealed record UpgradePurchased(long Tick, int ShipId, string UpgradeId, int Level) : WorldEvent(Tick);
 
@@ -94,14 +103,41 @@ public sealed record PlayerSunk(long Tick, int PlayerId, int RespawnTicks) : Wor
 public sealed record PlayerRespawned(long Tick, int PlayerId, int ShipId) : WorldEvent(Tick);
 
 /// <summary>
-/// The run is over: every player was sunk at once, or (<paramref name="Victory"/>) the flagship was.
+/// The run is over: every player was sunk at once, or (<paramref name="Victory"/>) the last boss was.
 /// </summary>
 public sealed record RunEnded(long Tick, bool Victory = false) : WorldEvent(Tick);
 
+/// <summary>A fortress's last gun fell: the island is taken, and every player is offered cards.</summary>
+public sealed record FortressTaken(long Tick, int IslandId) : WorldEvent(Tick);
+
+/// <summary>A player may choose one of <paramref name="CardIds"/> (see <c>CardRewards</c>); it joins the back of their queue.</summary>
+public sealed record CardsOffered(long Tick, int PlayerId, CardOffer Offer) : WorldEvent(Tick);
+
 /// <summary>
-/// A ship left play without sinking: a bounty hunter melted back into the storm (raised by the world), or (raised
-/// by the server, per client) a ship sailed out of everyone's range and stops being sent, though it's still afloat.
-/// Either way the client drops it, until it comes back into range.
+/// A player rerolled their oldest offer (free, or for gold): it's now <paramref name="Offer"/>, and they've paid for
+/// <paramref name="Rerolls"/> rerolls this run.
+/// </summary>
+public sealed record CardsRerolled(long Tick, int PlayerId, CardOffer Offer, int Rerolls) : WorldEvent(Tick);
+
+/// <summary>A player chose the weapon they set sail with; the run starts once everyone has.</summary>
+public sealed record StartingWeaponChosen(long Tick, int PlayerId, string AbilityId) : WorldEvent(Tick);
+
+/// <summary>A player chose <paramref name="Card"/> from the oldest offer in their queue, which is now gone.</summary>
+public sealed record CardChosen(long Tick, int PlayerId, CardPick Card) : WorldEvent(Tick);
+
+/// <summary>A ship with a ram ran into another and did it damage.</summary>
+public sealed record ShipRammed(long Tick, int RammerShipId, int TargetShipId) : WorldEvent(Tick);
+
+/// <summary>A shell set the water burning (Firestorm): a public patch to keep out of until <paramref name="EndTick"/>.</summary>
+public sealed record FireStarted(long Tick, int FireId, int OwnerShipId, Team Team, Vector2 Position, float Radius, float Dps, long EndTick)
+    : WorldEvent(Tick);
+
+/// <summary>Boss number <paramref name="Round"/> (from 1) has come for the crew, starting near <paramref name="PreyPlayerId"/>.</summary>
+public sealed record BossSpawned(long Tick, int ShipId, int Round, int PreyPlayerId) : WorldEvent(Tick);
+
+/// <summary>
+/// A ship left play without sinking: raised by the server, per client, when a ship sails out of everyone's range and
+/// stops being sent, though it's still afloat. The client drops it until it comes back into range.
 /// </summary>
 public sealed record ShipHidden(long Tick, int ShipId) : WorldEvent(Tick);
 
@@ -125,7 +161,7 @@ public enum RejectionReason
     CastFailed,
 
     NotAtShipyard,
-    IslandOnCooldown,
+    IslandAlreadyPlundered,
     UnknownUpgrade,
     MaxLevel,
     NotEnoughGold,
@@ -151,9 +187,24 @@ public enum RejectionReason
     /// <summary>The hold hasn't room for the contract's cargo.</summary>
     NotEnoughCargoSpace,
 
-    /// <summary>This shipyard doesn't sell that upgrade's next level; one further north does.</summary>
+    /// <summary>This shipyard doesn't sell that upgrade's next level; one further out does.</summary>
     NotStockedHere,
 
     /// <summary>The hull is already at full health: there's nothing to repair.</summary>
     NothingToRepair,
+
+    /// <summary>That card isn't in the player's oldest offer (or they have none waiting).</summary>
+    NoCardOffer,
+
+    /// <summary>The game is paused while cards are chosen: no firing.</summary>
+    Paused,
+
+    /// <summary>The starting weapon comes after the starting card.</summary>
+    ChooseCardFirst,
+
+    /// <summary>Not at the start of a run, or the starting weapon's already chosen.</summary>
+    NotChoosingWeapon,
+
+    /// <summary>No such weapon.</summary>
+    UnknownWeapon,
 }

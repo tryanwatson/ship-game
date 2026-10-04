@@ -4,7 +4,7 @@ namespace ShipGame.Shared.Upgrades;
 
 /// <summary>
 /// Everything a shipyard sells. Add rows here; the shipyard UI lists them in this order. How many levels of each a
-/// particular shipyard stocks depends on how far north it is (see <see cref="Shipyards.StockedLevels"/>).
+/// particular shipyard stocks depends on how far out it is (see <see cref="Shipyards.StockedLevels"/>).
 /// </summary>
 public static class UpgradeCatalog
 {

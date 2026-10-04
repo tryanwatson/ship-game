@@ -52,7 +52,26 @@ public readonly record struct ShipStats(
     /// </summary>
     public static readonly ShipStats PirateSloop = Sloop with { MaxHealth = 50f };
 
-    /// <summary>The pirate flagship at the far north: twice a sloop's length, heavily built, slow to turn.</summary>
+    /// <summary>
+    /// A fort on a fortress's shore (see <c>Fortresses</c>): it never moves, doesn't mend, and its guns reach further
+    /// but reload slower than a ship's. Its outline (the hull shape, square-ish at this size) is what shots must hit.
+    /// </summary>
+    public static readonly ShipStats Fort = new(
+        MaxSpeed: 0f,
+        Acceleration: 0f,
+        CoastTimeConstant: 1f,
+        MinDeceleration: 0.2f,
+        MinTurnRadius: 1f,
+        TurnRadiusAtMaxSpeed: 1f,
+        Radius: 1.3f,
+        Length: 2.6f,
+        Beam: 2.6f,
+        MaxHealth: 120f,
+        CooldownSpeed: 0.7f,
+        WeaponRange: 1.25f,
+        HealthRegen: 0f);
+
+    /// <summary>A boss: a pirate flagship, twice a sloop's length, heavily built, slow to turn (see <c>RunDirector</c>).</summary>
     public static readonly ShipStats Flagship = new(
         MaxSpeed: 4f,
         Acceleration: 1.2f,

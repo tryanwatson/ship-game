@@ -3,8 +3,8 @@ using ShipGame.Shared.Simulation;
 namespace ShipGame.Shared.Stats;
 
 /// <summary>
-/// A ship's upgrades. Effective stat = (base + sum of flat) * (1 + sum of percent), so flat bonuses benefit
-/// from percentage ones, and the result never depends on the order upgrades were bought in.
+/// A ship's upgrades. Effective stat = (base + sum of flat) * (1 + sum of percent) * product of multipliers, so flat
+/// bonuses benefit from percentage ones, and the result never depends on the order upgrades were bought in.
 /// </summary>
 public sealed class StatModifiers
 {
@@ -16,37 +16,58 @@ public sealed class StatModifiers
 
     public int RemoveSource(string source) => _modifiers.RemoveAll(m => m.Source == source);
 
-    public float Apply(StatId stat, float baseValue)
+    public float Apply(StatId stat, float baseValue) => Combine(_modifiers, stat, baseValue);
+
+    /// <summary>
+    /// One stat through any set of modifiers: (base + flat) * (1 + percent) * every multiplier, never below 0.
+    /// </summary>
+    public static float Combine(IEnumerable<StatModifier> modifiers, StatId stat, float baseValue)
     {
         var flat = 0f;
         var percent = 0f;
-        foreach (var modifier in _modifiers)
+        var multiplier = 1f;
+        foreach (var modifier in modifiers)
         {
             if (modifier.Stat != stat)
                 continue;
-            if (modifier.Kind == ModifierKind.Flat)
-                flat += modifier.Value;
-            else
-                percent += modifier.Value;
+            switch (modifier.Kind)
+            {
+                case ModifierKind.Flat:
+                    flat += modifier.Value;
+                    break;
+                case ModifierKind.Percent:
+                    percent += modifier.Value;
+                    break;
+                default:
+                    multiplier *= modifier.Value;
+                    break;
+            }
         }
 
-        return MathF.Max(0f, (baseValue + flat) * (1f + percent));
+        return MathF.Max(0f, (baseValue + flat) * (1f + percent) * multiplier);
     }
 
-    public ShipStats Apply(ShipStats baseStats) => baseStats with
+    public ShipStats Apply(ShipStats baseStats) => Apply(baseStats, _modifiers);
+
+    /// <summary>The ship's stats through <paramref name="modifiers"/> (an upgrade list plus anything else, such as cards).</summary>
+    public static ShipStats Apply(ShipStats baseStats, IReadOnlyCollection<StatModifier> modifiers)
     {
-        MaxSpeed = Apply(StatId.MaxSpeed, baseStats.MaxSpeed),
-        MaxHealth = Apply(StatId.MaxHealth, baseStats.MaxHealth),
-        CooldownSpeed = Apply(StatId.CooldownSpeed, baseStats.CooldownSpeed),
-        WeaponDamage = Apply(StatId.WeaponDamage, baseStats.WeaponDamage),
-        ProjectileSpeed = Apply(StatId.ProjectileSpeed, baseStats.ProjectileSpeed),
-        WeaponRange = Apply(StatId.WeaponRange, baseStats.WeaponRange),
-        MinTurnRadius = Apply(StatId.TurnRadius, baseStats.MinTurnRadius),
-        TurnRadiusAtMaxSpeed = Apply(StatId.TurnRadius, baseStats.TurnRadiusAtMaxSpeed),
-        CargoCapacity = Apply(StatId.CargoCapacity, baseStats.CargoCapacity),
-        HealthRegen = Apply(StatId.HealthRegen, baseStats.HealthRegen)
-            + Apply(StatId.HealthRegenFraction, 0f) * Apply(StatId.MaxHealth, baseStats.MaxHealth),
-    };
+        float Stat(StatId stat, float baseValue) => Combine(modifiers, stat, baseValue);
+        return baseStats with
+        {
+            MaxSpeed = Stat(StatId.MaxSpeed, baseStats.MaxSpeed),
+            MaxHealth = Stat(StatId.MaxHealth, baseStats.MaxHealth),
+            CooldownSpeed = Stat(StatId.CooldownSpeed, baseStats.CooldownSpeed),
+            WeaponDamage = Stat(StatId.WeaponDamage, baseStats.WeaponDamage),
+            ProjectileSpeed = Stat(StatId.ProjectileSpeed, baseStats.ProjectileSpeed),
+            WeaponRange = Stat(StatId.WeaponRange, baseStats.WeaponRange),
+            MinTurnRadius = Stat(StatId.TurnRadius, baseStats.MinTurnRadius),
+            TurnRadiusAtMaxSpeed = Stat(StatId.TurnRadius, baseStats.TurnRadiusAtMaxSpeed),
+            CargoCapacity = Stat(StatId.CargoCapacity, baseStats.CargoCapacity),
+            HealthRegen = Stat(StatId.HealthRegen, baseStats.HealthRegen)
+                + Stat(StatId.HealthRegenFraction, 0f) * Stat(StatId.MaxHealth, baseStats.MaxHealth),
+        };
+    }
 
     /// <summary>How many modifiers come from <paramref name="source"/> (e.g. levels bought of an upgrade).</summary>
     public int CountSource(string source) => _modifiers.Count(m => m.Source == source);

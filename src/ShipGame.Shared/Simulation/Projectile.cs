@@ -29,6 +29,15 @@ public sealed record ShotEffects
     /// <summary>Fraction of the firing ability's cooldown a long-range hit gives back.</summary>
     public float LongRangeRefund { get; init; }
 
+    /// <summary>Fraction a hit slows the ship it strikes, for <see cref="World.SlowSeconds"/> (Chain Shot).</summary>
+    public float SlowOnHit { get; init; }
+
+    /// <summary>Flies over land (Railgun).</summary>
+    public bool IgnoresLand { get; init; }
+
+    /// <summary>Times a hit bounces on to the next enemy nearby (Ricochet).</summary>
+    public int Ricochets { get; init; }
+
     public bool IsLongRange(float distance) => distance >= LongRange;
 
     /// <summary>Damage multiplier for a hit <paramref name="distance"/> from the muzzle.</summary>
@@ -75,6 +84,15 @@ public sealed class Projectile
     public Vector2 Origin { get; init; }
 
     public ShotEffects Effects { get; init; } = ShotEffects.None;
+
+    /// <summary>
+    /// Ships it strikes are tested where they were this many ticks ago: where the player who fired it saw them (see
+    /// <see cref="Ship.ShotRewindTicks"/>).
+    /// </summary>
+    public int RewindTicks { get; init; }
+
+    /// <summary>A fort's shot flies out over the island the fort stands on: land there doesn't stop it.</summary>
+    public int? IgnoredIslandId { get; init; }
 
     /// <summary>Ships it can still pass through; starts at <see cref="ShotEffects.Pierce"/>.</summary>
     public int PierceRemaining { get; set; }

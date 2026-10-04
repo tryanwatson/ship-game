@@ -45,10 +45,10 @@ public static class PirateRoles
     /// <summary>Any role, with equal odds.</summary>
     public static PirateRole Pick(Random rng) => All[rng.Next(All.Count)];
 
-    /// <summary>A pirate's role, by its first weapon; null for player ships and the flagship, which go by other names.</summary>
+    /// <summary>A pirate's role, by its first weapon; null for player ships, forts, and bosses, which go by other names.</summary>
     public static PirateRole? Of(Ship ship)
     {
-        if (ship.Team != Team.Pirates || ship.IsBoss)
+        if (ship.Team != Team.Pirates || ship.IsBoss || ship.IsFort)
             return null;
         return ship.Abilities[(int)AbilitySlot.One]?.Definition switch
         {

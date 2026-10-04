@@ -65,14 +65,20 @@ public sealed class GameClient : Game
     private StatusBanner _statusBanner = null!;
     private MapView _mapView = null!;
     private MainMenu _menu = null!;
-    private WeaponPicker _weaponPicker = null!;
+    private LobbyPanel _lobbyPanel = null!;
     private GameMenu _gameMenu = null!;
     private RunForecast _runForecast = null!;
     private SeaBanner _seaBanner = null!;
+    private CardSelectScreen _cardSelect = null!;
+    private CardHand _cardHand = null!;
+
+    // The fortress whose fall the card screen is for (the latest taken).
+    private string? _lastFortressTaken;
     private bool _mapOpen;
 
-    // Solo: choosing the starting weapon, before the run starts (online, the lobby does this).
-    private bool _pickingSoloWeapon;
+    // The name typed in the lobby (remembered between games), and the connection it was last sent on.
+    private string _lobbyName = "";
+    private ClientConnection? _namedConnection;
 
     // Starting gold, a playtesting option: - and = step through these on the weapon choice (solo) or in the lobby.
     private static readonly int[] StartingGoldSteps = { 0, 50, 100, 250, 500, 1000, 2500, 10000 };
@@ -131,7 +137,11 @@ public sealed class GameClient : Game
         IsMouseVisible = true;
         IsFixedTimeStep = false; // The session runs its own fixed tick; render as fast as vsync allows.
         Window.AllowUserResizing = true;
-        Window.TextInput += (_, e) => _menu?.OnTextInput(e.Character, e.Key);
+        Window.TextInput += (_, e) =>
+        {
+            _menu?.OnTextInput(e.Character, e.Key);
+            OnLobbyTextInput(e.Character, e.Key);
+        };
     }
 
     private int LocalPlayerId => _session.LocalPlayerId;
@@ -146,6 +156,7 @@ public sealed class GameClient : Game
         base.Initialize(); // loads content, including the menu
 
         _settings = ClientSettings.Load();
+        _lobbyName = PlayerNames.Clean(_settings.PlayerName);
         _menu.Address = _settings.LastAddress;
         _menu.Password = _settings.LastPassword;
         _menu.FriendlyFire = _settings.HostFriendlyFire;
@@ -162,7 +173,6 @@ public sealed class GameClient : Game
     private void OpenMenu(string? message = null, bool onJoinPage = false)
     {
         LeaveSession();
-        _pickingSoloWeapon = false;
         _session = new LocalGameSession(EmptySea(), SoloPlayerId);
         _camera.Position = IsoProjection.WorldToIso(Archipelago.Start);
         _menu.Open(message, onJoinPage);
@@ -201,10 +211,11 @@ public sealed class GameClient : Game
 
     private static World EmptySea() => Runs.CreateMap();
 
-    /// <summary>A fresh run: the player's ship at the southern edge carrying <paramref name="weapon"/>, the seas ahead.</summary>
-    private void StartRun(WeaponOffer weapon)
+    /// <summary>A fresh run: the player's ship in the middle of the map carrying <paramref name="weapon"/>, the fortresses all round.</summary>
+    private void StartRun()
     {
-        var world = Runs.Create(Environment.TickCount, new[] { (SoloPlayerId, weapon.Ability) }, startingGold: _settings.SoloStartingGold);
+        var name = _lobbyName.Length > 0 ? _lobbyName : PlayerNames.Default;
+        var world = Runs.Create(Environment.TickCount, new[] { (SoloPlayerId, name) }, startingGold: _settings.SoloStartingGold);
 
         _session = new LocalGameSession(world, SoloPlayerId);
         ResetControls();
@@ -237,10 +248,12 @@ public sealed class GameClient : Game
         _statusBanner = new StatusBanner(_primitives);
         _mapView = new MapView(_primitives);
         _menu = new MainMenu(_primitives);
-        _weaponPicker = new WeaponPicker(_primitives);
+        _lobbyPanel = new LobbyPanel(_primitives);
         _gameMenu = new GameMenu(_primitives);
         _runForecast = new RunForecast(_primitives);
         _seaBanner = new SeaBanner(_primitives);
+        _cardSelect = new CardSelectScreen(_primitives);
+        _cardHand = new CardHand(_primitives);
     }
 
     protected override void UnloadContent()
@@ -276,7 +289,7 @@ public sealed class GameClient : Game
         var menuJustOpened = false;
         if (IsActive && _input.WasKeyPressed(Keys.Escape) && !_gameMenu.IsOpen)
         {
-            if (_pickingSoloWeapon || Online is { Connection.Status: ConnectionStatus.Connecting })
+            if (Online is { Connection.Status: ConnectionStatus.Connecting })
             {
                 OpenMenu();
                 base.Update(gameTime);
@@ -313,38 +326,23 @@ public sealed class GameClient : Game
             return;
         }
 
-        if (_pickingSoloWeapon)
+        // In the lobby: the name we're typing goes to the server (once on arrival, then as it changes); - and = set the
+        // starting gold.
+        if (Online is { Connection.Status: ConnectionStatus.Lobby } inLobby && !ReferenceEquals(_namedConnection, inLobby.Connection))
         {
-            _session.Update(dt); // the sea (or the last run's wreckage) behind the choice
-            if (IsActive && StartingGoldStep() is { } step)
-            {
-                _settings.SoloStartingGold = StepStartingGold(_settings.SoloStartingGold, step);
-                _settings.Save();
-            }
-            if (IsActive && _weaponPicker.Update(_input, Hud) is { } weapon)
-            {
-                _pickingSoloWeapon = false;
-                StartRun(weapon);
-            }
-            UpdateTitle(dt);
-            base.Update(gameTime);
-            return;
+            inLobby.Connection.SetName(_lobbyName);
+            _namedConnection = inLobby.Connection;
         }
-
-        // In the lobby: choose a starting weapon (clicks or 1-3), then Enter to ready up.
-        if (IsActive && Online is { Connection.Status: ConnectionStatus.Lobby } inLobby && _weaponPicker.Update(_input, Hud) is { } choice)
-            inLobby.Connection.ChooseStartingWeapon(choice.Id);
         if (IsActive && Online is { Connection.Status: ConnectionStatus.Lobby } goldLobby && StartingGoldStep() is { } goldStep)
             goldLobby.Connection.SetStartingGold(StepStartingGold(goldLobby.Connection.Lobby?.StartingGold ?? 0, goldStep));
 
-        // Enter: online, ready up in the lobby (once a weapon is chosen); offline, choose a weapon for a new run once
-        // this one is over.
+        // Enter: online, ready up in the lobby (once named); offline, a new run once this one is over.
         if (IsActive && _input.WasKeyPressed(Keys.Enter))
         {
-            if (Online is { Connection.Status: ConnectionStatus.Lobby } online && LocalStartingWeapon(online) is not null)
+            if (Online is { Connection.Status: ConnectionStatus.Lobby } online && _lobbyName.Length > 0)
                 online.Connection.SetReady(!IsLocallyReady(online));
             else if (Online is null && _session.World.IsRunOver)
-                _pickingSoloWeapon = true;
+                StartRun();
         }
 
         if (!IsActive)
@@ -353,7 +351,25 @@ public sealed class GameClient : Game
             ReleaseAnchorKey();  // nor the anchor key, or the server would let go on its own
         }
 
-        if (IsActive)
+        // Paused for cards: the choice is all there is (the helm can still be set, for when play resumes).
+        if (IsActive && IsPlaying && _session.World.IsPaused)
+        {
+            _aimKeyDown = null;
+            _mapOpen = false;
+            switch (_cardSelect.Update(LocalPlayer, _input, Hud))
+            {
+                case { CardId: { } card }:
+                    _session.Send(new ChooseCardCommand(LocalPlayerId, card));
+                    break;
+                case { Reroll: true }:
+                    _session.Send(new RerollCardsCommand(LocalPlayerId));
+                    break;
+                case { WeaponId: { } weapon }:
+                    _session.Send(new ChooseStartingWeaponCommand(LocalPlayerId, weapon));
+                    break;
+            }
+        }
+        else if (IsActive && IsPlaying)
         {
             // While an aimed key is down, clicks belong to targeting (they cancel it), not to the shipyard panel.
             if (_aimKeyDown is null)
@@ -363,12 +379,20 @@ public sealed class GameClient : Game
         UpdateRudder();
         StepSession(dt);
 
-        if (IsActive)
+        if (IsActive && IsPlaying)
             HandleCamera((float)dt);
 
         UpdateTitle(dt);
         base.Update(gameTime);
     }
+
+    /// <summary>
+    /// Solo, or online with the run under way. Connecting or in the lobby the keyboard is for typing a name, so none of
+    /// it reaches the ship or the camera (typing "Ryan" mustn't lock the camera with Y and steer with A).
+    /// </summary>
+    private bool IsPlaying => Online is null or { Connection.Status: ConnectionStatus.InRun };
+
+    private PlayerState? LocalPlayer => _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player : null;
 
     /// <summary>Advances the game (and its effects) by a frame.</summary>
     private void StepSession(double dt)
@@ -376,7 +400,28 @@ public sealed class GameClient : Game
         _worldRenderer.CaptureEffects(_session.World, _session.InterpolationAlpha);
         _worldRenderer.UpdateEffects((float)dt);
         _session.Update(dt);
-        _worldRenderer.ProcessEffects(_session.World, _session.TakeEvents());
+        var events = _session.TakeEvents();
+        _worldRenderer.ProcessEffects(_session.World, events);
+        Announce(events);
+    }
+
+    /// <summary>The run's big moments: a fortress taken (named on the card screen), a boss on its way (the banner).</summary>
+    private void Announce(System.Collections.Generic.IReadOnlyList<WorldEvent> events)
+    {
+        foreach (var e in events)
+        {
+            switch (e)
+            {
+                case FortressTaken taken when _session.World.FindIsland(taken.IslandId) is { } island:
+                    _lastFortressTaken = island.Name;
+                    break;
+                case BossSpawned boss:
+                    _seaBanner.Announce("PIRATE FLAGSHIP", boss.PreyPlayerId == LocalPlayerId
+                        ? $"BOSS {boss.Round} OF {RunDirector.BossCount} IS COMING FOR YOU"
+                        : $"BOSS {boss.Round} OF {RunDirector.BossCount} IS HUNTING THE CREW", alarm: true);
+                    break;
+            }
+        }
     }
 
     /// <summary>The game menu's title: solo pauses, online doesn't.</summary>
@@ -390,12 +435,17 @@ public sealed class GameClient : Game
         _session.Update(dt); // the sea behind the menu
         if (!IsActive)
             return;
+        if (_menu.OnMainPage && StartingGoldStep() is { } step)
+        {
+            _settings.SoloStartingGold = StepStartingGold(_settings.SoloStartingGold, step);
+            _settings.Save();
+        }
 
         switch (_menu.Update(_input, Hud, dt))
         {
             case MenuAction.PlaySolo:
                 _menu.Close();
-                _pickingSoloWeapon = true;
+                StartRun();
                 break;
             case MenuAction.Host:
                 SaveSettings();
@@ -428,16 +478,8 @@ public sealed class GameClient : Game
         {
             _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
             _menu.Draw(Hud);
-            base.Draw(gameTime);
-            return;
-        }
-
-        if (_pickingSoloWeapon)
-        {
-            _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
-            _statusBanner.Draw("CHOOSE YOUR WEAPON",
-                $"THE OTHERS CAN BE BOUGHT AT SHIPYARDS  -  {StartingGoldLabel(_settings.SoloStartingGold)}  -  ESC FOR THE MENU", Hud);
-            _weaponPicker.Draw(_input, Hud, null);
+            if (_menu.OnMainPage)
+                DrawSoloGold();
             base.Draw(gameTime);
             return;
         }
@@ -458,8 +500,10 @@ public sealed class GameClient : Game
         // Where we are and what's coming, while there's a run to come to (not in the lobby or after it ends).
         if (_session.World.Director is { } director && inRun)
         {
-            _runForecast.Draw(director.Status, Archipelago.SeaAt(here), here, Hud);
-            _seaBanner.Draw(localShip is null ? null : Archipelago.SeaAt(localShip.Position), Hud);
+            _runForecast.Draw(director.Status, Archipelago.SeaAt(here), Hud);
+            if (!_session.World.IsPaused) // the card screen has the stage
+                _seaBanner.Draw(localShip is null ? null : Archipelago.SeaAt(localShip.Position), Hud);
+            _cardHand.Draw(LocalPlayer, _input, Hud);
         }
         // Choosing a contract charts each route beside the panel; otherwise M shows the full map.
         if (_shipyardPanel.CurrentRoutes(_session.World, localShip, _input, Hud) is { } routes)
@@ -468,6 +512,8 @@ public sealed class GameClient : Game
             _mapView.Draw(_session.World, LocalPlayerId, Hud);
         _shipyardPanel.Draw(_session.World, localShip, _input, Hud);
         DrawStatusBanner();
+        if (inRun && _session.World.IsPaused)
+            _cardSelect.Draw(_session.World, LocalPlayer, _lastFortressTaken, _input, Hud);
         if (_gameMenu.IsOpen)
             _gameMenu.Draw(Hud, GameMenuTitle, GameMenuNote);
         base.Draw(gameTime);
@@ -547,7 +593,7 @@ public sealed class GameClient : Game
     private void UpdateRudder()
     {
         var rudder = 0;
-        if (IsActive && !_gameMenu.IsOpen)
+        if (IsActive && IsPlaying && !_gameMenu.IsOpen)
         {
             if (_input.IsKeyDown(Keys.A)) rudder -= 1;
             if (_input.IsKeyDown(Keys.D)) rudder += 1;
@@ -635,8 +681,34 @@ public sealed class GameClient : Game
 
     private static string StartingGoldLabel(int gold) => $"START GOLD {gold} [- +]";
 
-    private static string? LocalStartingWeapon(NetworkGameSession online) =>
-        online.Connection.Lobby?.Players.FirstOrDefault(p => p.PlayerId == online.LocalPlayerId)?.StartingWeaponId;
+    /// <summary>Typing in the lobby edits our name: letters, digits and spaces; Backspace deletes.</summary>
+    private void OnLobbyTextInput(char character, Keys key)
+    {
+        if (!IsActive || Online is not { Connection.Status: ConnectionStatus.Lobby } online)
+            return;
+        var name = _lobbyName;
+        if (key == Keys.Back)
+            name = name.Length > 0 ? name[..^1] : name;
+        else if (PlayerNames.Allows(character) && name.Length < PlayerNames.MaxLength && !(character == ' ' && (name.Length == 0 || name[^1] == ' ')))
+            name += char.ToUpperInvariant(character);
+        if (name == _lobbyName)
+            return;
+        _lobbyName = name;
+        online.Connection.SetName(name);
+        _settings.PlayerName = name;
+        _settings.Save();
+    }
+
+    /// <summary>Under the main menu: the gold a solo run starts with (a playtesting option; - and = change it).</summary>
+    private void DrawSoloGold()
+    {
+        var text = $"SOLO {StartingGoldLabel(_settings.SoloStartingGold)}";
+        var hud = Hud;
+        _primitives.Begin(hud.Transform);
+        PixelFont.Draw(_primitives, text, new Vector2((hud.Viewport.Width - PixelFont.Measure(text, 1.5f)) / 2f, hud.Viewport.Height - 36f),
+            1.5f, new Color(150, 155, 170));
+        _primitives.Flush();
+    }
 
     private void DrawStatusBanner()
     {
@@ -655,23 +727,14 @@ public sealed class GameClient : Game
 
     private static string RunOverTitle(World world) => world.IsVictory ? "VICTORY" : "RUN OVER";
 
-    /// <summary>How the run ended: the flagship sunk, or how far north the crew got.</summary>
-    private string RunOverSummary(World world)
+    /// <summary>How the run ended: every boss sunk, or how far the crew got.</summary>
+    private static string RunOverSummary(World world)
     {
-        return world.IsVictory ? "THE PIRATE FLAGSHIP IS SUNK" : $"REACHED {Archipelago.SeaAt(FurthestNorth(world)).Name}";
-    }
-
-    /// <summary>Roughly where the crew's furthest-north ship got to: a sight's depth behind the northernmost charted water.</summary>
-    private static NVector2 FurthestNorth(World world)
-    {
-        var discovery = world.Discovery;
-        for (var index = 0; index < discovery.CellCount; index++)
-        {
-            // Cells run row by row from the north, so the first charted one is the furthest north.
-            if (discovery.IsDiscovered(Team.Players, index))
-                return discovery.CellCenter(index) + new NVector2(0f, Discovery.SightHalfUpDown);
-        }
-        return Archipelago.Start;
+        if (world.IsVictory)
+            return "EVERY PIRATE FLAGSHIP IS SUNK";
+        var status = world.Director?.Status ?? default;
+        var fortresses = status.FortressesTaken == 1 ? "1 FORTRESS" : $"{status.FortressesTaken} FORTRESSES";
+        return $"TOOK {fortresses} - SANK {status.BossesSunk} OF {RunDirector.BossCount} BOSSES";
     }
 
     /// <summary>Online-only banners: connecting, refused or dropped, and the lobby. True if one was drawn.</summary>
@@ -687,15 +750,14 @@ public sealed class GameClient : Game
             {
                 var players = connection.Lobby?.Players ?? Array.Empty<LobbyPlayer>();
                 var ready = players.Count(p => p.Ready);
-                var weapon = LocalStartingWeapon(online);
-                var prompt = weapon is null ? "CHOOSE YOUR STARTING WEAPON"
+                var prompt = _lobbyName.Length == 0 ? "TYPE YOUR NAME"
                     : IsLocallyReady(online) ? "READY - WAITING FOR THE CREW"
                     : "PRESS ENTER WHEN READY";
                 var title = _session.World.IsRunOver ? RunOverTitle(_session.World) : "LOBBY";
                 var mode = connection.Lobby?.FriendlyFire == true ? "FRIENDLY FIRE ON" : "CO-OP";
                 var gold = StartingGoldLabel(connection.Lobby?.StartingGold ?? 0);
                 _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {mode}  -  {gold}  -  {prompt}", Hud);
-                _weaponPicker.Draw(_input, Hud, weapon);
+                _lobbyPanel.Draw(_lobbyName, players, online.LocalPlayerId, Hud);
                 return true;
             }
             default:
@@ -731,7 +793,7 @@ public sealed class GameClient : Game
         else
         {
             var sea = Archipelago.SeaAt(ship.Position);
-            status = $"{sea.Name.ToLowerInvariant()} (level {sea.Level})";
+            status = $"{sea.Name.ToLowerInvariant()} (level {sea.Level}), {world.Director?.FortressesTaken ?? 0} fortresses taken";
         }
 
         if (ship?.Anchor == AnchorState.Down)

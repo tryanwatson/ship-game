@@ -48,5 +48,24 @@ public sealed record SetRudderCommand(int PlayerId, int Rudder) : Command(Player
 /// <summary>Raises or lowers the sail setting by <paramref name="Delta"/> levels; one below furled rows astern.</summary>
 public sealed record AdjustThrottleCommand(int PlayerId, int Delta) : Command(PlayerId);
 
-/// <summary>Casts the ability in <paramref name="Slot"/>. <paramref name="Target"/> is the cursor's world position.</summary>
-public sealed record CastAbilityCommand(int PlayerId, AbilitySlot Slot, Vector2 Target) : Command(PlayerId);
+/// <summary>
+/// Chooses <paramref name="CardId"/> from the oldest card offer waiting for the player (see <c>CardRewards</c>). Works
+/// whether or not the player is afloat: cards belong to the player.
+/// </summary>
+public sealed record ChooseCardCommand(int PlayerId, string CardId) : Command(PlayerId);
+
+/// <summary>
+/// At the start of a run, once the starting card is chosen: the weapon to set sail with, from <c>WeaponCatalog</c>.
+/// It goes on slot 1; the others are bought at ports as usual.
+/// </summary>
+public sealed record ChooseStartingWeaponCommand(int PlayerId, string AbilityId) : Command(PlayerId);
+
+/// <summary>Pays gold to swap the cards in the player's oldest offer for a fresh draw (see <c>CardRewards.TryReroll</c>).</summary>
+public sealed record RerollCardsCommand(int PlayerId) : Command(PlayerId);
+
+/// <summary>
+/// Casts the ability in <paramref name="Slot"/>. <paramref name="Target"/> is the cursor's world position.
+/// <paramref name="ViewTick"/>, online, is the server tick the player was seeing other ships at when they fired: their
+/// shots strike ships where they saw them (see <see cref="Simulation.Ship.ShotRewindTicks"/>). Null in-process.
+/// </summary>
+public sealed record CastAbilityCommand(int PlayerId, AbilitySlot Slot, Vector2 Target, long? ViewTick = null) : Command(PlayerId);

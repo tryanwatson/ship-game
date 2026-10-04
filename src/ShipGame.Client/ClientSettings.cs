@@ -24,6 +24,9 @@ public sealed class ClientSettings
     /// <summary>Gold to start solo runs with (a playtesting option; 0 normally).</summary>
     public int SoloStartingGold { get; set; }
 
+    /// <summary>The name last given in a lobby; shown over the ship, solo too.</summary>
+    public string PlayerName { get; set; } = "";
+
     private static string FilePath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ShipGame", "client.json");
 

@@ -3,14 +3,13 @@ using Microsoft.Xna.Framework;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
-using NVector2 = System.Numerics.Vector2;
 
 namespace ShipGame.Client.Rendering;
 
 /// <summary>
-/// Top-right, under the counters: the sea we're in and its level, how close the storm is, and, while any are about
-/// or we're in the storm, its bounty hunters. Reads the director's <see cref="RunStatus"/>, which clients mirror from
-/// the server.
+/// Top-right, under the counters: the waters we're in and their level, how many fortresses the crew has taken and
+/// how many more until the next boss, and the boss itself once it's coming. Reads the director's
+/// <see cref="RunStatus"/>, which clients mirror from the server.
 /// </summary>
 public sealed class RunForecast
 {
@@ -20,13 +19,9 @@ public sealed class RunForecast
     private const float PanelPadding = 6f;
     private const float Scale = 2f;
 
-    /// <summary>The storm line turns urgent when the storm is this close behind (tiles).</summary>
-    private const float StormWarningDistance = 30f;
-
     private static readonly Color Panel = new Color(12, 16, 24) * 0.75f;
     private static readonly Color SeaText = new(235, 235, 240);
-    private static readonly Color StormText = new(170, 190, 225);
-    private static readonly Color HunterText = new(240, 190, 120);
+    private static readonly Color FortressText = new(225, 205, 160);
     private static readonly Color Urgent = new(240, 95, 80);
 
     private readonly PrimitiveBatch _batch;
@@ -36,46 +31,46 @@ public sealed class RunForecast
         _batch = batch;
     }
 
-    /// <param name="here">Where we are (our ship, or the camera while we're sunk): what the storm's distance is measured from.</param>
-    public void Draw(RunStatus status, Sea sea, NVector2 here, HudView hud)
+    /// <summary>Where the lines end (HUD units from the top), for readouts stacked beneath them.</summary>
+    public static float Bottom => HudCounters.Bottom + Gap + 3 * Step;
+
+    private static float Step => PixelFont.Height(Scale) + 2 * PanelPadding + LineGap;
+
+    public void Draw(RunStatus status, Sea sea, HudView hud)
     {
         _batch.Begin(hud.Transform);
         var right = hud.Viewport.Width - RightMargin;
         var top = HudCounters.Bottom + Gap;
-        var step = PixelFont.Height(Scale) + 2 * PanelPadding + LineGap;
 
         DrawLine($"{sea.Name}  LV {sea.Level}", right, top, SeaText);
-
-        var (storm, stormUrgent) = StormLine(status, here);
-        DrawLine(storm, right, top + step, stormUrgent ? Urgent : StormText);
-
-        var inStorm = status.TicksUntilStorm == 0 && here.Y > status.StormY;
-        if (inStorm)
-            DrawLine(status.Hunters == 0 ? "BOUNTY HUNTERS COMING" : $"BOUNTY HUNTERS - {Ships(status.Hunters)}", right, top + 2 * step, Urgent);
-        else if (status.Hunters > 0)
-            DrawLine($"BOUNTY HUNTERS IN THE STORM - {Ships(status.Hunters)}", right, top + 2 * step, HunterText);
+        DrawLine(FortressLine(status), right, top + Step, FortressText);
+        if (BossLine(status) is { } boss)
+            DrawLine(boss, right, top + 2 * Step, Urgent);
 
         _batch.Flush();
     }
 
-    private static (string Text, bool Urgent) StormLine(RunStatus s, NVector2 here)
+    private static string FortressLine(RunStatus s)
     {
-        if (s.TicksUntilStorm > 0)
-            return ($"STORM BUILDING - MOVES IN {Clock(s.TicksUntilStorm)}", false);
-        var behind = s.StormY - here.Y;
-        if (behind <= 0f)
-            return ("IN THE STORM - GET OUT NORTH", true);
-        return ($"STORM {MathF.Ceiling(behind):0} TILES SOUTH", behind <= StormWarningDistance);
+        var taken = s.FortressesTaken == 1 ? "1 FORTRESS TAKEN" : $"{s.FortressesTaken} FORTRESSES TAKEN";
+        var next = s.FortressesForNextBoss;
+        return next > s.FortressesTaken ? $"{taken} - BOSS AT {next}" : taken;
     }
 
-    private static string Ships(int count) => count == 1 ? "1 SHIP" : $"{count} SHIPS";
-
-    private static int Seconds(int ticks) => (int)Math.Ceiling(Math.Max(0, ticks) / (double)SimConstants.TickRate);
+    private static string? BossLine(RunStatus s)
+    {
+        var round = $"BOSS {s.BossesSpawned + (s.BossAfloat ? 0 : 1)} OF {RunDirector.BossCount}";
+        if (s.BossAfloat)
+            return $"{round} IS HUNTING THE CREW";
+        if (s.BossCountdownTicks > 0)
+            return $"{round} ARRIVES IN {Clock(s.BossCountdownTicks)}";
+        return null;
+    }
 
     /// <summary>M:SS, rounded up so it never shows 0:00 before it happens.</summary>
     private static string Clock(int ticks)
     {
-        var seconds = Seconds(ticks);
+        var seconds = (int)Math.Ceiling(Math.Max(0, ticks) / (double)SimConstants.TickRate);
         return $"{seconds / 60}:{seconds % 60:00}";
     }
 

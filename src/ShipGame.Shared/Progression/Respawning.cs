@@ -6,7 +6,7 @@ namespace ShipGame.Shared.Progression;
 
 /// <summary>
 /// Sunk players come back after <see cref="DelaySeconds"/>, near a living teammate, keeping their gold, weapons,
-/// skills, upgrades, and kill bonuses. If every player is down at once there's no one left to come back to: the run is over.
+/// skills, upgrades, and cards. If every player is down at once there's no one left to come back to: the run is over.
 /// </summary>
 public static class Respawning
 {
@@ -57,21 +57,23 @@ public static class Respawning
         var position = PickSpawnPoint(world, player.PlayerId);
         var ship = world.SpawnShip(position, Archipelago.StartHeading, stats, player.PlayerId, abilities);
 
-        // Upgrades, kill bonuses, and skills carry over; re-applying them also tops health up to the new maximum.
+        // Upgrades, skills, and cards carry over; re-applying them also tops health up to the new maximum. Cards come
+        // from the player, since some may have been chosen while they waited.
         if (lost is not null)
         {
-            foreach (var modifier in lost.Modifiers)
+            foreach (var modifier in lost.Modifiers.Where(m => m.Source != World.SlowSource)) // a slow doesn't come back with you
                 ship.AddModifier(modifier);
             foreach (var skill in lost.Skills)
                 ship.AddSkill(skill);
         }
+        ship.ReplaceCards(player.Cards);
 
         player.LostShip = null;
         world.Emit(new PlayerRespawned(world.Tick, player.PlayerId, ship.Id));
     }
 
     /// <summary>
-    /// A clear patch of water beside a living teammate: away from land and pirates, and out of the storm. Candidates
+    /// A clear patch of water beside a living teammate: away from land and pirates. Candidates
     /// are spread evenly around the teammate (no randomness, so the server stays reproducible); the best one wins.
     /// </summary>
     private static Vector2 PickSpawnPoint(World world, int playerId)
@@ -95,11 +97,10 @@ public static class Respawning
 
             var land = world.DistanceToLand(candidate);
             var pirate = pirates.Count == 0 ? float.MaxValue : pirates.Min(p => Vector2.Distance(p, candidate));
-            var storm = world.Director?.InStorm(candidate) == true;
-            if (land >= MinDistanceFromLand && pirate >= MinDistanceFromPirates && !storm)
+            if (land >= MinDistanceFromLand && pirate >= MinDistanceFromPirates)
                 return candidate;
 
-            var score = MathF.Min(land / MinDistanceFromLand, pirate / MinDistanceFromPirates) - (storm ? 10f : 0f);
+            var score = MathF.Min(land / MinDistanceFromLand, pirate / MinDistanceFromPirates);
             if (score > bestScore)
             {
                 best = candidate;

@@ -2,6 +2,7 @@ using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
 using ShipGame.Shared.Progression;
+using ShipGame.Shared.Stats;
 using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
@@ -16,12 +17,20 @@ public sealed class World
     private readonly List<Ship> _ships = new();
     private readonly List<Projectile> _projectiles = new();
     private readonly List<AreaStrike> _strikes = new();
+    private readonly List<ShotWarning> _warnings = new();
+    private readonly List<FireZone> _fires = new();
+    private readonly List<PendingEcho> _echoes = new();
+    private readonly List<(Ship A, Ship B)> _contacts = new();
+
+    /// <summary>A weapon firing again a moment after it was fired (the Echo card), at a share of its damage.</summary>
+    private sealed record PendingEcho(int ShipId, AbilitySlot Slot, Vector2 Target, long DueTick, float Scale);
     private readonly List<Island> _islands = new();
-    private readonly Dictionary<int, int> _plunderCooldowns = new();
+    private readonly HashSet<int> _plunderedIslands = new();
     private readonly List<WorldEvent> _events = new();
     private readonly Dictionary<int, int> _lastSightCell = new();
     private readonly Queue<Command> _pendingCommands = new();
     private readonly Dictionary<int, PlayerState> _players = new();
+    private readonly HashSet<int> _takenFortresses = new();
     private int _nextEntityId = 1;
 
     /// <summary>
@@ -68,11 +77,12 @@ public sealed class World
     public IReadOnlyList<AreaStrike> Strikes => _strikes;
 
     /// <summary>Lobs a shell from <paramref name="owner"/> that lands on <paramref name="target"/> after <paramref name="flightTicks"/>.</summary>
-    public AreaStrike LaunchStrike(Ship owner, Vector2 target, float radius, float damage, int flightTicks, ClusterEffect? cluster = null) =>
-        LaunchStrike(owner.Id, owner.Team, owner.Position, target, radius, damage, flightTicks, cluster);
+    public AreaStrike LaunchStrike(Ship owner, Vector2 target, float radius, float damage, int flightTicks, ClusterEffect? cluster = null,
+        FireEffect? fire = null) =>
+        LaunchStrike(owner.Id, owner.Team, owner.Position, target, radius, damage, flightTicks, cluster, fire);
 
     private AreaStrike LaunchStrike(int ownerShipId, Team team, Vector2 origin, Vector2 target, float radius, float damage, int flightTicks,
-        ClusterEffect? cluster)
+        ClusterEffect? cluster, FireEffect? fire = null)
     {
         var strike = new AreaStrike
         {
@@ -86,11 +96,83 @@ public sealed class World
             LaunchTick = Tick,
             ImpactTick = Tick + Math.Max(1, flightTicks),
             Cluster = cluster,
+            Fire = fire,
         };
         _strikes.Add(strike);
         Emit(new AreaStrikeLaunched(Tick, strike.Id, strike.OwnerShipId, strike.Team, strike.Origin, strike.Target, radius, damage, strike.ImpactTick));
         return strike;
     }
+
+    /// <summary>Burning water (Firestorm): public, so anyone can keep out of it.</summary>
+    public IReadOnlyList<FireZone> Fires => _fires;
+
+    /// <summary>Adds a fire that's already started, for a client mirroring the server's.</summary>
+    public void AddFire(FireZone fire) => _fires.Add(fire);
+
+    /// <summary>Drops fires that have burned out by now, for a client mirroring the server's (which never steps).</summary>
+    public void PutOutFires() => _fires.RemoveAll(f => f.EndTick <= Tick);
+
+    /// <summary>A Hunter's Mark lasts this long after each hit.</summary>
+    public const float MarkSeconds = 5f;
+    public static readonly int MarkTicks = (int)(MarkSeconds * SimConstants.TickRate);
+
+    /// <summary>A Chain Shot slow lasts this long after each hit.</summary>
+    public const float SlowSeconds = 3f;
+    public static readonly int SlowTicks = (int)(SlowSeconds * SimConstants.TickRate);
+    public const string SlowSource = "slowed";
+
+    /// <summary>A ram does its damage at most this often.</summary>
+    public static readonly int RamCooldownTicks = SimConstants.TickRate;
+
+    /// <summary>An echo fires this long after the shot it echoes.</summary>
+    public const float EchoSeconds = 0.5f;
+    public static readonly int EchoTicks = (int)(EchoSeconds * SimConstants.TickRate);
+
+    /// <summary>A ricochet looks this far for its next target.</summary>
+    public const float RicochetRange = 10f;
+
+    /// <summary>
+    /// The furthest back a lagging player's shots look for what they hit (see <see cref="Ship.ShotRewindTicks"/>): half
+    /// a second. Beyond it, the shooter's view is too stale to favour over everyone else's.
+    /// </summary>
+    public const int MaxShotRewindTicks = SimConstants.TickRate / 2;
+
+    /// <summary>
+    /// Hurts <paramref name="target"/> on behalf of <paramref name="attackerShipId"/>: more if it's marked, and it
+    /// becomes marked if the attacker carries Hunter's Mark. Every weapon's damage comes through here.
+    /// </summary>
+    public void DealDamage(Ship target, float amount, int attackerShipId)
+    {
+        if (target.MarkedUntilTick >= Tick)
+            amount *= 1f + target.MarkBonus;
+        target.Health = MathF.Max(0f, target.Health - amount);
+        RecordHit(target, attackerShipId);
+        if (FindShip(attackerShipId)?.PerkValue(Perk.HuntersMark) is > 0f and var mark)
+        {
+            target.MarkBonus = target.MarkedUntilTick >= Tick ? MathF.Max(target.MarkBonus, mark) : mark;
+            target.MarkedUntilTick = Tick + MarkTicks;
+        }
+    }
+
+    /// <summary>Slows <paramref name="ship"/> by <paramref name="fraction"/> for <see cref="SlowSeconds"/> (the stronger slow wins).</summary>
+    public void Slow(Ship ship, float fraction)
+    {
+        var current = ship.SlowedUntilTick >= Tick
+            ? ship.Modifiers.Where(m => m.Source == SlowSource).Select(m => 1f - m.Value).DefaultIfEmpty(0f).Max()
+            : 0f;
+        ship.RemoveModifiers(SlowSource);
+        ship.AddModifier(new StatModifier(StatId.MaxSpeed, ModifierKind.Multiplier, 1f - MathF.Max(current, fraction), SlowSource));
+        ship.SlowedUntilTick = Tick + SlowTicks;
+    }
+
+    /// <summary>Shots laid but not yet fired.</summary>
+    public IReadOnlyList<ShotWarning> Warnings => _warnings;
+
+    /// <summary>Adds a shot warning, for a client mirroring the server's.</summary>
+    public void AddWarning(ShotWarning warning) => _warnings.Add(warning);
+
+    /// <summary>Drops the warnings that have fired by <paramref name="tick"/>, or whose ship is gone, for a client mirroring the server's.</summary>
+    public void RemoveSpentWarnings(double tick) => _warnings.RemoveAll(w => w.FireTick <= tick || FindShip(w.ShipId) is null);
 
     /// <summary>Adds an already-launched strike, for a client mirroring the server's shells.</summary>
     public void AddStrike(AreaStrike strike) => _strikes.Add(strike);
@@ -99,10 +181,10 @@ public sealed class World
 
     public void AddIsland(Island island) => _islands.Add(island);
 
-    /// <summary>Ticks until <paramref name="island"/> can be plundered again; 0 when it's ripe.</summary>
-    public int PlunderCooldownTicks(Island island) => _plunderCooldowns.GetValueOrDefault(island.Id);
+    /// <summary>Whether <paramref name="island"/> has been plundered. Each island can only be plundered once a run.</summary>
+    public bool IsPlundered(Island island) => _plunderedIslands.Contains(island.Id);
 
-    public void StartPlunderCooldown(Island island, int ticks) => _plunderCooldowns[island.Id] = ticks;
+    public void MarkPlundered(Island island) => _plunderedIslands.Add(island.Id);
 
     /// <summary>Distance from a point to the nearest shore; 0 on land, infinity with no islands.</summary>
     public float DistanceToLand(Vector2 point)
@@ -119,7 +201,7 @@ public sealed class World
 
     public IReadOnlyDictionary<int, PlayerState> Players => _players;
 
-    /// <summary>Runs the storm and the bounty raids when set; null for worlds that only do what they're told (tests, sandboxes).</summary>
+    /// <summary>Runs fortress rewards and the bosses when set; null for worlds that only do what they're told (tests, sandboxes).</summary>
     public RunDirector? Director { get; set; }
 
     /// <summary>
@@ -134,12 +216,12 @@ public sealed class World
         && (target.Team != attackerTeam || (FriendlyFire && attackerTeam == Team.Players));
 
     /// <summary>
-    /// True once every player was sunk at the same time, or the flagship was (see <see cref="IsVictory"/>). Nothing
-    /// respawns and no more raids come.
+    /// True once every player was sunk at the same time, or the last boss was (see <see cref="IsVictory"/>). Nothing
+    /// respawns and no more bosses come.
     /// </summary>
     public bool IsRunOver { get; private set; }
 
-    /// <summary>The run ended with the flagship sunk.</summary>
+    /// <summary>The run ended with the last boss sunk.</summary>
     public bool IsVictory { get; private set; }
 
     public void EndRun(bool victory = false)
@@ -224,6 +306,8 @@ public sealed class World
 
     public bool RemoveProjectile(int id) => _projectiles.RemoveAll(p => p.Id == id) > 0;
 
+    public bool RemoveProjectile(Projectile projectile) => _projectiles.Remove(projectile);
+
     /// <summary>Takes a player out of the run (they left): their ship goes and they stop counting toward raid size.</summary>
     public void RemovePlayer(int playerId)
     {
@@ -236,16 +320,35 @@ public sealed class World
         _players.Remove(playerId);
     }
 
-    /// <summary>Sets an island's plunder cooldown directly (0 clears it), for mirroring the server.</summary>
-    public void SetPlunderCooldown(int islandId, int ticks)
+    /// <summary>Replaces the set of plundered islands, for mirroring the server.</summary>
+    public void SetPlunderedIslands(IEnumerable<int> islandIds)
     {
-        if (ticks > 0)
-            _plunderCooldowns[islandId] = ticks;
-        else
-            _plunderCooldowns.Remove(islandId);
+        _plunderedIslands.Clear();
+        _plunderedIslands.UnionWith(islandIds);
     }
 
-    public IReadOnlyDictionary<int, int> PlunderCooldowns => _plunderCooldowns;
+    public IReadOnlyCollection<int> PlunderedIslands => _plunderedIslands;
+
+    /// <summary>Fortresses whose every gun has fallen. Taken islands stay taken for the rest of the run.</summary>
+    public IReadOnlyCollection<int> TakenFortresses => _takenFortresses;
+
+    /// <summary>
+    /// Whether ships can trade at <paramref name="island"/>: shop for upgrades, weapons, skills and repairs, and buy
+    /// contracts. Every shipyard, and every fortress once it's taken.
+    /// </summary>
+    public bool IsPort(Island island) => island.HasShipyard || (island.IsFortress && _takenFortresses.Contains(island.Id));
+
+    /// <summary>Whether <paramref name="island"/> is a fortress still in pirate hands.</summary>
+    public bool IsHeld(Island island) => island.IsFortress && !_takenFortresses.Contains(island.Id);
+
+    /// <summary>Marks a fortress taken and announces it. False if it already was (or isn't a fortress).</summary>
+    public bool TakeFortress(Island island)
+    {
+        if (!island.IsFortress || !_takenFortresses.Add(island.Id))
+            return false;
+        Emit(new FortressTaken(Tick, island.Id));
+        return true;
+    }
 
     /// <summary>Sets the tick counter, for a client mirroring the server's clock.</summary>
     public void SetTick(long tick) => Tick = tick;
@@ -256,6 +359,7 @@ public sealed class World
         effects ??= ShotEffects.None;
         var projectile = new Projectile(_nextEntityId++, owner.Id, owner.Team, damage, radius)
         {
+            IgnoredIslandId = owner.FortIslandId,
             Position = position,
             PreviousPosition = position,
             Velocity = velocity,
@@ -263,6 +367,7 @@ public sealed class World
             Origin = position,
             Effects = effects,
             PierceRemaining = effects.Pierce,
+            RewindTicks = owner.ShotRewindTicks,
         };
         _projectiles.Add(projectile);
         Emit(new ProjectileSpawned(Tick, projectile.Id, owner.Id, owner.Team, position, velocity, damage, lifetimeTicks, radius));
@@ -274,15 +379,22 @@ public sealed class World
     /// <summary>Queues a command to be applied at the start of the next tick.</summary>
     public void Enqueue(Command command) => _pendingCommands.Enqueue(command);
 
+    /// <summary>
+    /// Everything stops while anyone has cards to choose (see <see cref="CardRewards"/>), for as long as it takes: the
+    /// tick doesn't advance, so nothing moves, reloads, burns down, or comes due, and only choices and the helm get
+    /// through. A player who leaves takes their offers with them.
+    /// </summary>
+    public bool IsPaused => !IsRunOver && _players.Values.Any(p => p.CardOffers.Count > 0 || p.NeedsStartingWeapon);
+
     public void Step()
     {
-        const float dt = SimConstants.TickDelta;
-
-        foreach (var islandId in _plunderCooldowns.Keys.ToList())
+        if (IsPaused)
         {
-            if (--_plunderCooldowns[islandId] <= 0)
-                _plunderCooldowns.Remove(islandId);
+            StepPaused();
+            return;
         }
+
+        const float dt = SimConstants.TickDelta;
 
         foreach (var ship in _ships)
         {
@@ -303,14 +415,27 @@ public sealed class World
         foreach (var ship in _ships)
             ship.Behavior?.Update(this, ship);
 
-        foreach (var ship in _ships)
-            ShipMovement.Step(ship, dt, Wind);
-
-        ShipMovement.ResolveCollisions(_ships);
+        FireWarnedShots();
+        FireEchoes();
 
         foreach (var ship in _ships)
         {
-            if (IslandCollision.Resolve(ship, _islands))
+            if (!ship.IsFort)
+                ShipMovement.Step(ship, dt, Wind);
+        }
+
+        _contacts.Clear();
+        ShipMovement.ResolveCollisions(_ships, _contacts);
+        foreach (var (a, b) in _contacts)
+        {
+            Ram(a, b);
+            Ram(b, a);
+        }
+
+        foreach (var ship in _ships)
+        {
+            // Forts are built on land.
+            if (!ship.IsFort && IslandCollision.Resolve(ship, _islands))
                 Emit(new ShipGrounded(Tick, ship.Id));
         }
 
@@ -321,6 +446,8 @@ public sealed class World
 
         StepProjectiles(dt);
         StepStrikes();
+        StepFires(dt);
+        WearOff();
         Regenerate(dt);
 
         Plundering.Step(this);
@@ -334,6 +461,30 @@ public sealed class World
         Tick++;
     }
 
+    /// <summary>
+    /// A step of real time while the game is paused for cards. The tick stays put. Commands still arrive: card choices
+    /// and the helm (sail, rudder, course, anchor key, shopping) are taken, guns aren't.
+    /// </summary>
+    private void StepPaused()
+    {
+        // Hold everything exactly where it is, with nothing left to blend between.
+        foreach (var ship in _ships)
+        {
+            ship.PreviousPosition = ship.Position;
+            ship.PreviousHeading = ship.Heading;
+        }
+        foreach (var projectile in _projectiles)
+            projectile.PreviousPosition = projectile.Position;
+
+        while (_pendingCommands.TryDequeue(out var command))
+        {
+            if (command is CastAbilityCommand)
+                Emit(new CommandRejected(Tick, command.PlayerId, command, RejectionReason.Paused));
+            else
+                Apply(command);
+        }
+    }
+
     /// <summary>Notes who just hit <paramref name="victim"/>: the last hitter takes the kill, and every player shares in it.</summary>
     private void RecordHit(Ship victim, int attackerShipId)
     {
@@ -345,6 +496,15 @@ public sealed class World
 
     private void ResolveSinkings()
     {
+        // Second Wind: a killing blow leaves the ship afloat instead, while it's ready.
+        foreach (var ship in _ships)
+        {
+            if (!ship.IsSunk || ship.PerkValue(Perk.SecondWindHeal) is not (> 0f and var heal) || Tick < ship.SecondWindReadyTick)
+                continue;
+            ship.Health = heal * ship.Stats.MaxHealth;
+            ship.SecondWindReadyTick = Tick + (long)(ship.PerkValue(Perk.SecondWindCooldown) * SimConstants.TickRate);
+        }
+
         foreach (var victim in _ships)
         {
             if (!victim.IsSunk || victim.LastHitByShipId is not { } killerId)
@@ -366,17 +526,12 @@ public sealed class World
                 Respawning.OnPlayerSunk(this, victim, GetOrAddPlayer(playerId));
         }
 
-        // The flagship going down wins the run, even if the crew went down with it.
-        var flagshipSunk = _ships.Any(s => s.IsSunk && s.IsBoss);
-
         foreach (var ship in _ships)
         {
             if (ship.IsSunk)
                 _lastSightCell.Remove(ship.Id);
         }
         _ships.RemoveAll(s => s.IsSunk);
-        if (flagshipSunk)
-            EndRun(victory: true);
     }
 
     /// <summary>
@@ -420,6 +575,92 @@ public sealed class World
         }
     }
 
+    /// <summary>A ship with a ram ran into <paramref name="target"/>: damage, at most once a second.</summary>
+    private void Ram(Ship rammer, Ship target)
+    {
+        if (rammer.PerkValue(Perk.RamDamage) is not (> 0f and var damage) || Tick < rammer.RamReadyTick
+            || rammer.IsSunk || !CanDamage(rammer.Id, rammer.Team, target))
+            return;
+        DealDamage(target, damage, rammer.Id);
+        rammer.RamReadyTick = Tick + RamCooldownTicks;
+        Emit(new ShipRammed(Tick, rammer.Id, target.Id));
+    }
+
+    /// <summary>Queues a weapon's echo, if the ship carries Echo: it fires again shortly, at a share of its damage.</summary>
+    private void ScheduleEcho(Ship ship, AbilitySlot slot, Vector2 target)
+    {
+        if (ship.PerkValue(Perk.Echo) is > 0f and var scale)
+            _echoes.Add(new PendingEcho(ship.Id, slot, target, Tick + EchoTicks, scale));
+    }
+
+    /// <summary>Fires the echoes that are due, from wherever their ships are now; a sunk ship's are lost.</summary>
+    private void FireEchoes()
+    {
+        if (_echoes.Count == 0)
+            return;
+        foreach (var echo in _echoes.Where(e => e.DueTick <= Tick).ToList())
+        {
+            if (FindShip(echo.ShipId) is not { IsSunk: false } ship || ship.GetAbility(echo.Slot) is not { } ability)
+                continue;
+            ship.CastDamageScale = echo.Scale;
+            ship.IsEchoing = true;
+            ability.Definition.Cast(this, ship, echo.Target);
+            ship.CastDamageScale = 1f;
+            ship.IsEchoing = false;
+        }
+        _echoes.RemoveAll(e => e.DueTick <= Tick);
+    }
+
+    /// <summary>Burns every ship in a fire for this tick, and puts out the fires that are done.</summary>
+    private void StepFires(float dt)
+    {
+        if (_fires.Count == 0)
+            return;
+        Span<Vector2> hull = stackalloc Vector2[HullShape.PointCount];
+        foreach (var fire in _fires)
+        {
+            foreach (var ship in _ships)
+            {
+                if (ship.IsSunk || !CanDamage(fire.OwnerShipId, fire.Team, ship))
+                    continue;
+                HullShape.GetWorldOutline(ship.Position, ship.Heading, ship.Stats, hull);
+                if (Geometry.DistanceToConvex(hull, fire.Position) <= fire.Radius)
+                    DealDamage(ship, fire.Dps * dt, fire.OwnerShipId);
+            }
+        }
+        _fires.RemoveAll(f => f.EndTick <= Tick);
+    }
+
+    /// <summary>Marks and slows run out.</summary>
+    private void WearOff()
+    {
+        foreach (var ship in _ships)
+        {
+            ship.IsMarked = ship.MarkedUntilTick >= Tick;
+            if (ship.SlowedUntilTick >= 0 && Tick >= ship.SlowedUntilTick)
+            {
+                ship.RemoveModifiers(SlowSource);
+                ship.SlowedUntilTick = -1;
+            }
+        }
+    }
+
+    /// <summary>Fires every laid shot that's due, from wherever its ship is now; a sunk ship's shots are lost.</summary>
+    private void FireWarnedShots()
+    {
+        if (_warnings.Count == 0)
+            return;
+        foreach (var warning in _warnings.ToList())
+        {
+            if (warning.FireTick > Tick)
+                continue;
+            if (FindShip(warning.ShipId) is { IsSunk: false } ship && ship.GetAbility(warning.Slot) is { } ability
+                && ability.Definition.CastWarned(this, ship, warning))
+                Emit(new AbilityCast(Tick, ship.Id, warning.Slot, ability.DurationTicks(warning.Channel), warning.Channel));
+        }
+        _warnings.RemoveAll(w => w.FireTick <= Tick);
+    }
+
     /// <summary>Bursts every shell that's due: hurts each hostile hull within its blast radius, and scatters any bomblets.</summary>
     private void StepStrikes()
     {
@@ -436,10 +677,20 @@ public sealed class World
                 HullShape.GetWorldOutline(ship.Position, ship.Heading, ship.Stats, hull);
                 if (Geometry.DistanceToConvex(hull, strike.Target) > strike.Radius)
                     continue;
-                ship.Health = MathF.Max(0f, ship.Health - strike.Damage);
-                RecordHit(ship, strike.OwnerShipId);
+                DealDamage(ship, strike.Damage, strike.OwnerShipId);
             }
             Emit(new AreaStrikeImpact(Tick, strike.Id, strike.Target, strike.Radius));
+
+            if (strike.Fire is { } burn)
+            {
+                var fire = new FireZone
+                {
+                    Id = _nextEntityId++, OwnerShipId = strike.OwnerShipId, Team = strike.Team, Position = strike.Target,
+                    Radius = strike.Radius, Dps = burn.Dps, StartTick = Tick, EndTick = Tick + burn.Ticks,
+                };
+                _fires.Add(fire);
+                Emit(new FireStarted(Tick, fire.Id, fire.OwnerShipId, fire.Team, fire.Position, fire.Radius, fire.Dps, fire.EndTick));
+            }
 
             if (strike.Cluster is { Count: > 0 } cluster)
             {
@@ -459,31 +710,39 @@ public sealed class World
 
     private void StepProjectiles(float dt)
     {
+        List<(Projectile Shot, Ship Struck)>? bounces = null;
+        // Every ship has moved for this tick: remember where, for shots that look back (see Projectile.RewindTicks).
+        foreach (var ship in _ships)
+            ship.RecordPose(Tick + 1);
+
         foreach (var projectile in _projectiles)
         {
             var from = projectile.Position;
             projectile.Position += projectile.Velocity * dt;
             projectile.RemainingTicks--;
 
-            if (LineHitsLand(from, projectile.Position, projectile.Radius))
-            {
-                projectile.RemainingTicks = 0;
-                Emit(new ProjectileImpact(Tick, projectile.Id, null));
-                continue;
-            }
+            // A shot that reaches land stops there, though it can still strike a fort standing on the shore, and the
+            // shore round a fort doesn't stop it: it flies on over the beach to the walls.
+            var hitsLand = !projectile.Effects.IgnoresLand
+                           && LineHitsLand(from, projectile.Position, projectile.Radius, projectile.IgnoredIslandId, clearForts: true);
 
             foreach (var ship in _ships)
             {
-                if (ship.IsSunk || projectile.HasHit(ship.Id) || !CanDamage(projectile.OwnerShipId, projectile.Team, ship))
+                if ((hitsLand && !ship.IsFort) || ship.IsSunk || projectile.HasHit(ship.Id)
+                    || !CanDamage(projectile.OwnerShipId, projectile.Team, ship))
                     continue;
-                if (!HullShape.SegmentHits(ship, from, projectile.Position, projectile.Radius))
+                var (hullAt, hullHeading) = projectile.RewindTicks > 0
+                    ? ship.PoseAt(Tick + 1 - projectile.RewindTicks)
+                    : (ship.Position, ship.Heading);
+                if (!HullShape.SegmentHits(ship, hullAt, hullHeading, from, projectile.Position, projectile.Radius))
                     continue;
 
                 var effects = projectile.Effects;
                 var distance = Vector2.Distance(projectile.Origin, projectile.Position);
-                ship.Health = MathF.Max(0f, ship.Health - projectile.Damage * effects.DamageMultiplier(distance));
-                RecordHit(ship, projectile.OwnerShipId);
+                DealDamage(ship, projectile.Damage * effects.DamageMultiplier(distance), projectile.OwnerShipId);
                 projectile.RecordHit(ship.Id);
+                if (effects.SlowOnHit > 0f)
+                    Slow(ship, effects.SlowOnHit);
 
                 if (effects.LongRangeRefund > 0f && effects.IsLongRange(distance) && effects.AbilityId is { } abilityId)
                     FindShip(projectile.OwnerShipId)?.FindAbility(abilityId)?.Refund(effects.LongRangeRefund);
@@ -496,21 +755,85 @@ public sealed class World
                     continue;
                 }
                 projectile.RemainingTicks = 0;
+                if (effects.Ricochets > 0)
+                    (bounces ??= new()).Add((projectile, ship));
                 break;
+            }
+
+            if (hitsLand && projectile.RemainingTicks > 0)
+            {
+                projectile.RemainingTicks = 0;
+                Emit(new ProjectileImpact(Tick, projectile.Id, null));
             }
         }
 
         _projectiles.RemoveAll(p => p.RemainingTicks <= 0);
+        foreach (var (shot, struck) in bounces ?? Enumerable.Empty<(Projectile, Ship)>())
+            Ricochet(shot, struck);
     }
 
-    /// <summary>Whether a ball of <paramref name="radius"/> travelling from <paramref name="from"/> to <paramref name="to"/> would strike land.</summary>
-    public bool LineHitsLand(Vector2 from, Vector2 to, float radius)
+    /// <summary>A ricocheting shot bounces from <paramref name="struck"/> on toward the nearest other enemy in reach, if any.</summary>
+    private void Ricochet(Projectile shot, Ship struck)
+    {
+        if (FindShip(shot.OwnerShipId) is not { } owner)
+            return;
+        Ship? next = null;
+        var nearest = RicochetRange * RicochetRange;
+        foreach (var ship in _ships)
+        {
+            if (ship == struck || ship.IsSunk || !CanDamage(shot.OwnerShipId, shot.Team, ship))
+                continue;
+            var d = Vector2.DistanceSquared(ship.Position, shot.Position);
+            if (d <= nearest)
+            {
+                next = ship;
+                nearest = d;
+            }
+        }
+        if (next is null)
+            return;
+        var speed = shot.Velocity.Length();
+        var direction = Vector2.Normalize(next.Position - shot.Position);
+        var lifetime = (int)MathF.Ceiling((RicochetRange + 2f) / MathF.Max(speed, 1f) * SimConstants.TickRate);
+        var bounce = SpawnProjectile(owner, shot.Position, direction * speed, shot.Damage, lifetime, shot.Radius,
+            shot.Effects with { Ricochets = shot.Effects.Ricochets - 1 });
+        bounce.RecordHit(struck.Id);
+    }
+
+    /// <summary>
+    /// Whether a ball of <paramref name="radius"/> travelling from <paramref name="from"/> to <paramref name="to"/>
+    /// would strike land, other than <paramref name="ignoredIslandId"/> (a fort firing over its own island). With
+    /// <paramref name="clearForts"/>, land within <see cref="FortClearance"/> of a fort standing on it doesn't count.
+    /// </summary>
+    public bool LineHitsLand(Vector2 from, Vector2 to, float radius, int? ignoredIslandId = null, bool clearForts = false)
     {
         foreach (var island in _islands)
         {
+            if (island.Id == ignoredIslandId)
+                continue;
             if (Geometry.DistanceToSegment(island.Center, from, to) > island.BoundingRadius + radius)
                 continue;
-            if (Geometry.SegmentTouchesConvex(island.Outline, from, to, radius))
+            if (!Geometry.SegmentTouchesConvex(island.Outline, from, to, radius))
+                continue;
+            if (clearForts && IsHeld(island) && NearStandingFort(island, from, to))
+                continue;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// How near a fort the shore stops blocking shots. Forts stand on curving coasts, and a shot aimed straight at one
+    /// from an angle would otherwise clip the beach beside it, short of walls the player can plainly see.
+    /// </summary>
+    public const float FortClearance = 3f;
+
+    private bool NearStandingFort(Island island, Vector2 from, Vector2 to)
+    {
+        foreach (var ship in _ships)
+        {
+            if (ship.FortIslandId == island.Id && !ship.IsSunk
+                && Geometry.DistanceToSegment(ship.Position, from, to) <= FortClearance)
                 return true;
         }
         return false;
@@ -526,6 +849,14 @@ public sealed class World
     /// <summary>Applies a command, or explains why not. Null means it went through.</summary>
     private RejectionReason? TryApply(Command command)
     {
+        // Cards belong to the player, not the ship: they can be chosen (or rerolled) while waiting to respawn.
+        if (command is ChooseCardCommand choose)
+            return CardRewards.TryChoose(this, command.PlayerId, choose.CardId);
+        if (command is RerollCardsCommand)
+            return CardRewards.TryReroll(this, command.PlayerId);
+        if (command is ChooseStartingWeaponCommand weapon)
+            return Runs.TryChooseStartingWeapon(this, command.PlayerId, weapon.AbilityId);
+
         // Commands only ever act on the issuing player's own ship; this is also the server-side ownership check.
         var ship = GetPlayerShip(command.PlayerId);
         if (ship is null)
@@ -579,6 +910,7 @@ public sealed class World
                 }
                 return null;
             case CastAbilityCommand cast:
+                ship.ShotRewindTicks = cast.ViewTick is { } seen ? (int)Math.Clamp(Tick - seen, 0, MaxShotRewindTicks) : 0;
                 return CastAbility(ship, cast.Slot, cast.Target);
             default:
                 return null;
@@ -603,11 +935,26 @@ public sealed class World
         if (!ability.IsChannelReady(channel))
             return RejectionReason.OnCooldown;
 
+        var windup = ability.Definition.WindupTicksFor(ship);
+        if (windup > 0)
+        {
+            // Lay the gun now and fire later: the reload starts now, so it can't be laid twice.
+            var warning = new ShotWarning
+            {
+                ShipId = ship.Id, Slot = slot, Channel = channel, Target = target, StartTick = Tick, FireTick = Tick + windup,
+            };
+            _warnings.Add(warning);
+            ability.StartCooldown(channel, ability.Definition.CooldownTicksFor(ship), ship.Stats.CooldownSpeed);
+            Emit(new ShotWarned(Tick, ship.Id, slot, target, warning.FireTick, channel));
+            return null; // AbilityCast goes out when it fires
+        }
+
         if (!ability.Definition.Cast(this, ship, target))
             return RejectionReason.CastFailed;
 
         ability.StartCooldown(channel, ability.Definition.CooldownTicksFor(ship), ship.Stats.CooldownSpeed);
         Emit(new AbilityCast(Tick, ship.Id, slot, ability.DurationTicks(channel), channel));
+        ScheduleEcho(ship, slot, target);
         return null;
     }
 

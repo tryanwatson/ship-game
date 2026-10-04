@@ -89,7 +89,9 @@ public sealed class Ship
     {
         StatsVersion++;
         var oldMaxHealth = Stats.MaxHealth;
-        Stats = _modifiers.Apply(BaseStats);
+        Stats = _cardStats.Count == 0
+            ? _modifiers.Apply(BaseStats)
+            : StatModifiers.Apply(BaseStats, _modifiers.All.Concat(_cardStats).ToList());
 
         // Raising max health adds the same to current health, so an upgrade never shows as damage;
         // lowering it only clamps.
@@ -115,7 +117,7 @@ public sealed class Ship
 
     private int _level;
 
-    /// <summary>The flagship waiting at the far north: sinking it wins the run.</summary>
+    /// <summary>A boss: a pirate flagship sent after the crew as fortresses fall (see <c>RunDirector</c>).</summary>
     public bool IsBoss
     {
         get => _isBoss;
@@ -129,6 +131,26 @@ public sealed class Ship
     }
 
     private bool _isBoss;
+
+    /// <summary>
+    /// For a fort (a gun on a fortress's shore, see <c>Fortresses</c>): the island it stands on. Forts never move, aren't
+    /// pushed about, and fire over their own island; null for ships.
+    /// </summary>
+    public int? FortIslandId
+    {
+        get => _fortIslandId;
+        set
+        {
+            if (_fortIslandId == value)
+                return;
+            _fortIslandId = value;
+            StatsVersion++;
+        }
+    }
+
+    private int? _fortIslandId;
+
+    public bool IsFort => _fortIslandId is not null;
 
     /// <summary>Whether the hull was against a shore last tick. Grounding only hurts on first contact.</summary>
     public bool IsAground { get; set; }
@@ -281,7 +303,7 @@ public sealed class Ship
     /// <summary>Skills bought for this ship's weapons, in the order they were bought. Change through <see cref="AddSkill"/>.</summary>
     public IReadOnlyList<SkillDefinition> Skills => _skills;
 
-    /// <summary>Every ability modifier the skills grant, tagged with the skill's source.</summary>
+    /// <summary>Every ability modifier the skills and cards grant, tagged with their sources.</summary>
     public IReadOnlyList<AbilityModifier> AbilityModifiers => _abilityModifiers;
 
     public bool HasSkill(string skillId) => _skills.Any(s => s.Id == skillId);
@@ -299,35 +321,144 @@ public sealed class Ship
     public void ReplaceSkills(IEnumerable<SkillDefinition> skills)
     {
         _skills.Clear();
-        _abilityModifiers.Clear();
-        foreach (var skill in skills)
-            AddSkill(skill);
+        _skills.AddRange(skills.DistinctBy(s => s.Id));
+        RebuildAbilityModifiers();
         StatsVersion++;
     }
 
+    private readonly List<CardPick> _cards = new();
+    private readonly List<StatModifier> _cardStats = new();
+    private readonly Dictionary<Perk, float> _perks = new();
+
     /// <summary>
-    /// One of an ability's numbers on this ship: <paramref name="baseValue"/> with the ship's skills for that ability
-    /// applied, (base + flat) * (1 + percent) like <see cref="StatModifiers"/>.
+    /// Cards held, in the order they were chosen: silver and gold may appear more than once (they stack); a prismatic
+    /// appears once, at the level it's been improved to (see <see cref="CardStacking"/>).
+    /// </summary>
+    public IReadOnlyList<CardPick> Cards => _cards;
+
+    /// <summary>Plays a card on this ship: its stats, weapon changes and perks apply from now on, on top of upgrades and skills.</summary>
+    public void AddCard(CardPick card)
+    {
+        CardStacking.Add(_cards, card);
+        OnCardsChanged();
+    }
+
+    /// <summary>Replaces every card at once: for a client mirroring the server's ship, and a ship taking on its player's hand.</summary>
+    public void ReplaceCards(IEnumerable<CardPick> cards)
+    {
+        _cards.Clear();
+        _cards.AddRange(cards);
+        OnCardsChanged();
+    }
+
+    /// <summary>A perk's total from every card held; 0 without any.</summary>
+    public float PerkValue(Perk perk) => _perks.GetValueOrDefault(perk);
+
+    private void OnCardsChanged()
+    {
+        _cardStats.Clear();
+        _perks.Clear();
+        foreach (var card in _cards)
+        {
+            var definition = card.Definition;
+            _cardStats.AddRange(definition.StatModifiersFor(card));
+            foreach (var (perk, value) in definition.PerksFor(card))
+                _perks[perk] = _perks.GetValueOrDefault(perk) + value;
+        }
+        RebuildAbilityModifiers();
+        RecalculateStats();
+    }
+
+    private void RebuildAbilityModifiers()
+    {
+        _abilityModifiers.Clear();
+        foreach (var skill in _skills)
+            _abilityModifiers.AddRange(skill.Modifiers);
+        foreach (var card in _cards)
+            _abilityModifiers.AddRange(card.Definition.AbilityModifiersFor(card));
+    }
+
+    // ---- What cards do in a fight. Server-side, except Marked, which snapshots carry. ----------------------------
+
+    /// <summary>Scales the damage of what the ship fires right now: below 1 while a card's echo fires.</summary>
+    public float CastDamageScale { get; set; } = 1f;
+
+    /// <summary>What's firing right now is an echo (it changes no reloads).</summary>
+    public bool IsEchoing { get; set; }
+
+    /// <summary>Until when it takes extra damage from everyone (Hunter's Mark), and how much.</summary>
+    public long MarkedUntilTick { get; set; } = -1;
+
+    public float MarkBonus { get; set; }
+
+    /// <summary>Marked as a target right now: shown over its health bar.</summary>
+    public bool IsMarked { get; set; }
+
+    /// <summary>Until when it's slowed (Chain Shot): a speed modifier that comes off then.</summary>
+    public long SlowedUntilTick { get; set; } = -1;
+
+    /// <summary>When Second Wind can next save it.</summary>
+    public long SecondWindReadyTick { get; set; }
+
+    /// <summary>When its ram can next do damage (it hits once per contact, not every tick).</summary>
+    public long RamReadyTick { get; set; }
+
+    /// <summary>
+    /// One of an ability's numbers on this ship: <paramref name="baseValue"/> with the ship's skills and cards for that
+    /// ability applied, (base + flat) * (1 + percent) * multipliers like <see cref="StatModifiers"/>.
     /// </summary>
     public float AbilityValue(string abilityId, AbilityStat stat, float baseValue)
     {
         var flat = 0f;
         var percent = 0f;
+        var multiplier = 1f;
         foreach (var modifier in _abilityModifiers)
         {
             if (modifier.Stat != stat || modifier.AbilityId != abilityId)
                 continue;
-            if (modifier.Kind == ModifierKind.Flat)
-                flat += modifier.Value;
-            else
-                percent += modifier.Value;
+            switch (modifier.Kind)
+            {
+                case ModifierKind.Flat:
+                    flat += modifier.Value;
+                    break;
+                case ModifierKind.Percent:
+                    percent += modifier.Value;
+                    break;
+                default:
+                    multiplier *= modifier.Value;
+                    break;
+            }
         }
-        return MathF.Max(0f, (baseValue + flat) * (1f + percent));
+        return MathF.Max(0f, (baseValue + flat) * (1f + percent) * multiplier);
     }
 
     // State at the start of the most recent tick, used to interpolate between ticks when rendering.
     public Vector2 PreviousPosition { get; set; }
     public float PreviousHeading { get; set; }
+
+    /// <summary>
+    /// How far behind the server this ship's player saw everyone else when they last fired: their shots strike
+    /// ships where they were that many ticks ago (see <see cref="World.MaxShotRewindTicks"/>). 0 for pirates.
+    /// </summary>
+    public int ShotRewindTicks { get; set; }
+
+    // Where the ship was at each of the last few ticks, for shots fired by a lagging player. Stamped tick + 1, so 0 is empty.
+    private readonly (long Stamp, Vector2 Position, float Heading)[] _poseHistory = new (long, Vector2, float)[World.MaxShotRewindTicks + 1];
+
+    /// <summary>Notes the ship's pose as of <paramref name="tick"/>.</summary>
+    public void RecordPose(long tick) => _poseHistory[tick % _poseHistory.Length] = (tick + 1, Position, Heading);
+
+    /// <summary>The ship's pose as of <paramref name="tick"/>, if that's recent enough to remember; otherwise where it is now.</summary>
+    public (Vector2 Position, float Heading) PoseAt(long tick)
+    {
+        if (tick >= 0)
+        {
+            var pose = _poseHistory[tick % _poseHistory.Length];
+            if (pose.Stamp == tick + 1)
+                return (pose.Position, pose.Heading);
+        }
+        return (Position, Heading);
+    }
 
     public Vector2 Forward => new(MathF.Cos(Heading), MathF.Sin(Heading));
 

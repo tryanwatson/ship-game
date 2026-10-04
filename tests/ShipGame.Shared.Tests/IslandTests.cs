@@ -36,24 +36,6 @@ public class IslandTests
     }
 
     [Fact]
-    public void MapIslands_AreBetween30And100Tiles_AndLeaveTheStartAndFlagshipClear()
-    {
-        var islands = Archipelago.CreateIslands();
-
-        Assert.NotEmpty(islands);
-        Assert.All(islands, island => Assert.InRange(island.Area, 30f, 100f));
-        Assert.All(islands, island => Assert.True(island.DistanceTo(Archipelago.Start) > 15f));
-        Assert.All(islands, island => Assert.True(island.DistanceTo(Archipelago.BossPosition) > 8f));
-        Assert.All(islands, island =>
-        {
-            Assert.InRange(island.Center.X - island.BoundingRadius, 0f, Archipelago.Size.X);
-            Assert.InRange(island.Center.X + island.BoundingRadius, 0f, Archipelago.Size.X);
-            Assert.InRange(island.Center.Y - island.BoundingRadius, 0f, Archipelago.Size.Y);
-            Assert.InRange(island.Center.Y + island.BoundingRadius, 0f, Archipelago.Size.Y);
-        });
-    }
-
-    [Fact]
     public void ShipsCannotSailThroughIslands()
     {
         var island = Block();
@@ -154,35 +136,6 @@ public class IslandTests
 
         Assert.Equal(target.Stats.MaxHealth, target.Health);
         Assert.Empty(world.Projectiles);
-    }
-
-    [Fact]
-    public void BountyHunters_NeverSpawnOnOrAgainstLand()
-    {
-        foreach (var sea in Archipelago.Seas.SkipLast(1)) // the storm never reaches the last sea
-        {
-            for (var seed = 0; seed < 5; seed++)
-            {
-                var world = Runs.CreateMap();
-                var director = new RunDirector(seed, world.WorldSize);
-                world.Director = director;
-                var at = new Vector2(48f, (sea.North + sea.South) / 2f);
-                var player = world.SpawnShip(at, 0f, ShipStats.Sloop, PlayerId);
-                player.AddModifier(new Stats.StatModifier(Stats.StatId.MaxHealth, Stats.ModifierKind.Flat, 1_000_000f, "test"));
-                player.IsAnchored = true;
-                director.Restore(new RunStatus(StormY: at.Y - 40f, TicksUntilStorm: 0, Hunters: 0));
-
-                // Checked where each one appears, before it sails anywhere.
-                var seen = new HashSet<int>();
-                for (var i = 0; i < RunDirector.FirstHunterTicks + RunDirector.HunterIntervalTicks * 2; i++)
-                {
-                    world.Step();
-                    foreach (var hunter in world.Ships.Where(RunDirector.IsHunter).Where(h => seen.Add(h.Id)))
-                        Assert.True(world.DistanceToLand(hunter.Position) >= 3.9f, $"{sea.Name} seed {seed}: spawned {world.DistanceToLand(hunter.Position)} from land");
-                }
-                Assert.True(seen.Count == 3, $"{sea.Name} seed {seed}: {seen.Count} hunters");
-            }
-        }
     }
 
     [Fact]

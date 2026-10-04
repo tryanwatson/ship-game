@@ -88,6 +88,9 @@ public sealed class MainMenu
 
     public bool IsOpen { get; private set; }
 
+    /// <summary>Open on its first page, where nothing is being typed (so other keys are free).</summary>
+    public bool OnMainPage => IsOpen && _page == Page.Main;
+
     /// <summary>The server address being typed on the join page.</summary>
     public string Address { get; set; } = "";
 

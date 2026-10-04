@@ -17,14 +17,17 @@ public enum PurchaseResult
 /// <summary>Shipyard rules: who can shop, what it costs, and the purchase itself.</summary>
 public static class Shipyards
 {
-    /// <summary>The shipyard island a ship riding at anchor here can trade with, if any (same range as plundering).</summary>
+    /// <summary>
+    /// The port a ship riding at anchor here can trade with, if any (same range as plundering): a shipyard, or a taken
+    /// fortress (see <see cref="World.IsPort"/>).
+    /// </summary>
     public static Island? ShipyardFrom(World world, Vector2 position)
     {
         Island? nearest = null;
         var nearestDistance = Plundering.Range;
         foreach (var island in world.Islands)
         {
-            if (!island.HasShipyard)
+            if (!world.IsPort(island))
                 continue;
             var distance = island.DistanceTo(position);
             if (distance <= nearestDistance)
@@ -42,10 +45,10 @@ public static class Shipyards
 
     public static int Level(Ship ship, UpgradeDefinition upgrade) => ship.ModifierCount(upgrade.Source);
 
-    /// <summary>Levels of every upgrade the southernmost shipyards stock; each level of the waters adds one more.</summary>
+    /// <summary>Levels of every upgrade the innermost shipyards stock, less one; each level of the waters adds one more.</summary>
     public const int BaseStockedLevels = 2;
 
-    /// <summary>How many levels of <paramref name="upgrade"/> a shipyard on <paramref name="port"/> sells: more the further north.</summary>
+    /// <summary>How many levels of <paramref name="upgrade"/> a shipyard on <paramref name="port"/> sells: more the further out.</summary>
     public static int StockedLevels(Island port, UpgradeDefinition upgrade) =>
         Math.Min(upgrade.MaxLevel, BaseStockedLevels + port.Level);
 
@@ -172,8 +175,8 @@ public static class Shipyards
         var shipyard = DockedAt(world, ship);
         if (shipyard is null)
             return RejectionReason.NotAtShipyard;
-        if (world.PlunderCooldownTicks(shipyard) > 0)
-            return RejectionReason.IslandOnCooldown;
+        if (world.IsPlundered(shipyard))
+            return RejectionReason.IslandAlreadyPlundered;
         ship.PlunderConsentIslandId = shipyard.Id;
         return null;
     }

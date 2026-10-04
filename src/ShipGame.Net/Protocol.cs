@@ -8,7 +8,7 @@ public static class Protocol
     public const string Key = "ShipGame";
 
     /// <summary>Bump whenever the wire format changes.</summary>
-    public const int Version = 16;
+    public const int Version = 23;
 
     public const int DefaultPort = 7777;
 
@@ -40,6 +40,6 @@ public enum MessageType : byte
     // Client -> server
     Command = 100,
     Ready = 101,
-    ChooseStartingWeapon = 102,
+    SetName = 102,
     SetStartingGold = 103,
 }

@@ -4,8 +4,9 @@ using ShipGame.Shared.Stats;
 namespace ShipGame.Shared.Progression;
 
 /// <summary>
-/// A pirate's level: how far north it sails, and so how dangerous it is and how much it's worth. Each level past the
-/// first adds to its hull, guns, reload, and speed, and to the gold for sinking it.
+/// A pirate's level: how far from the middle of the map it sails (or the level of the fortress it serves), and so how
+/// dangerous it is and how much it's worth. Each level past the first adds to its hull, guns, reload, and speed, and
+/// to the gold for sinking it.
 /// </summary>
 public static class PirateLevels
 {

@@ -8,9 +8,10 @@ using NVector2 = System.Numerics.Vector2;
 namespace ShipGame.Client.Rendering;
 
 /// <summary>
-/// Screen-space markers pinned to the map: a countdown over each plundered island until it's ripe again, a coin
-/// over ripe islands near the player, and a progress bar over the player's ship while plundering or weighing anchor.
-/// Trade shows here too: a crate over each island our cargo is bound for, and what each floating crate holds.
+/// Screen-space markers pinned to the map: a coin over unplundered islands near the player, and a progress bar over
+/// the player's ship while plundering or weighing anchor.
+/// Trade shows here too: a crate over each island our cargo is bound for, and what each floating crate holds. Each
+/// fortress is named over its keep, with its level while it's held.
 /// </summary>
 public sealed class IslandOverlays
 {
@@ -23,12 +24,13 @@ public sealed class IslandOverlays
 
     private static readonly Color Panel = new Color(12, 16, 24) * 0.8f;
     private static readonly Color TimerDigits = new(235, 235, 240);
-    private static readonly Color Hourglass = new(200, 170, 120);
     private static readonly Color Coin = new(235, 190, 60);
     private static readonly Color CoinRim = new(150, 105, 25);
     private static readonly Color ProgressBack = new Color(0, 0, 0) * 0.6f;
     private static readonly Color ProgressFill = new(235, 190, 60);
     private static readonly Color AnchorFill = new(170, 220, 255);
+    private static readonly Color FortressHeld = new(240, 110, 90);
+    private static readonly Color FortressTaken = new(140, 230, 150);
 
     private readonly PrimitiveBatch _batch;
 
@@ -50,10 +52,16 @@ public sealed class IslandOverlays
             if (!bounds.Contains(screen.ToPoint()))
                 continue;
 
-            var cooldown = world.PlunderCooldownTicks(island);
-            if (cooldown > 0)
-                DrawCountdown(screen, (int)MathF.Ceiling(cooldown / (float)SimConstants.TickRate));
-            else if (localShip is not null && island.DistanceTo(localShip.Position) <= CoinMarkerRange)
+            if (island.IsFortress)
+            {
+                var held = world.IsHeld(island);
+                var label = held ? $"{island.Name}  LV {island.Level}  {CardRewards.RewardLabel(island.Level)}" : $"{island.Name}  PORT";
+                DrawLabel(label, screen - new Vector2(0f, 30f), held ? FortressHeld : FortressTaken);
+                if (held)
+                    continue; // no plundering it yet
+            }
+
+            if (!world.IsPlundered(island) && localShip is not null && island.DistanceTo(localShip.Position) <= CoinMarkerRange)
                 DrawCoin(screen, 8f);
         }
 
@@ -106,29 +114,6 @@ public sealed class IslandOverlays
         _batch.Flush();
     }
 
-    /// <summary>Hourglass + seconds remaining, centered on <paramref name="center"/>.</summary>
-    private void DrawCountdown(Vector2 center, int seconds)
-    {
-        var text = seconds.ToString();
-        var textWidth = SegmentDigits.Measure(text, DigitSize, DigitSpacing);
-        const float iconWidth = 10f;
-        const float gap = 6f;
-        var width = iconWidth + gap + textWidth;
-        var left = center.X - width / 2f;
-        var top = center.Y - DigitSize.Y / 2f;
-
-        FillRect(new Vector2(left - 6f, top - 5f), new Vector2(width + 12f, DigitSize.Y + 10f), Panel);
-
-        // Hourglass: two triangles meeting at the waist.
-        var waist = new Vector2(left + iconWidth / 2f, center.Y);
-        Span<Vector2> upper = stackalloc Vector2[] { new(left, top), new(left + iconWidth, top), waist };
-        Span<Vector2> lower = stackalloc Vector2[] { waist, new(left + iconWidth, top + DigitSize.Y), new(left, top + DigitSize.Y) };
-        _batch.FillConvex(upper, Hourglass);
-        _batch.FillConvex(lower, Hourglass);
-
-        SegmentDigits.Draw(_batch, text, new Vector2(left + iconWidth + gap, top), DigitSize, DigitSpacing, DigitThickness, TimerDigits);
-    }
-
     /// <summary>Units in a floating crate, dimmed when it won't fit in our hold.</summary>
     private void DrawCrateCount(Vector2 center, int units, bool fits)
     {
@@ -168,6 +153,16 @@ public sealed class IslandOverlays
         _batch.Line(center + new Vector2(-3, -3), center + new Vector2(3, -3), AnchorFill);
         _batch.Line(center + new Vector2(-5, 2), center + new Vector2(0, 5), AnchorFill);
         _batch.Line(center + new Vector2(0, 5), center + new Vector2(5, 2), AnchorFill);
+    }
+
+    /// <summary>Text centered on <paramref name="center"/>, on a dark panel.</summary>
+    private void DrawLabel(string text, Vector2 center, Color color)
+    {
+        const float scale = 1.5f;
+        var width = PixelFont.Measure(text, scale);
+        var height = PixelFont.Height(scale);
+        FillRect(center - new Vector2(width / 2f + 5f, height / 2f + 4f), new Vector2(width + 10f, height + 8f), Panel);
+        PixelFont.Draw(_batch, text, center - new Vector2(width / 2f, height / 2f), scale, color);
     }
 
     private void FillRect(Vector2 topLeft, Vector2 size, Color color)

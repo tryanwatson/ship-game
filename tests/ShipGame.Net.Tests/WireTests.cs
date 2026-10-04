@@ -3,9 +3,11 @@ using LiteNetLib.Utils;
 using ShipGame.Net;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Stats;
 using ShipGame.Shared.Trading;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Net.Tests;
 
@@ -28,6 +30,8 @@ public class WireTests
         new object[] { new UnlockAbilityCommand(9, "mortar") },
         new object[] { new PurchaseSkillCommand(9, "heavy-volley") },
         new object[] { new PurchaseRepairCommand(9) },
+        new object[] { new ChooseCardCommand(9, "double-battery") },
+        new object[] { new RerollCardsCommand(9) },
     };
 
     [Theory]
@@ -71,7 +75,7 @@ public class WireTests
         new object[] { new AbilityCast(10, 3, AbilitySlot.Three, 360) },
         new object[] { new ShipGrounded(10, 3) },
         new object[] { new GoldChanged(10, 2, 35, -15) },
-        new object[] { new IslandPlundered(10, 4, 2, 10, 1800) },
+        new object[] { new IslandPlundered(10, 4, 2, 10) },
         new object[] { new UpgradePurchased(10, 3, "agility", 2) },
         new object[] { new ShipHidden(10, 77) },
         new object[] { new CommandRejected(10, 2, new PurchaseUpgradeCommand(2, "speed"), RejectionReason.NotEnoughGold) },
@@ -85,6 +89,15 @@ public class WireTests
         new object[] { new CargoDropped(10, 4, new Vector2(70, 80.5f), new CargoLot(Contract, 6)) },
         new object[] { new CargoRecovered(10, 4, 5, 3) },
         new object[] { new CargoLost(10, 31) },
+        new object[] { new FortressTaken(10, 12) },
+        new object[] { new CardsOffered(10, 3, new CardOffer(OfferSource.Fortress, 8,
+            new[] { new CardPick("twin-decks", 8), new CardPick("treasure-map", 7, 0.625f), new CardPick("echo", 8), new CardPick("ram", 8) }, 1)) },
+        new object[] { new CardChosen(10, 3, new CardPick("ironclad", 4)) },
+        new object[] { new CardsRerolled(10, 3, new CardOffer(OfferSource.Boss, 6, new[] { new CardPick("railgun", 6) }), 4) },
+        new object[] { new ShipRammed(10, 3, 812) },
+        new object[] { new FireStarted(10, 99, 3, Team.Players, new Vector2(40, 41.5f), 2.5f, 17.5f, 190) },
+        new object[] { new BossSpawned(10, 812, 3, 2) },
+        new object[] { new ShotWarned(10, 812, AbilitySlot.Two, new Vector2(3.5f, -7f), 26, BroadsideVolley.StarboardChannel) },
     };
 
     private static readonly TradeContract Contract = new(31, 1, 7, Cost: 40, Payout: 100, CargoUnits: 10);
@@ -127,13 +140,23 @@ public class WireTests
     }
 
     [Fact]
-    public void Lobby_CarriesEachPlayersStartingWeapon()
+    public void Lobby_CarriesEachPlayersName()
     {
-        var players = new[] { new LobbyPlayer(1, true, "mortar"), new LobbyPlayer(2, false) };
+        var players = new[] { new LobbyPlayer(1, true, "ANNE BONNY"), new LobbyPlayer(2, false) };
         var writer = new NetDataWriter();
         writer.PutLobby(new LobbyState(false, players));
 
         Assert.Equal(players, ReaderFor(writer).GetLobby().Players);
+    }
+
+    [Fact]
+    public void RunStart_CarriesTheCrewsNames()
+    {
+        var crew = new List<(int, string)> { (1, "ANNE"), (4, "MARY READ") };
+        var writer = new NetDataWriter();
+        writer.PutRunStart(new RunStart(10, new Vector2(640, 640), Vector2.One, true, crew));
+
+        Assert.Equal(crew, ReaderFor(writer).GetRunStart().Crew);
     }
 
     [Fact]
@@ -143,7 +166,8 @@ public class WireTests
             123, 7, 2, Team.Players, ShipStats.Sloop with { WeaponRange = 1.3f, CargoCapacity = 16f, HealthRegen = 1.5f },
             new[] { "broadside", null, "long-gun", "mortar" },
             new[] { new StatModifier(StatId.MaxHealth, ModifierKind.Flat, 20, "upgrade:hull") },
-            new Vector2(96, 90), 1.25f, new[] { "heavy-volley", "point-blank" }, Level: 6, IsBoss: true);
+            new Vector2(96, 90), 1.25f, new[] { "heavy-volley", "point-blank" }, Level: 6, IsBoss: true, FortIslandId: 14,
+            Cards: new[] { new CardPick("full-sail", 2), new CardPick("full-sail", 5), new CardPick("treasure-map", 3, 0.25f) });
         var writer = new NetDataWriter();
         writer.PutShipInfo(info);
 
@@ -157,7 +181,8 @@ public class WireTests
         Assert.Equal(info.Modifiers, read.Modifiers);
         Assert.Equal((info.Position, info.Heading), (read.Position, read.Heading));
         Assert.Equal(info.SkillIds, read.SkillIds);
-        Assert.Equal((6, true), (read.Level, read.IsBoss));
+        Assert.Equal((6, true, (int?)14), (read.Level, read.IsBoss, read.FortIslandId));
+        Assert.Equal(info.Cards, read.Cards);
     }
 
     [Fact]
@@ -174,7 +199,7 @@ public class WireTests
         world.AddGold(1, 25);
         var snapshot = Snapshot.Capture(world);
         snapshot.CommandAcks.Add((1, 4_000_000_000u));
-        snapshot.Run = new ShipGame.Shared.Progression.RunStatus(StormY: 812.25f, TicksUntilStorm: 0, Hunters: 3);
+        snapshot.Run = new ShipGame.Shared.Progression.RunStatus(FortressesTaken: 5, BossesSunk: 2, BossCountdownTicks: 287, BossAfloat: true);
         snapshot.RunOver = true;
         snapshot.Victory = true;
 
@@ -194,7 +219,7 @@ public class WireTests
         Assert.Equal(-1, ships[0].Throttle); // rowing astern
         Assert.Equal(4_000_000_000u, header.AckFor(1));
         Assert.Equal(0u, header.AckFor(2));
-        Assert.Equal(snapshot.Run, header.Run); // the HUD's storm and raid forecast
+        Assert.Equal(snapshot.Run, header.Run); // the HUD's fortress and boss forecast
         Assert.True(header.RunOver && header.Victory);
     }
 
@@ -202,12 +227,12 @@ public class WireTests
     public void Snapshots_FitLiteNetLibsUnreliableLimit_AtFullSize()
     {
         // The worst case: a full server (12 players, all acked), a full wave of pirates with players' loadouts,
-        // every island on cooldown, everyone moving somewhere and plundering.
+        // every island plundered, everyone moving somewhere and plundering.
         var world = new World(new Vector2(192, 192));
         foreach (var island in ShipGame.Shared.Maps.Archipelago.CreateIslands())
         {
             world.AddIsland(island);
-            world.StartPlunderCooldown(island, 1000);
+            world.MarkPlundered(island);
         }
         for (var i = 0; i < 52; i++)
         {

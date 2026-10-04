@@ -110,7 +110,6 @@ public class WorldEventTests
 
         var plundered = Assert.Single(events.OfType<IslandPlundered>());
         Assert.Equal(7, plundered.IslandId);
-        Assert.Equal(Plundering.CooldownTicks, plundered.CooldownTicks);
         Assert.Contains(events.OfType<GoldChanged>(), e => e.Delta == Island.DefaultPlunderGold);
     }
 
@@ -149,21 +148,24 @@ public class WorldEventTests
     }
 
     [Fact]
-    public void Hunters_MeltingIntoTheStorm_AreAnnounced()
+    public void AFortressFalling_IsAnnounced_WithEveryonesCards()
     {
-        var world = new World(new Vector2(96, 900));
-        var director = new RunDirector(1, world.WorldSize);
-        world.Director = director;
-        world.SpawnShip(new Vector2(48, 100), 0f, ShipStats.Sloop, PlayerId).IsAnchored = true;
-        director.Restore(new RunStatus(StormY: 500f, TicksUntilStorm: 0, Hunters: 0));
-        var hunter = world.SpawnShip(new Vector2(48, 480), 0f, ShipStats.Sloop); // out of the storm
-        hunter.Behavior = new Ai.HunterBehavior(hunter.Position, relentless: true);
+        var world = new World(new Vector2(200, 200));
+        world.Director = new RunDirector(1);
+        var island = new Island(1, new[] { new Vector2(20, 20), new Vector2(30, 20), new Vector2(30, 30), new Vector2(20, 30) }, isFortress: true);
+        world.AddIsland(island);
+        var fort = Fortresses.SpawnFort(world, island, 0f, FortKind.Battery);
+        world.SpawnShip(new Vector2(150, 150), 0f, ShipStats.Sloop, PlayerId).IsAnchored = true;
+        world.Step();
         world.DrainEvents();
 
+        fort.Health = 0f;
         world.Step();
 
-        Assert.Equal(hunter.Id, Assert.Single(world.DrainEvents().OfType<ShipHidden>()).ShipId);
-        Assert.Null(world.FindShip(hunter.Id));
+        var events = world.DrainEvents();
+        Assert.Equal(fort.Id, Assert.Single(events.OfType<ShipSunk>()).ShipId);
+        Assert.Equal(island.Id, Assert.Single(events.OfType<FortressTaken>()).IslandId);
+        Assert.Equal(PlayerId, Assert.Single(events.OfType<CardsOffered>()).PlayerId);
     }
 
     [Theory]
@@ -214,7 +216,7 @@ public class WorldEventTests
         world.AddIsland(yard);
         world.SpawnShip(new Vector2(37, 30), 0f, ShipStats.Sloop, PlayerId).IsAnchored = true;
         world.Step();
-        world.StartPlunderCooldown(yard, 100);
+        world.MarkPlundered(yard);
         world.DrainEvents();
 
         world.Enqueue(new PurchaseUpgradeCommand(PlayerId, "speed"));      // no gold
@@ -222,7 +224,7 @@ public class WorldEventTests
         world.Enqueue(new ChoosePlunderCommand(PlayerId));                 // island resting
         var reasons = StepAndDrain(world).OfType<CommandRejected>().Select(e => e.Reason).ToList();
 
-        Assert.Equal(new[] { RejectionReason.NotEnoughGold, RejectionReason.UnknownUpgrade, RejectionReason.IslandOnCooldown }, reasons);
+        Assert.Equal(new[] { RejectionReason.NotEnoughGold, RejectionReason.UnknownUpgrade, RejectionReason.IslandAlreadyPlundered }, reasons);
     }
 
     [Fact]

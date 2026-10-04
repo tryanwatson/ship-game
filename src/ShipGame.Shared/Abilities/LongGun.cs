@@ -21,6 +21,13 @@ public sealed class LongGun : Ability
     /// <summary>Hits at least this fraction of the gun's reach from the muzzle count as long range.</summary>
     public const float LongRangeFraction = 0.6f;
 
+    /// <summary>
+    /// A pirate's long gun shows where it's laid this long before it fires (see <see cref="ShotWarning"/>), so a
+    /// player who sees the line can turn or check out of it. Players' guns fire at once.
+    /// </summary>
+    public const float PirateWindupSeconds = 0.8f;
+    public static readonly int PirateWindupTicks = (int)MathF.Round(PirateWindupSeconds * SimConstants.TickRate);
+
     public override string Id => AbilityId;
 
     public override string Name => "Long Gun";
@@ -31,12 +38,17 @@ public sealed class LongGun : Ability
 
     public override int CooldownTicks => (int)(5f * SimConstants.TickRate);
 
+    public override int WindupTicksFor(Ship caster) => WindupTicks(caster);
+
+    public static int WindupTicks(Ship ship) => ship.Team == Team.Pirates ? PirateWindupTicks : 0;
+
     public static float RangeFor(Ship ship) => Range * ship.Stats.WeaponRange * ship.AbilityValue(AbilityId, AbilityStat.Range, 1f);
 
     public static float SpeedFor(Ship ship) =>
         ProjectileSpeed * ship.Stats.ProjectileSpeed * ship.AbilityValue(AbilityId, AbilityStat.ProjectileSpeed, 1f);
 
-    public static float DamageFor(Ship ship) => Damage * ship.Stats.WeaponDamage * ship.AbilityValue(AbilityId, AbilityStat.Damage, 1f);
+    public static float DamageFor(Ship ship) =>
+        Damage * ship.Stats.WeaponDamage * ship.AbilityValue(AbilityId, AbilityStat.Damage, 1f) * ship.CastDamageScale;
 
     /// <summary>Distance from the muzzle beyond which a hit counts as long range.</summary>
     public static float LongRangeFor(Ship ship) => RangeFor(ship) * LongRangeFraction;
@@ -63,6 +75,8 @@ public sealed class LongGun : Ability
             LongRange = LongRangeFor(caster),
             LongDamageBonus = caster.AbilityValue(Id, AbilityStat.LongRangeDamage, 0f),
             LongRangeRefund = caster.AbilityValue(Id, AbilityStat.LongRangeRefund, 0f),
+            IgnoresLand = caster.AbilityValue(Id, AbilityStat.IgnoresLand, 0f) >= 0.5f,
+            Ricochets = (int)MathF.Round(caster.AbilityValue(Id, AbilityStat.Ricochets, 0f)),
         };
         world.SpawnProjectile(caster, muzzle, direction * speed, DamageFor(caster), lifetimeTicks, ShotRadius, effects);
         return true;

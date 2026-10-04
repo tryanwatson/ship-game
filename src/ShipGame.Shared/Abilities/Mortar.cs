@@ -15,7 +15,7 @@ public sealed class Mortar : Ability
     public const string AbilityId = "mortar";
 
     public const float Damage = 35f;
-    public const float Range = 30f;
+    public const float Range = 18f;
     public const float BlastRadius = 2.5f;
 
     // Flight time = MinFlightSeconds + distance / ShellSpeed: even a point-blank shot gives a moment's warning.
@@ -54,9 +54,19 @@ public sealed class Mortar : Ability
     public static float BlastRadiusFor(Ship ship) =>
         ship.AbilityValue(AbilityId, AbilityStat.BlastRadius, BlastRadius) * (ship.Team == Team.Pirates ? PirateBlastRadiusScale : 1f);
 
-    public static float DamageFor(Ship ship) => Damage * ship.Stats.WeaponDamage * ship.AbilityValue(AbilityId, AbilityStat.Damage, 1f);
+    public static float DamageFor(Ship ship) =>
+        Damage * ship.Stats.WeaponDamage * ship.AbilityValue(AbilityId, AbilityStat.Damage, 1f) * ship.CastDamageScale;
 
-    public static int ShellCountFor(Ship ship) =>
+    /// <summary>Carpet Bombing: shells in a line from the ship to the aim point, in place of a salvo; 0 without it.</summary>
+    public static int CarpetShellsFor(Ship ship) => (int)MathF.Round(ship.AbilityValue(AbilityId, AbilityStat.CarpetShells, 0f));
+
+    /// <summary>A carpet's first shell lands this far out from the ship, and each after it a few ticks later than its flight alone.</summary>
+    public const float CarpetStart = 4f;
+    public const int CarpetGapTicks = 2;
+
+    public static int ShellCountFor(Ship ship) => CarpetShellsFor(ship) is > 1 and var carpet ? carpet : SalvoShellsFor(ship);
+
+    private static int SalvoShellsFor(Ship ship) =>
         Math.Max(1, (int)MathF.Round(ship.AbilityValue(AbilityId, AbilityStat.ShotCount, 1f)));
 
     /// <summary>Where the shell will land: the aim point, pulled in to the mortar's range.</summary>
@@ -84,6 +94,15 @@ public sealed class Mortar : Ability
         if (shellIndex < 0 || shellIndex >= shells)
             throw new ArgumentOutOfRangeException(nameof(shellIndex));
         var landing = LandingPoint(ship, aim);
+        if (CarpetShellsFor(ship) > 1)
+        {
+            // Walked out from just off the ship to the aim point, evenly.
+            var offset = landing - ship.Position;
+            var start = offset.LengthSquared() > CarpetStart * CarpetStart
+                ? ship.Position + Vector2.Normalize(offset) * CarpetStart
+                : ship.Position + offset * 0.5f;
+            return Vector2.Lerp(start, landing, shellIndex / (float)(shells - 1));
+        }
         if (shellIndex == 0)
             return landing;
         var angle = MathF.Tau * (shellIndex - 1) / (shells - 1) + ship.Heading;
@@ -102,12 +121,20 @@ public sealed class Mortar : Ability
             ? new ClusterEffect(bomblets, radius * ClusterSpreadFraction, radius * ClusterRadiusFraction, ClusterDamageFraction, ClusterDelayTicks)
             : null;
 
-        // The first shell on the aim point; the rest of a salvo round it, one after another.
+        var burns = caster.AbilityValue(Id, AbilityStat.FireSeconds, 0f);
+        var fire = burns > 0f
+            ? new FireEffect(caster.AbilityValue(Id, AbilityStat.FireDps, 0f), (int)MathF.Round(burns * SimConstants.TickRate))
+            : null;
+
+        // A salvo: the first shell on the aim point, the rest round it, one after another. A carpet: shells walking out
+        // from the ship to the aim point, each landing a little after the one before.
         var shells = ShellCountFor(caster);
+        var carpet = CarpetShellsFor(caster) > 1;
         for (var i = 0; i < shells; i++)
         {
             var point = ShellLandingPoint(caster, target, i);
-            world.LaunchStrike(caster, point, radius, damage, flight + i * SalvoGapTicks, cluster);
+            var ticks = carpet ? FlightTicks(caster, Vector2.Distance(caster.Position, point)) + i * CarpetGapTicks : flight + i * SalvoGapTicks;
+            world.LaunchStrike(caster, point, radius, damage, ticks, cluster, fire);
         }
         return true;
     }

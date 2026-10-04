@@ -44,11 +44,35 @@ public enum AbilityStat
 
     /// <summary>Smaller blasts thrown out around each shell's impact (base 0).</summary>
     ClusterCount,
+
+    /// <summary>At 1 or more, a broadside fires from both sides at once, and both reload (base 0).</summary>
+    BothSides,
+
+    /// <summary>Fraction a hit slows the ship it strikes, for a few seconds (base 0).</summary>
+    SlowOnHit,
+
+    /// <summary>At 1 or more, shots fly over land (base 0).</summary>
+    IgnoresLand,
+
+    /// <summary>Times a shot that strikes a ship bounces on to the next enemy nearby (base 0).</summary>
+    Ricochets,
+
+    /// <summary>Shells in a line walked from the ship to the aim point, in place of a salvo (base 0: none).</summary>
+    CarpetShells,
+
+    /// <summary>Seconds a shell's landing spot burns (base 0: it doesn't).</summary>
+    FireSeconds,
+
+    /// <summary>Damage a second to anything in a burning landing spot.</summary>
+    FireDps,
+
+    /// <summary>Degrees fore or aft of the beam a broadside can be laid (base <see cref="BroadsideVolley.AimArcDegrees"/>).</summary>
+    AimArc,
 }
 
 /// <summary>
-/// A change to one ability's numbers. Combines like <see cref="StatModifier"/>: value = (base + flat) * (1 + percent).
+/// A change to one ability's numbers. Combines like <see cref="StatModifier"/>: value = (base + flat) * (1 + percent) * multipliers.
 /// </summary>
 /// <param name="AbilityId">The <see cref="Ability.Id"/> it applies to.</param>
-/// <param name="Source">What granted it (a skill's source tag), so it can be removed with its source.</param>
+/// <param name="Source">What granted it (a skill's or card's source tag), so it can be removed with its source.</param>
 public readonly record struct AbilityModifier(string AbilityId, AbilityStat Stat, ModifierKind Kind, float Value, string Source);

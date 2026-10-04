@@ -35,10 +35,10 @@ public static class Contracts
     public const float MaxRouteDistance = 300f;
 
     /// <summary>
-    /// Nor to islands more than this far south of the post: behind the crew is where the storm is. Islands abreast of
-    /// it are fine.
+    /// Nor to islands more than this much nearer the middle of the map than the post: trade leads outward, where the
+    /// danger and the pay are. Islands about as far out are fine.
     /// </summary>
-    public const float MaxSouthward = 30f;
+    public const float MaxInward = 60f;
 
     /// <summary>How close (tiles from ship center to shore) a ship must anchor off the destination to deliver.</summary>
     public const float DeliveryRange = Plundering.Range;
@@ -81,20 +81,24 @@ public static class Contracts
     public static void OpenMarkets(World world, int seed)
     {
         world.Trade.Rng = new Random(seed);
-        foreach (var post in world.Islands.Where(i => i.HasShipyard))
+        foreach (var post in world.Islands.Where(world.IsPort))
+            OpenPost(world, post);
+    }
+
+    /// <summary>Stocks one trading post: at the start of a run, or when a fortress is taken and becomes a port.</summary>
+    public static void OpenPost(World world, Island post)
+    {
+        var offers = new List<TradeContract>();
+        for (var i = 0; i < OffersPerPost; i++)
         {
-            var offers = new List<TradeContract>();
-            for (var i = 0; i < OffersPerPost; i++)
-            {
-                if (CreateContract(world, post, offers) is { } contract)
-                    offers.Add(contract);
-            }
-            Publish(world, post.Id, offers);
+            if (CreateContract(world, post, offers) is { } contract)
+                offers.Add(contract);
         }
+        Publish(world, post.Id, offers);
     }
 
     /// <summary>
-    /// A fresh contract from <paramref name="origin"/> to some other island within reach and not back south, preferring
+    /// A fresh contract from <paramref name="origin"/> to some other island within reach and not back inward, preferring
     /// destinations the post isn't already offering so each one on the board is a different route. Null if there's
     /// nowhere to go.
     /// </summary>
@@ -103,7 +107,7 @@ public static class Contracts
         var rng = world.Trade.Rng;
         var destinations = world.Islands.Where(i => i.Id != origin.Id
             && RouteDistance(origin, i) <= MaxRouteDistance
-            && i.Center.Y - origin.Center.Y <= MaxSouthward).ToList();
+            && Inward(world, origin, i) <= MaxInward).ToList();
         if (destinations.Count == 0)
             return null;
         var unused = destinations.Where(i => alongside.All(c => c.DestinationIslandId != i.Id)).ToList();
@@ -114,6 +118,13 @@ public static class Contracts
         var units = rng.Next(MinCargoUnits, MaxCargoUnits + 1);
         var payout = PayoutFor(cost, units, RouteDistance(origin, destination), destination.Level);
         return new TradeContract(world.Trade.NextContractId(), origin.Id, destination.Id, cost, payout, units);
+    }
+
+    /// <summary>How much nearer the middle of the map <paramref name="to"/> is than <paramref name="from"/> (negative: further out).</summary>
+    public static float Inward(World world, Island from, Island to)
+    {
+        var middle = world.WorldSize / 2f;
+        return Vector2.Distance(from.Center, middle) - Vector2.Distance(to.Center, middle);
     }
 
     private static void Publish(World world, int islandId, IReadOnlyList<TradeContract> offers)

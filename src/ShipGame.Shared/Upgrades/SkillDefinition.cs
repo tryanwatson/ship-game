@@ -9,6 +9,9 @@ public readonly record struct SkillEffect(AbilityStat Stat, ModifierKind Kind, f
     public static SkillEffect Flat(AbilityStat stat, float value) => new(stat, ModifierKind.Flat, value);
 
     public static SkillEffect Percent(AbilityStat stat, float value) => new(stat, ModifierKind.Percent, value);
+
+    /// <summary>Multiplies the final value: <c>Times(Cooldown, 0.5f)</c> halves the reload whatever else changes it.</summary>
+    public static SkillEffect Times(AbilityStat stat, float factor) => new(stat, ModifierKind.Multiplier, factor);
 }
 
 /// <summary>

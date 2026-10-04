@@ -47,6 +47,10 @@ public sealed class WorldRenderer
     private static readonly Color AimEdge = new Color(170, 220, 255) * 0.6f;
     private static readonly Color AimCooling = new Color(150, 150, 160) * 0.35f;
     private static readonly Color StrikeWarning = new Color(235, 80, 60) * 0.16f;
+    private static readonly Color FireGlow = new Color(255, 120, 30) * 0.28f;
+    private static readonly Color FireEdge = new Color(255, 170, 60) * 0.7f;
+    private static readonly Color FireFlame = new(255, 190, 80);
+    private static readonly Color MarkColor = new(255, 90, 70);
     private static readonly Color StrikeFill = new Color(235, 80, 60) * 0.3f;
     private static readonly Color StrikeEdge = new Color(240, 110, 80) * 0.8f;
     private static readonly Color Shell = new(25, 25, 30);
@@ -77,7 +81,7 @@ public sealed class WorldRenderer
     private readonly ShipVisuals _ships;
     private readonly IslandScenery _scenery;
     private readonly CombatVisuals _combat;
-    private readonly StormVisuals _storm;
+    private readonly FortVisuals _forts;
     private readonly List<DrawItem> _drawItems = new();
     private readonly record struct DrawItem(NVector2 Position, Ship? Ship = null, float Heading = 0f,
         IslandScenery.Item? Scenery = null, CombatVisuals.Wreck? Wreck = null);
@@ -96,7 +100,7 @@ public sealed class WorldRenderer
         _ships = new ShipVisuals(batch);
         _scenery = new IslandScenery(batch);
         _combat = new CombatVisuals(batch);
-        _storm = new StormVisuals(batch);
+        _forts = new FortVisuals(batch);
     }
 
     public void Draw(World world, float alpha, int localPlayerId, Matrix view, AimPreview? aim = null)
@@ -126,9 +130,20 @@ public sealed class WorldRenderer
         foreach (var crate in world.Trade.Crates)
             DrawFloatingCrate(crate.Position);
 
-        // Where shells will land: public, so anyone can get out of the way.
+        // Burning water, and where shells will land: public, so anyone can get out of the way.
+        foreach (var fire in world.Fires)
+        {
+            if (fire.EndTick > renderTick)
+                DrawFire(fire, time);
+        }
         foreach (var strike in world.Strikes)
             DrawStrikeWarning(strike, strike.Progress(renderTick));
+        foreach (var warning in world.Warnings)
+        {
+            if (world.FindShip(warning.ShipId) is { } gunner)
+                DrawShotWarning(gunner, NVector2.Lerp(gunner.PreviousPosition, gunner.Position, alpha),
+                    Angles.Lerp(gunner.PreviousHeading, gunner.Heading, alpha), warning, warning.Progress(renderTick));
+        }
 
         var localShip = world.GetPlayerShip(localPlayerId);
         if (localShip is not null)
@@ -185,6 +200,12 @@ public sealed class WorldRenderer
             var targetable = localShip is not null && world.CanDamage(localShip.Id, localShip.Team, ship);
             var targeted = targetable && IsInFiringLane(localShip, ship);
 
+            if (ship.IsFort)
+            {
+                _forts.Draw(ship, pos, heading, time, _combat.HitFlash(ship.Id));
+                _batch.Flush();
+                continue;
+            }
             if (ship.IsAnchored)
                 DrawAnchorRode(ship, pos, heading);
             if (ship == localShip)
@@ -203,16 +224,11 @@ public sealed class WorldRenderer
         _combat.DrawAir();
         _batch.Flush();
 
-        if (world.Director is { } director)
-        {
-            _storm.Draw(world, director.StormY, view, time);
-            _batch.Flush();
-        }
-
         // Health bars float above everything, League-style. Levels are judged against the waters we're in.
         var localLevel = localShip is null ? 0 : Archipelago.LevelAt(localShip.Position);
         foreach (var ship in world.Ships)
-            DrawHealthBar(ship, NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), ship == localShip, localLevel);
+            DrawHealthBar(ship, NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), ship == localShip, localLevel,
+                ship.OwnerPlayerId is { } owner && world.Players.TryGetValue(owner, out var player) ? player.Name : null);
 
         _batch.Flush();
     }
@@ -370,24 +386,54 @@ public sealed class WorldRenderer
         }
     }
 
-    private void DrawFiringLane(Ship ship, BroadsideSide side, NVector2 pos, float heading, Color color)
+    /// <summary>
+    /// The corners of a side's lane in screen space, laid <paramref name="offset"/> radians off the beam (see
+    /// <see cref="BroadsideVolley.AimOffset"/>), out to <paramref name="reach"/> of its range.
+    /// </summary>
+    private static void FiringLane(Ship ship, BroadsideSide side, NVector2 pos, float heading, float offset, float reach, Span<Vector2> lane)
     {
         var forward = new NVector2(MathF.Cos(heading), MathF.Sin(heading));
         var right = new NVector2(-forward.Y, forward.X);
         var outward = side == BroadsideSide.Starboard ? right : -right;
+        var down = BroadsideVolley.DirectionAt(heading, side, offset) * (BroadsideVolley.RangeFor(ship) * reach);
 
         var halfSpan = BroadsideVolley.HalfSpan(ship) + Projectile.DefaultRadius;
-        var near = ship.Stats.Beam / 2f;
-        var far = near + BroadsideVolley.RangeFor(ship);
+        var near = pos + outward * (ship.Stats.Beam / 2f);
 
-        Span<Vector2> lane = stackalloc Vector2[]
-        {
-            IsoProjection.WorldToIso(pos + forward * halfSpan + outward * near),
-            IsoProjection.WorldToIso(pos + forward * halfSpan + outward * far),
-            IsoProjection.WorldToIso(pos - forward * halfSpan + outward * far),
-            IsoProjection.WorldToIso(pos - forward * halfSpan + outward * near),
-        };
-        _batch.FillConvex(lane, color);
+        lane[0] = IsoProjection.WorldToIso(near + forward * halfSpan);
+        lane[1] = IsoProjection.WorldToIso(near + forward * halfSpan + down);
+        lane[2] = IsoProjection.WorldToIso(near - forward * halfSpan + down);
+        lane[3] = IsoProjection.WorldToIso(near - forward * halfSpan);
+    }
+
+    /// <summary>
+    /// Everywhere a side's guns can reach, laid anywhere in its arc: the row of muzzles swept round the arc. The fore
+    /// muzzle bounds the forward-laid half, the aft muzzle the rest.
+    /// </summary>
+    private void DrawFiringArc(Ship ship, BroadsideSide side, NVector2 pos, float heading, Color color)
+    {
+        const int stepsPerHalf = 6;
+        var forward = new NVector2(MathF.Cos(heading), MathF.Sin(heading));
+        var right = new NVector2(-forward.Y, forward.X);
+        var outward = side == BroadsideSide.Starboard ? right : -right;
+        var near = pos + outward * (ship.Stats.Beam / 2f);
+        var halfSpan = BroadsideVolley.HalfSpan(ship) + Projectile.DefaultRadius;
+        var fore = near + forward * halfSpan;
+        var aft = near - forward * halfSpan;
+        var range = BroadsideVolley.RangeFor(ship);
+        var arc = BroadsideVolley.AimArcFor(ship);
+        // Fore of the beam is a negative offset on starboard, positive on port.
+        var foreSign = side == BroadsideSide.Starboard ? -1f : 1f;
+
+        Span<Vector2> outline = stackalloc Vector2[2 * stepsPerHalf + 4];
+        var n = 0;
+        outline[n++] = IsoProjection.WorldToIso(aft);
+        outline[n++] = IsoProjection.WorldToIso(fore);
+        for (var i = stepsPerHalf; i >= 0; i--)
+            outline[n++] = IsoProjection.WorldToIso(fore + BroadsideVolley.DirectionAt(heading, side, foreSign * arc * i / stepsPerHalf) * range);
+        for (var i = 0; i <= stepsPerHalf; i++)
+            outline[n++] = IsoProjection.WorldToIso(aft + BroadsideVolley.DirectionAt(heading, side, -foreSign * arc * i / stepsPerHalf) * range);
+        _batch.FillConvex(outline[..n], color);
     }
 
     /// <summary>Spilled cargo: a little crate riding in the water, with a ring of foam so it shows against the sea.</summary>
@@ -433,6 +479,55 @@ public sealed class WorldRenderer
         DrawGroundCircle(strike.Target, strike.Radius, StrikeEdge);
     }
 
+    /// <summary>
+    /// A laid gun, in the shell warning's red, filling from the ship outward until it fires: a long gun's lane along
+    /// the line it's laid on, or the lane of the broadside side that's about to fire, turning with the ship.
+    /// </summary>
+    private void DrawShotWarning(Ship ship, NVector2 pos, float heading, ShotWarning warning, float progress)
+    {
+        switch (ship.GetAbility(warning.Slot)?.Definition)
+        {
+            case LongGun:
+                DrawLongGunWarning(ship, pos, warning, progress);
+                break;
+            case BroadsideVolley:
+            {
+                var side = warning.Channel == BroadsideVolley.StarboardChannel ? BroadsideSide.Starboard : BroadsideSide.Port;
+                var offset = BroadsideVolley.AimOffset(ship, pos, heading, side, warning.Target);
+                Span<Vector2> lane = stackalloc Vector2[4];
+                FiringLane(ship, side, pos, heading, offset, 1f, lane);
+                _batch.FillConvex(lane, StrikeWarning);
+                Span<Vector2> fill = stackalloc Vector2[4];
+                FiringLane(ship, side, pos, heading, offset, progress, fill);
+                _batch.FillConvex(fill, StrikeFill);
+                _batch.Outline(lane, StrikeEdge);
+                break;
+            }
+        }
+    }
+
+    private void DrawLongGunWarning(Ship ship, NVector2 pos, ShotWarning warning, float progress)
+    {
+        var direction = LongGun.AimDirection(ship, warning.Target);
+        var side = new NVector2(-direction.Y, direction.X) * (LongGun.ShotRadius + 0.15f);
+        var start = pos + direction * (ship.Stats.Beam / 2f);
+        var end = start + direction * LongGun.RangeFor(ship);
+        var filled = NVector2.Lerp(start, end, progress);
+        Span<Vector2> lane = stackalloc Vector2[]
+        {
+            IsoProjection.WorldToIso(start + side), IsoProjection.WorldToIso(end + side),
+            IsoProjection.WorldToIso(end - side), IsoProjection.WorldToIso(start - side),
+        };
+        _batch.FillConvex(lane, StrikeWarning);
+        Span<Vector2> fill = stackalloc Vector2[]
+        {
+            IsoProjection.WorldToIso(start + side), IsoProjection.WorldToIso(filled + side),
+            IsoProjection.WorldToIso(filled - side), IsoProjection.WorldToIso(start - side),
+        };
+        _batch.FillConvex(fill, StrikeFill);
+        _batch.Outline(lane, StrikeEdge);
+    }
+
     /// <summary>The shell itself, arcing from where it was fired to where it lands, over its shadow on the water.</summary>
     private void DrawShell(AreaStrike strike, float progress)
     {
@@ -453,9 +548,14 @@ public sealed class WorldRenderer
         {
             case BroadsideVolley:
             {
-                // The deck that will fire: its whole lane, bright (grey if that side is still reloading).
+                // The deck that will fire: how far round it can be laid, faint, and its lane laid toward the cursor,
+                // bright (grey if that side is still reloading).
                 var side = BroadsideVolley.SideToward(ship, aim.Cursor);
-                DrawFiringLane(ship, side, pos, ship.Heading, ready ? AimFill * 1.6f : AimCooling);
+                DrawFiringArc(ship, side, pos, ship.Heading, ready ? AimFill * 0.6f : AimCooling * 0.5f);
+                Span<Vector2> lane = stackalloc Vector2[4];
+                FiringLane(ship, side, pos, ship.Heading, BroadsideVolley.AimOffset(ship, pos, ship.Heading, side, aim.Cursor), 1f, lane);
+                _batch.FillConvex(lane, ready ? AimFill * 1.6f : AimCooling);
+                _batch.Outline(lane, ready ? AimEdge : AimCooling);
                 break;
             }
             case LongGun:
@@ -507,6 +607,35 @@ public sealed class WorldRenderer
         }
     }
 
+    /// <summary>A patch of burning water (Firestorm): an orange glow with flickering tongues of flame.</summary>
+    private void DrawFire(FireZone fire, float time)
+    {
+        FillGroundCircle(fire.Position, fire.Radius, FireGlow);
+        DrawGroundCircle(fire.Position, fire.Radius, FireEdge);
+        for (var i = 0; i < 7; i++)
+        {
+            var angle = fire.Id * 1.3f + i * 0.9f;
+            var at = fire.Position + new NVector2(MathF.Cos(angle), MathF.Sin(angle)) * fire.Radius * (0.25f + 0.1f * (i % 4));
+            var flicker = 0.6f + 0.4f * MathF.Sin(time * 9f + i * 1.7f + fire.Id);
+            var foot = IsoProjection.WorldToIso(at);
+            _batch.Stroke(foot, foot - new Vector2(0, 10f + 8f * flicker), 4f, FireFlame * flicker);
+        }
+    }
+
+    /// <summary>Crosshairs over a ship under a Hunter's Mark: everyone's hits on it do more.</summary>
+    private void DrawTargetMark(Vector2 center)
+    {
+        Span<Vector2> ring = stackalloc Vector2[16];
+        for (var i = 0; i < ring.Length; i++)
+        {
+            var angle = MathF.Tau * i / ring.Length;
+            ring[i] = center + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * 6f;
+        }
+        _batch.Outline(ring, MarkColor);
+        _batch.Line(center + new Vector2(-9f, 0f), center + new Vector2(9f, 0f), MarkColor);
+        _batch.Line(center + new Vector2(0f, -9f), center + new Vector2(0f, 9f), MarkColor);
+    }
+
     private void FillGroundCircle(NVector2 center, float radius, Color color)
     {
         if (radius <= 0.01f)
@@ -520,22 +649,29 @@ public sealed class WorldRenderer
         _batch.FillConvex(points, color);
     }
 
-    private void DrawHealthBar(Ship ship, NVector2 pos, bool isLocal, int localLevel)
+    /// <param name="playerName">A player ship's captain, named over the bar.</param>
+    private void DrawHealthBar(Ship ship, NVector2 pos, bool isLocal, int localLevel, string? playerName = null)
     {
         var width = ship.IsBoss ? HealthBarWidth * FlagshipBarScale : HealthBarWidth;
-        var anchor = IsoProjection.WorldToIso(pos) - new Vector2(width / 2f, ShipVisuals.HealthHeight);
+        var anchor = IsoProjection.WorldToIso(pos) - new Vector2(width / 2f, ship.IsFort ? FortVisuals.HealthHeight : ShipVisuals.HealthHeight);
         var fraction = Math.Clamp(ship.Health / ship.Stats.MaxHealth, 0f, 1f);
 
         FillRect(anchor, new Vector2(width, HealthBarHeight), HealthBack);
         FillRect(anchor + Vector2.One, new Vector2((width - 2f) * fraction, HealthBarHeight - 2f),
             isLocal ? HealthOwn : ship.Team == Team.Players ? HealthCrew : HealthEnemy);
 
-        if (ship.IsAnchored)
+        if (ship.IsAnchored && !ship.IsFort)
             DrawAnchorMark(anchor + new Vector2(-9f, HealthBarHeight / 2f));
+        if (ship.IsMarked)
+            DrawTargetMark(anchor + new Vector2(width / 2f, -16f));
         if (ship.Level > 0)
             DrawLevelBadge(ship.Level, anchor + new Vector2(width + 3f, HealthBarHeight / 2f), localLevel);
         if (ship.IsBoss)
             DrawLabel("PIRATE FLAGSHIP", anchor, width, LevelScale, FlagshipLabel);
+        else if (ship.IsFort)
+            DrawLabel(Fortresses.Name(Fortresses.KindOf(ship)), anchor, width, NameScale, NameLabel);
+        else if (playerName is { Length: > 0 })
+            DrawLabel(playerName, anchor, width, LevelScale, isLocal ? HealthOwn : HealthCrew);
         else if (PirateRoles.Of(ship) is { } role)
             DrawLabel(PirateRoles.Name(role).ToUpperInvariant(), anchor, width, NameScale, NameLabel);
     }

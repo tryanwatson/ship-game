@@ -1,10 +1,12 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Ai;
+using ShipGame.Shared.Commands;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Stats;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Tests;
 
@@ -12,36 +14,65 @@ public class RunDirectorTests
 {
     private const int PlayerId = 1;
 
-    private static readonly int StormDelayTicks = (int)(RunDirector.StormDelaySeconds * SimConstants.TickRate);
-
     /// <summary>
-    /// The full-length map's open water (no islands) with a director, and anchored players who can't be sunk, midway up
-    /// it so the storm takes a long time to reach them.
+    /// Open water with <paramref name="fortresses"/> small fortress islands in a row, each with two batteries, a
+    /// director, and anchored players who can't be sunk, out of every fort's reach.
     /// </summary>
-    private static (World world, Ship player, RunDirector director) CreateRun(int players = 1, float y = 450f)
+    private static (World world, RunDirector director, List<Island> fortresses) CreateRun(int players = 1, int fortresses = 2, int seed = 7)
     {
-        var world = new World(Archipelago.Size) { Wind = Vector2.Zero };
-        var director = new RunDirector(seed: 7, world.WorldSize);
+        var world = new World(new Vector2(400, 400)) { Wind = Vector2.Zero };
+        var director = new RunDirector(seed);
         world.Director = director;
-        Ship first = null!;
+        var islands = new List<Island>();
+        for (var i = 0; i < fortresses; i++)
+        {
+            var center = new Vector2(40 + 50 * i, 40);
+            var island = new Island(i + 1, new[] { center + new Vector2(-4, -4), center + new Vector2(4, -4), center + new Vector2(4, 4), center + new Vector2(-4, 4) },
+                level: 1, isFortress: true);
+            world.AddIsland(island);
+            Fortresses.SpawnFort(world, island, 0f, FortKind.Battery);
+            Fortresses.SpawnFort(world, island, MathF.PI, FortKind.Battery);
+            islands.Add(island);
+        }
         for (var id = 1; id <= players; id++)
         {
-            var ship = world.SpawnShip(new Vector2(40 + id * 4, y), 0f, ShipStats.Sloop, id);
+            var ship = world.SpawnShip(new Vector2(100 + id * 6, 300), 0f, ShipStats.Sloop, id, Loadouts.Starting(new BroadsideVolley()));
             Invulnerable(ship);
             ship.IsAnchored = true;
-            first ??= ship;
         }
-        return (world, first, director);
+        world.Step();
+        world.DrainEvents();
+        return (world, director, islands);
     }
-
-    /// <summary>Puts the storm's edge at <paramref name="stormY"/>, already moving.</summary>
-    private static void StormAt(RunDirector director, float stormY) =>
-        director.Restore(director.Status with { StormY = stormY, TicksUntilStorm = 0 });
 
     private static void Invulnerable(Ship ship) =>
         ship.AddModifier(new StatModifier(StatId.MaxHealth, ModifierKind.Flat, 1_000_000f, "test"));
 
-    private static List<Ship> Hunters(World world) => world.Ships.Where(RunDirector.IsHunter).ToList();
+    /// <summary>Sinks every fort on <paramref name="fortresses"/> at once (the game then pauses for cards).</summary>
+    private static void Raze(World world, params Island[] fortresses)
+    {
+        foreach (var fort in world.Ships.Where(s => fortresses.Any(f => f.Id == s.FortIslandId)))
+            fort.Health = 0f;
+        world.Step();
+    }
+
+    /// <summary>Everyone takes the first card of every offer waiting, which ends the pause.</summary>
+    private static void ChooseAll(World world)
+    {
+        while (world.IsPaused)
+        {
+            foreach (var player in world.Players.Values.Where(p => p.CardOffers.Count > 0))
+                world.Enqueue(new ChooseCardCommand(player.PlayerId, player.CardOffers[0].Cards[0].Id));
+            world.Step();
+        }
+    }
+
+    /// <summary>Takes the fortresses and has everyone choose, so the run carries on.</summary>
+    private static void Take(World world, params Island[] fortresses)
+    {
+        Raze(world, fortresses);
+        ChooseAll(world);
+    }
 
     private static void RunTicks(World world, int ticks)
     {
@@ -49,245 +80,236 @@ public class RunDirectorTests
             world.Step();
     }
 
-    // ---- The storm --------------------------------------------------------------------------------------
+    private static Ship? Boss(World world) => world.Ships.SingleOrDefault(s => s.IsBoss);
+
+    // ---- Fortresses and cards ---------------------------------------------------------------------------
 
     [Fact]
-    public void Storm_FormsOffTheSouthernEdge_WaitsForTheOpening_ThenRollsNorth()
+    public void TakingAFortress_OffersEveryPlayerThreeDifferentCards()
     {
-        var (world, _, director) = CreateRun();
-        var start = Archipelago.Size.Y + RunDirector.StormStartBeyondEdge;
-        Assert.Equal(start, director.StormY);
+        var (world, director, fortresses) = CreateRun(players: 2);
 
-        RunTicks(world, StormDelayTicks);
-        Assert.Equal(start, director.StormY);
+        Raze(world, fortresses[0]);
 
-        RunTicks(world, SimConstants.TickRate * 30);
-        Assert.Equal(start - RunDirector.StormSpeed * 30f, director.StormY, 1);
-    }
-
-    [Fact]
-    public void Storm_DoesNoHarmByItself()
-    {
-        var (world, _, director) = CreateRun();
-        var caught = world.SpawnShip(new Vector2(30, 800), 0f, ShipStats.Sloop);
-        caught.IsAnchored = true;
-        StormAt(director, 750f);
-
-        RunTicks(world, SimConstants.TickRate * 2);
-
-        Assert.Equal(ShipStats.Sloop.MaxHealth, caught.Health);
-    }
-
-    [Fact]
-    public void Storm_StopsShortOfTheLastSea()
-    {
-        var (world, _, director) = CreateRun();
-        var lastSea = Archipelago.Seas[^1];
-        StormAt(director, lastSea.South + 1f);
-
-        RunTicks(world, SimConstants.TickRate * 10);
-
-        Assert.Equal(lastSea.South, director.StormY);
-    }
-
-    // ---- Its bounty hunters -----------------------------------------------------------------------------
-
-    [Fact]
-    public void NoHunters_WhileNobodyIsInTheStorm()
-    {
-        var (world, player, director) = CreateRun();
-        StormAt(director, player.Position.Y + 20f);
-
-        RunTicks(world, RunDirector.FirstHunterTicks + RunDirector.HunterIntervalTicks * 3);
-
-        Assert.Empty(Hunters(world));
-    }
-
-    [Fact]
-    public void Hunters_ComeForAPlayerInTheStorm_MoreTheLongerTheyStay_UpToTheCap()
-    {
-        var (world, player, director) = CreateRun();
-        StormAt(director, player.Position.Y - 60f); // deep in it; it won't pass us by during the test
-
-        RunTicks(world, RunDirector.FirstHunterTicks - 1);
-        Assert.Empty(Hunters(world));
-        world.Step();
-        Assert.Single(Hunters(world));
-
-        RunTicks(world, RunDirector.HunterIntervalTicks);
-        Assert.Equal(2, Hunters(world).Count);
-
-        RunTicks(world, RunDirector.HunterIntervalTicks * (RunDirector.MaxHuntersPerPlayer + 3));
-        Assert.Equal(RunDirector.MaxHuntersPerPlayer, Hunters(world).Count);
-        Assert.Equal(RunDirector.MaxHuntersPerPlayer, director.Hunters);
-    }
-
-    [Fact]
-    public void Hunters_AreStrongForTheSea_AndSetOutUnderSail_FromInsideTheStorm()
-    {
-        var (world, player, director) = CreateRun();
-        StormAt(director, player.Position.Y - 10f);
-
-        RunTicks(world, RunDirector.FirstHunterTicks);
-
-        var hunter = Assert.Single(Hunters(world));
-        Assert.True(director.InStorm(hunter.Position));
-        Assert.True(hunter.Position.Y > player.Position.Y, "hunters come up from behind");
-        Assert.Equal(Archipelago.LevelAt(hunter.Position) + RunDirector.HunterLevelAboveSea, hunter.Level);
-        Assert.Equal(RunDirector.HunterLevel(Archipelago.LevelAt(hunter.Position)), hunter.Level);
-        Assert.Equal(ShipStats.PirateSloop.MaxHealth * (1f + PirateLevels.HealthPerLevel * (hunter.Level - 1)), hunter.Stats.MaxHealth, 3);
-        Assert.False(hunter.IsAnchored);
-        Assert.Equal(NpcStance.Hunting, hunter.Stance);
-        Assert.True(hunter.Throttle > 0);
-    }
-
-    [Fact]
-    public void Hunters_IgnorePlayersOutOfTheStorm_AndMeltAwayWithNoOneToChase()
-    {
-        var (world, player, director) = CreateRun();
-        StormAt(director, player.Position.Y - 10f);
-        RunTicks(world, RunDirector.FirstHunterTicks);
-        var hunter = Assert.Single(Hunters(world));
-        var behavior = (HunterBehavior)hunter.Behavior!;
-        world.Step();
-        Assert.Same(player, behavior.Target);
-
-        // The player slips out north of the storm: the hunter loses interest, and before long is gone.
-        player.Position = player.PreviousPosition = new Vector2(player.Position.X, director.StormY - 20f);
-        world.Step();
-        Assert.Null(behavior.Target);
-        RunTicks(world, RunDirector.HunterIdleTicks);
-        Assert.Empty(Hunters(world));
-    }
-
-    [Fact]
-    public void Hunters_ThatLeaveTheStorm_MeltBackIntoIt()
-    {
-        var (world, player, director) = CreateRun();
-        StormAt(director, player.Position.Y - 10f);
-        RunTicks(world, RunDirector.FirstHunterTicks);
-        var hunter = Assert.Single(Hunters(world));
-
-        hunter.Position = new Vector2(hunter.Position.X, director.StormY - RunDirector.VanishBeyondEdge - 1f);
-        world.Step();
-
-        Assert.Null(world.FindShip(hunter.Id));
-    }
-
-    [Fact]
-    public void Hunters_SpawnInsideTheMapAndTheStorm_ClearOfPlayers()
-    {
-        foreach (var y in new[] { 120f, 450f, 890f }) // near the north end, mid-map, and hard against the southern edge
+        Assert.False(world.IsHeld(fortresses[0]));
+        Assert.True(world.IsHeld(fortresses[1]));
+        Assert.Equal(1, director.FortressesTaken);
+        var events = world.DrainEvents();
+        Assert.Equal(fortresses[0].Id, Assert.Single(events.OfType<FortressTaken>()).IslandId);
+        Assert.Equal(new[] { 1, 2 }, events.OfType<CardsOffered>().Select(e => e.PlayerId).Order());
+        foreach (var player in world.Players.Values)
         {
-            for (var seed = 0; seed < 10; seed++)
+            var offer = Assert.Single(player.CardOffers);
+            Assert.Equal((OfferSource.Fortress, 1), (offer.Source, offer.Level));
+            Assert.Equal(CardRewards.OfferSize, offer.Cards.Count);
+            Assert.Equal(offer.Cards.Count, offer.Cards.Select(c => c.Id).Distinct().Count());
+            Assert.All(offer.Cards, c => Assert.NotNull(CardCatalog.Find(c.Id)));
+        }
+    }
+
+    [Fact]
+    public void AFortress_HoldsWhileAnyFortStands()
+    {
+        var (world, director, fortresses) = CreateRun();
+        world.Ships.First(s => s.FortIslandId == fortresses[0].Id).Health = 0f;
+        RunTicks(world, 2);
+
+        Assert.True(world.IsHeld(fortresses[0]));
+        Assert.Equal(0, director.FortressesTaken);
+        Assert.Empty(world.Players[PlayerId].CardOffers);
+    }
+
+    [Fact]
+    public void Offers_AreDrawnForEachPlayer_AndQueueUp()
+    {
+        var (world, _, fortresses) = CreateRun(players: 2, fortresses: 4, seed: 3);
+        Raze(world, fortresses.ToArray());
+
+        var one = world.Players[1].CardOffers;
+        var two = world.Players[2].CardOffers;
+        Assert.Equal(4, one.Count);
+        Assert.Equal(4, two.Count);
+        Assert.False(one.Zip(two).All(pair => pair.First.Cards.SequenceEqual(pair.Second.Cards)), "both players were dealt the same hands");
+    }
+
+    [Fact]
+    public void WeaponCards_AreOnlyOfferedForWeaponsTheShipCarries()
+    {
+        var world = new World(new Vector2(100, 100));
+        world.SpawnShip(new Vector2(50, 50), 0f, ShipStats.Sloop, PlayerId, Loadouts.Starting(new LongGun()));
+        var eligible = CardRewards.Eligible(world, world.Players[PlayerId]);
+
+        Assert.Contains(eligible, c => c.AbilityId == LongGun.AbilityId);
+        Assert.All(eligible, c => Assert.True(c.AbilityId is null or LongGun.AbilityId, $"{c.Name} doesn't suit a long gun"));
+        var rng = new Random(1);
+        for (var level = 1; level <= 8; level++)
+            Assert.All(CardRewards.Deal(rng, eligible, OfferSource.Fortress, level).Cards, pick => Assert.Contains(eligible, c => c.Id == pick.Id));
+    }
+
+    // ---- Bosses -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void OneFortress_CallsNoBoss()
+    {
+        var (world, director, fortresses) = CreateRun();
+        Take(world, fortresses[0]);
+        RunTicks(world, RunDirector.BossWarningTicks + 10);
+
+        Assert.Equal(0, director.BossCountdownTicks);
+        Assert.Null(Boss(world));
+    }
+
+    [Fact]
+    public void TwoFortresses_CallABoss_AfterAWarning_NearAPlayer()
+    {
+        var (world, director, fortresses) = CreateRun(players: 3);
+        Take(world, fortresses[0]);
+        Take(world, fortresses[1]);
+        Assert.InRange(director.BossCountdownTicks, RunDirector.BossWarningTicks - 1, RunDirector.BossWarningTicks);
+        Assert.Equal(2, director.Status.FortressesForNextBoss);
+
+        RunTicks(world, director.BossCountdownTicks - 2);
+        Assert.Null(Boss(world));
+        RunTicks(world, 2);
+
+        var boss = Boss(world)!;
+        Assert.NotNull(boss);
+        Assert.True(director.BossAfloat);
+        Assert.Equal(0, director.BossCountdownTicks);
+        Assert.Equal(RunDirector.BossLevel(1), boss.Level);
+        Assert.Equal(RunDirector.BossHull(1), boss.BaseStats);
+        Assert.Equal(boss.Stats.MaxHealth, boss.Health);
+        Assert.True(((HunterBehavior)boss.Behavior!).Relentless);
+        var spawned = Assert.Single(world.DrainEvents().OfType<BossSpawned>());
+        Assert.Equal((boss.Id, 1), (spawned.ShipId, spawned.Round));
+        var prey = world.GetPlayerShip(spawned.PreyPlayerId)!;
+        Assert.InRange(Vector2.Distance(prey.Position, boss.Position), RunDirector.MinSpawnDistance - 0.01f, RunDirector.MaxSpawnDistance + 0.01f);
+        Assert.Equal(4, director.Status.FortressesForNextBoss);
+    }
+
+    [Fact]
+    public void Bosses_ComeOneAtATime_EachStrongerThanTheLast()
+    {
+        var (world, director, fortresses) = CreateRun(fortresses: 4);
+        Take(world, fortresses.ToArray());
+        RunTicks(world, RunDirector.BossWarningTicks + 1);
+        var first = Boss(world)!;
+
+        // Four fortresses down, but the second boss waits for the first to sink.
+        RunTicks(world, RunDirector.BossWarningTicks * 2);
+        Assert.Same(first, Boss(world));
+        Assert.Equal(0, director.BossCountdownTicks);
+
+        first.Health = 0f;
+        world.Step();
+        Assert.Equal(1, director.BossesSunk);
+        Assert.False(world.IsRunOver);
+        ChooseAll(world); // its spoils
+        RunTicks(world, RunDirector.BossWarningTicks + 1);
+        var second = Boss(world)!;
+
+        Assert.NotSame(first, second);
+        Assert.True(second.Level > first.Level);
+        Assert.True(second.Stats.MaxHealth > first.Stats.MaxHealth);
+        Assert.True(second.HasAbility(Mortar.AbilityId) && !first.HasAbility(Mortar.AbilityId));
+    }
+
+    [Fact]
+    public void Bosses_PayOutPrismatics_StrongerForEach_ButNotTheLast()
+    {
+        var (world, director, _) = CreateRun(players: 2);
+        foreach (var round in new[] { 1, 2 })
+        {
+            director.Restore(new RunStatus(FortressesTaken: 2 * round, BossesSunk: round - 1, BossCountdownTicks: 1, BossAfloat: false));
+            world.Step();
+            Boss(world)!.Health = 0f;
+            world.Step();
+
+            Assert.Equal(round, director.BossesSunk);
+            foreach (var player in world.Players.Values)
             {
-                var world = new World(Archipelago.Size) { Wind = Vector2.Zero };
-                var director = new RunDirector(seed, world.WorldSize);
-                world.Director = director;
-                for (var id = 1; id <= 4; id++)
-                {
-                    var ship = world.SpawnShip(new Vector2(30 + id * 8, y), 0f, ShipStats.Sloop, id);
-                    Invulnerable(ship);
-                    ship.IsAnchored = true;
-                }
-                StormAt(director, y - 15f);
-                RunTicks(world, RunDirector.FirstHunterTicks);
-
-                var hunters = Hunters(world);
-                Assert.Equal(4, hunters.Count);
-                foreach (var hunter in hunters)
-                {
-                    Assert.InRange(hunter.Position.X, 0f, world.WorldSize.X);
-                    Assert.InRange(hunter.Position.Y, 0f, world.WorldSize.Y);
-                    Assert.True(director.InStorm(hunter.Position), $"y {y} seed {seed}: spawned out of the storm");
-                    var nearest = world.Ships.Where(s => s.OwnerPlayerId is not null).Min(s => Vector2.Distance(s.Position, hunter.Position));
-                    Assert.True(nearest >= 6f, $"y {y} seed {seed}: spawned {nearest} tiles from a player");
-                }
+                var offer = Assert.Single(player.CardOffers);
+                Assert.Equal((OfferSource.Boss, CardRewards.BossDropLevel(round)), (offer.Source, offer.Level));
+                Assert.All(offer.Cards, c => Assert.Equal((CardTier.Prismatic, offer.Level), (c.Definition.Tier, c.Level)));
             }
+            Assert.Equal(2 * round, director.FortressesTaken); // they don't count toward the next boss
+            ChooseAll(world);
         }
+        Assert.True(CardRewards.BossDropLevel(2) > CardRewards.BossDropLevel(1));
     }
 
     [Fact]
-    public void SameSeed_SameHunters()
+    public void SinkingTheLastBoss_WinsTheRun()
     {
-        var (worldA, playerA, directorA) = CreateRun();
-        var (worldB, _, directorB) = CreateRun();
-        StormAt(directorA, playerA.Position.Y - 10f);
-        StormAt(directorB, playerA.Position.Y - 10f);
-        RunTicks(worldA, RunDirector.FirstHunterTicks);
-        RunTicks(worldB, RunDirector.FirstHunterTicks);
+        var (world, director, _) = CreateRun();
+        director.Restore(new RunStatus(FortressesTaken: 6, BossesSunk: 2, BossCountdownTicks: 0, BossAfloat: false));
+        RunTicks(world, RunDirector.BossWarningTicks + 1);
+        var boss = Boss(world)!;
+        Assert.Equal(RunDirector.BossLevel(3), boss.Level);
+        Assert.All(new[] { BroadsideVolley.AbilityId, Mortar.AbilityId, LongGun.AbilityId }, id => Assert.True(boss.HasAbility(id)));
+        world.DrainEvents();
 
-        Assert.Equal(Hunters(worldA).Select(p => p.Position), Hunters(worldB).Select(p => p.Position));
+        boss.Health = 0f;
+        boss.LastHitByShipId = world.GetPlayerShip(PlayerId)!.Id;
+        world.Step();
+
+        Assert.True(world.IsRunOver);
+        Assert.True(world.IsVictory);
+        Assert.Equal(RunDirector.BossCount, director.BossesSunk);
+        Assert.True(Assert.Single(world.DrainEvents().OfType<RunEnded>()).Victory);
+        Assert.Empty(world.Players[PlayerId].CardOffers); // nothing to choose: it's won
+        Assert.Equal(KillRewards.GoldFor(boss), world.Players[PlayerId].Gold);
     }
 
     [Fact]
-    public void Hunters_StopOnceTheRunIsOver()
+    public void Bosses_AreSturdierForBiggerCrews()
     {
-        var (world, player, director) = CreateRun();
-        StormAt(director, player.Position.Y - 10f);
-        world.EndRun();
-
-        RunTicks(world, RunDirector.FirstHunterTicks * 2);
-
-        Assert.Empty(Hunters(world));
-    }
-
-    [Fact]
-    public void Respawns_AreNeverInsideTheStorm()
-    {
-        var (world, player, director) = CreateRun(players: 2);
-        var other = world.GetPlayerShip(2)!;
-        // The storm's edge just south of the survivor: half of the spots around them are in it.
-        StormAt(director, player.Position.Y + 1f);
-        other.Health = 0f;
-
-        RunTicks(world, Respawning.DelayTicks + 1);
-
-        var back = world.GetPlayerShip(2)!;
-        Assert.False(director.InStorm(back.Position));
-    }
-
-    [Fact]
-    public void Raider_GoesForTheNearestPlayer_FromAcrossTheMap_AndNeverGivesUp()
-    {
-        var world = new World(new Vector2(256, 256)) { Wind = Vector2.Zero };
-        var near = world.SpawnShip(new Vector2(130, 128), 0f, ShipStats.Sloop, 1);
-        var far = world.SpawnShip(new Vector2(240, 128), 0f, ShipStats.Sloop, 2);
-        foreach (var player in new[] { near, far })
+        static float BossHealth(int players)
         {
-            player.AddModifier(new StatModifier(StatId.MaxHealth, ModifierKind.Flat, 1_000_000f, "test"));
-            player.IsAnchored = true;
+            var (world, director, _) = CreateRun(players);
+            director.Restore(new RunStatus(FortressesTaken: 2, BossesSunk: 0, BossCountdownTicks: 0, BossAfloat: false));
+            RunTicks(world, RunDirector.BossWarningTicks + 1);
+            return Boss(world)!.Stats.MaxHealth;
         }
-        var raider = world.SpawnShip(new Vector2(20, 128), 0f, ShipStats.Sloop, abilities: Loadouts.Pirate);
-        var behavior = new HunterBehavior(raider.Position, relentless: true);
-        raider.Behavior = behavior;
-        raider.Throttle = ShipMovement.ThrottleLevels;
-        var start = Vector2.Distance(raider.Position, near.Position);
 
-        // 110 tiles off: far beyond a guard's aggro, disengage, and leash ranges.
-        Assert.True(start > HunterBehavior.LeashRange * 2);
-        RunTicks(world, SimConstants.TickRate * 20);
-
-        Assert.Same(near, behavior.Target);
-        Assert.Equal(HunterState.Hunting, behavior.State);
-        Assert.True(Vector2.Distance(raider.Position, near.Position) < start - 60f, "the raider should have closed in");
+        Assert.Equal(BossHealth(1) * (1f + 3 * RunDirector.BossHealthPerExtraPlayer), BossHealth(4), 2);
     }
 
     [Fact]
-    public void Raider_SwitchesToWhicheverPlayerIsNearest()
+    public void Runs_AreReproducible_FromTheirSeed()
     {
-        var world = new World(new Vector2(256, 256)) { Wind = Vector2.Zero };
-        var a = world.SpawnShip(new Vector2(60, 128), 0f, ShipStats.Sloop, 1);
-        var b = world.SpawnShip(new Vector2(200, 128), 0f, ShipStats.Sloop, 2);
-        var raider = world.SpawnShip(new Vector2(110, 128), 0f, ShipStats.Sloop, abilities: Loadouts.Pirate);
-        var behavior = new HunterBehavior(raider.Position, relentless: true);
-        raider.Behavior = behavior;
+        static string Play(int seed)
+        {
+            var (world, _, fortresses) = CreateRun(players: 2, seed: seed);
+            Raze(world, fortresses.ToArray());
+            var offers = string.Join("|", world.Players.Values.SelectMany(p => p.CardOffers).Select(o => string.Join(",", o.Cards)));
+            ChooseAll(world);
+            RunTicks(world, RunDirector.BossWarningTicks + 1);
+            return $"{offers} @ {Boss(world)!.Position}";
+        }
 
-        world.Step();
-        Assert.Same(a, behavior.Target);
+        Assert.Equal(Play(5), Play(5));
+        Assert.NotEqual(Play(5), Play(6));
+    }
 
-        b.Position = new Vector2(115, 128); // b sails close
-        world.Step();
-        Assert.Same(b, behavior.Target);
+    [Fact]
+    public void Bosses_NeverSpawnOnOrAgainstLand()
+    {
+        // Players parked off every island of the real map in turn: the boss still finds open water.
+        foreach (var island in Archipelago.CreateIslands())
+        {
+            var world = Runs.CreateMap();
+            var director = new RunDirector(island.Id);
+            world.Director = director;
+            var player = world.SpawnShip(island.ShoreToward(Vector2.UnitY) + Vector2.UnitY * 6f, 0f, ShipStats.Sloop, PlayerId);
+            Invulnerable(player);
+            player.IsAnchored = true;
+            director.Restore(new RunStatus(FortressesTaken: 2, BossesSunk: 0, BossCountdownTicks: 1, BossAfloat: false));
+
+            world.Step();
+
+            var boss = Boss(world)!;
+            Assert.True(world.DistanceToLand(boss.Position) >= 4.9f, $"{island.Name}: spawned {world.DistanceToLand(boss.Position):0.0} from land");
+        }
     }
 }

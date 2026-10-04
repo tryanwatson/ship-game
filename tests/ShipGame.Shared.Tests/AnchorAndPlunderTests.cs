@@ -156,25 +156,22 @@ public class AnchorAndPlunderTests
         world.Step();
         Assert.Equal(Island.DefaultPlunderGold, Gold(world));
         Assert.Equal(10, Island.DefaultPlunderGold);
-        Assert.True(world.PlunderCooldownTicks(world.Islands[0]) > Plundering.CooldownTicks - 5);
+        Assert.True(world.IsPlundered(world.Islands[0]));
     }
 
     [Fact]
-    public void PlunderedIsland_YieldsNothingUntilItsCooldownEnds_ThenPaysAgain()
+    public void PlunderedIsland_NeverPaysAgain()
     {
         var (world, ship) = CreateWorld(new Vector2(37, 30), Isle());
         ship.IsAnchored = true;
         RunTicks(world, Plundering.DurationTicks + 1);
         Assert.Equal(10, Gold(world));
 
-        // Stay anchored: nothing during the cooldown...
-        RunTicks(world, Plundering.CooldownTicks - 10);
+        // Stay anchored as long as you like: it has nothing left to give.
+        RunTicks(world, Plundering.DurationTicks * 50);
         Assert.Equal(10, Gold(world));
         Assert.Equal(0f, Plundering.Progress(ship));
-
-        // ...then it's ripe again and a fresh plunder runs to completion.
-        RunTicks(world, 10 + Plundering.DurationTicks + 1);
-        Assert.Equal(20, Gold(world));
+        Assert.Null(Plundering.PlunderableFrom(world, ship.Position));
     }
 
     [Fact]
@@ -189,7 +186,7 @@ public class AnchorAndPlunderTests
 
         Assert.Equal(0, Gold(world));
         Assert.Equal(0f, Plundering.Progress(ship));
-        Assert.Equal(0, world.PlunderCooldownTicks(world.Islands[0]));
+        Assert.False(world.IsPlundered(world.Islands[0]));
     }
 
     [Fact]
@@ -204,7 +201,7 @@ public class AnchorAndPlunderTests
     }
 
     [Fact]
-    public void Cooldowns_ArePerIsland()
+    public void Plunders_ArePerIsland()
     {
         // Two islands side by side with the ship anchored between them, in range of both.
         var (world, ship) = CreateWorld(new Vector2(51, 30), Isle(1, 40f), Isle(2, 54f));
@@ -213,7 +210,7 @@ public class AnchorAndPlunderTests
         RunTicks(world, Plundering.DurationTicks * 2 + 4);
 
         Assert.Equal(20, Gold(world));
-        Assert.All(world.Islands, island => Assert.True(world.PlunderCooldownTicks(island) > 0));
+        Assert.All(world.Islands, island => Assert.True(world.IsPlundered(island)));
     }
 
     [Fact]
@@ -226,7 +223,7 @@ public class AnchorAndPlunderTests
 
         RunTicks(world, Plundering.DurationTicks * 2);
 
-        Assert.Equal(0, world.PlunderCooldownTicks(world.Islands[0]));
+        Assert.False(world.IsPlundered(world.Islands[0]));
     }
 
     [Fact]

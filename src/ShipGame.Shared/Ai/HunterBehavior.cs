@@ -25,7 +25,7 @@ public enum HunterState
 /// when the target is in either lane, a long gun or mortar aimed where the target will be. Steers by rudder, like a player on WASD. Leashed: if dragged too far
 /// from its patch (or, roaming, from where the chase began), or the target gets away, it sails back and carries on.
 ///
-/// A <see cref="Relentless"/> hunter (a raider) has no orders: it hunts from the moment it spawns, always going
+/// A <see cref="Relentless"/> hunter (a boss) has no orders: it hunts from the moment it spawns, always going
 /// after the nearest enemy wherever it is, and never gives up the chase.
 /// </summary>
 public sealed class HunterBehavior : INpcBehavior
@@ -106,8 +106,11 @@ public sealed class HunterBehavior : INpcBehavior
     private const float WaypointClearance = 4f;
     private const int WaypointAttempts = 24;
 
-    // Rovers set off for somewhere at least this far away, so they cover their sea rather than milling about.
+    // Rovers set off for somewhere at least this far away, so they cover their sea rather than milling about, but no
+    // further round their ring than this, so they keep to it.
     private const float MinRoamLeg = 30f;
+    private const float MaxRoamLeg = 70f;
+    private const float MaxRoamStep = MathF.PI / 3f;
 
     // A rover that broke off a chase is back on its way once it's this close to where the chase began.
     private const float RoamReturnArrival = 8f;
@@ -130,6 +133,11 @@ public sealed class HunterBehavior : INpcBehavior
 
     private readonly Random _rng;
 
+    // How fast it's been turning (radians per second, smoothed), for laying a broadside that fires after a wind-up.
+    private float? _lastHeading;
+    private float _turnRate;
+    private const float TurnRateSmoothing = 0.3f;
+
     // Where we're cruising to, until when we'll keep trying, and until when we're lying to.
     private Vector2? _waypoint;
     private long _waypointDeadline;
@@ -141,7 +149,7 @@ public sealed class HunterBehavior : INpcBehavior
     // Where the current (or last) chase began: a rover's leash runs from here.
     private Vector2 _chaseOrigin;
 
-    /// <param name="relentless">A raider: always chasing the nearest enemy, with no leash and no post to return to.</param>
+    /// <param name="relentless">Always chasing the nearest enemy, with no leash and no post to return to (a boss).</param>
     /// <param name="prey">Which enemies it will go after (by default, any); others it ignores, even when they're nearest.</param>
     public HunterBehavior(Vector2 home, bool relentless = false, Func<World, Ship, bool>? prey = null)
         : this(new GuardPost(home, 0f), prey: prey)
@@ -184,6 +192,10 @@ public sealed class HunterBehavior : INpcBehavior
 
     public void Update(World world, Ship ship)
     {
+        if (_lastHeading is { } last)
+            _turnRate += (Angles.Delta(last, ship.Heading) / SimConstants.TickDelta - _turnRate) * TurnRateSmoothing;
+        _lastHeading = ship.Heading;
+
         UpdateState(world, ship);
         ship.Stance = State switch
         {
@@ -385,7 +397,7 @@ public sealed class HunterBehavior : INpcBehavior
             var candidate = Orders switch
             {
                 GuardPost post => GuardWaypoint(ship, post, relaxed: attempt >= WaypointAttempts / 2),
-                RoamOrders roam => RoamWaypoint(world, roam),
+                RoamOrders roam => RoamWaypoint(world, ship, roam),
                 _ => ship.Position,
             };
             candidate = Vector2.Clamp(candidate, new Vector2(WaypointClearance), world.WorldSize - new Vector2(WaypointClearance));
@@ -424,11 +436,30 @@ public sealed class HunterBehavior : INpcBehavior
         return post.Center + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * radius;
     }
 
-    private Vector2 RoamWaypoint(World world, RoamOrders roam)
+    /// <summary>
+    /// A spot further round the ring, the way this pirate goes round, a leg of <see cref="MinRoamLeg"/> to
+    /// <see cref="MaxRoamLeg"/> on: short enough that the straight line there stays near the ring rather than cutting
+    /// across the waters inside it. Prefers points on the map (a ring can run off its edges).
+    /// </summary>
+    private Vector2 RoamWaypoint(World world, Ship ship, RoamOrders roam)
     {
-        var x = WaypointClearance + (float)_rng.NextDouble() * (world.WorldSize.X - 2f * WaypointClearance);
-        var y = roam.North + WaypointClearance + (float)_rng.NextDouble() * MathF.Max(0f, roam.South - roam.North - 2f * WaypointClearance);
-        return new Vector2(x, y);
+        var inner = roam.InnerRadius + WaypointClearance;
+        var outer = MathF.Max(inner, roam.OuterRadius - WaypointClearance);
+        var fromCenter = ship.Position - roam.Center;
+        var here = MathF.Atan2(fromCenter.Y, fromCenter.X);
+        var point = roam.Center;
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var radius = inner + (float)_rng.NextDouble() * (outer - inner);
+            var leg = MinRoamLeg + (float)_rng.NextDouble() * (MaxRoamLeg - MinRoamLeg);
+            var step = MathF.Min(leg / MathF.Max(radius, 1f), MaxRoamStep);
+            var angle = here + _roundDirection * step * (attempt < 4 ? 1 : -1);
+            point = roam.Center + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * radius;
+            if (point.X >= WaypointClearance && point.Y >= WaypointClearance
+                && point.X <= world.WorldSize.X - WaypointClearance && point.Y <= world.WorldSize.Y - WaypointClearance)
+                break;
+        }
+        return point;
     }
 
     // ---- Leash -------------------------------------------------------------------------------------------------
@@ -565,7 +596,7 @@ public sealed class HunterBehavior : INpcBehavior
 
         Steer(world, ship, desiredHeading);
 
-        Fire(world, ship, target, distance);
+        Fire(world, ship, target, distance, _turnRate);
     }
 
     /// <summary>
@@ -586,14 +617,14 @@ public sealed class HunterBehavior : INpcBehavior
         Orders is GuardPost { Watch: > 0f } post && Vector2.Distance(target.Position, post.Center) <= post.Watch;
 
     /// <summary>Fires every gun that's loaded and would land a shot on <paramref name="target"/> now.</summary>
-    private static void Fire(World world, Ship ship, Ship target, float distance)
+    private static void Fire(World world, Ship ship, Ship target, float distance, float turnRate)
     {
         for (var slot = 0; slot < Ship.AbilitySlotCount; slot++)
         {
             var ability = ship.Abilities[slot];
             Vector2? aim = ability?.Definition switch
             {
-                BroadsideVolley => BroadsideAim(world, ship, target, distance, ability),
+                BroadsideVolley => BroadsideAim(world, ship, target, distance, ability, turnRate),
                 LongGun when ability.IsReady => LongGunAim(world, ship, target),
                 Mortar when ability.IsReady => MortarAim(ship, target),
                 _ => null,
@@ -603,33 +634,53 @@ public sealed class HunterBehavior : INpcBehavior
         }
     }
 
-    /// <summary>Where to aim a broadside, if the target will be in a loaded side's lane when the balls get there.</summary>
-    private static Vector2? BroadsideAim(World world, Ship ship, Ship target, float distance, AbilityState broadside)
+    /// <summary>
+    /// Where to aim a broadside, if the target will be in a loaded side's lane when the balls get there. The guns go
+    /// off after a wind-up, so it judges the lane from where the ship will be by then, turning as it's been turning
+    /// (<paramref name="turnRate"/>): circling a target holds it abeam, where a straight-line guess would lose it astern.
+    /// </summary>
+    private static Vector2? BroadsideAim(World world, Ship ship, Ship target, float distance, AbilityState broadside, float turnRate)
     {
-        // Cannonballs carry the firing ship's motion, so what matters is the target's motion relative to us
-        // over the shot's flight time.
-        var flightSeconds = distance / BroadsideVolley.ProjectileSpeedFor(ship);
-        var predicted = target.Position + (target.Velocity - ship.Velocity) * flightSeconds;
+        var windup = (float)BroadsideVolley.WindupTicks(ship) / SimConstants.TickRate;
+        var flight = distance / BroadsideVolley.ProjectileSpeedFor(ship);
 
-        // Aim at the predicted position: the broadside fires whichever side that's on, if that side is loaded.
-        var side = BroadsideVolley.SideCovering(ship, predicted, target.Stats.Radius * AimTightness);
-        return side != BroadsideSide.None
-               && broadside.IsChannelReady(BroadsideVolley.ChannelOf(side))
-               && !Navigation.LineBlockedByLand(world, ship.Position, predicted)
+        // Where we'll be, and which way we'll face, when the guns go off.
+        var firingHeading = ship.Heading + turnRate * windup;
+        var midHeading = ship.Heading + turnRate * windup / 2f;
+        var firingPosition = ship.Position
+                             + (new Vector2(MathF.Cos(midHeading), MathF.Sin(midHeading)) * ship.Speed + ship.WindDrift) * windup;
+
+        // Cannonballs carry the firing ship's way, so over their flight what matters is the target's motion relative to it.
+        var firingVelocity = new Vector2(MathF.Cos(firingHeading), MathF.Sin(firingHeading)) * ship.Speed;
+        var predicted = target.Position + target.Velocity * (windup + flight) - firingVelocity * flight;
+
+        var side = BroadsideVolley.SideCovering(ship, firingPosition, firingHeading, predicted, target.Stats.Radius * AimTightness);
+        if (side == BroadsideSide.None
+            || !broadside.IsChannelReady(BroadsideVolley.ChannelOf(side))
+            || Navigation.LineBlockedByLand(world, firingPosition, predicted))
+            return null;
+        // Lay the guns on where the target will be. The cast picks the side from where we are now, so if we're
+        // turning hard enough to put that on the other beam, aim straight off the side that will fire instead.
+        return BroadsideVolley.SideToward(ship, predicted) == side
             ? predicted
-            : null;
+            : ship.Position + BroadsideVolley.FiringDirection(ship, side) * distance;
     }
 
-    /// <summary>Where to aim the long gun to meet the target, if that's in reach with no land in the way.</summary>
-    private static Vector2? LongGunAim(World world, Ship ship, Ship target)
+    /// <summary>
+    /// Where to aim the long gun to meet the target, if that's in reach with no land in the way (other than
+    /// <paramref name="ignoredIslandId"/>, which a fort fires over).
+    /// </summary>
+    internal static Vector2? LongGunAim(World world, Ship ship, Ship target, int? ignoredIslandId = null)
     {
-        // The ball doesn't carry our motion: lead the target by its own velocity over the flight time.
+        // The ball doesn't carry our motion: lead the target by its own velocity over the wind-up and the flight
+        // time. Held to its course, the target sails into the warning line; a turn or a check takes it out.
         var speed = LongGun.SpeedFor(ship);
+        var windupSeconds = (float)LongGun.WindupTicks(ship) / SimConstants.TickRate;
         var aim = target.Position;
         for (var i = 0; i < LeadIterations; i++)
-            aim = target.Position + target.Velocity * (Vector2.Distance(ship.Position, aim) / speed);
+            aim = target.Position + target.Velocity * (windupSeconds + Vector2.Distance(ship.Position, aim) / speed);
         return Vector2.Distance(ship.Position, aim) <= LongGun.RangeFor(ship)
-               && !Navigation.LineBlockedByLand(world, ship.Position, aim)
+               && !Navigation.LineBlockedByLand(world, ship.Position, aim, ignoredIslandId)
             ? aim
             : null;
     }
@@ -638,7 +689,7 @@ public sealed class HunterBehavior : INpcBehavior
     /// Where to drop a shell on the target, allowing for <see cref="MortarLead"/> of its motion, if that's in range
     /// (shells fly over land).
     /// </summary>
-    private static Vector2? MortarAim(Ship ship, Ship target)
+    internal static Vector2? MortarAim(Ship ship, Ship target)
     {
         var aim = target.Position;
         for (var i = 0; i < LeadIterations && MortarLead > 0f; i++)

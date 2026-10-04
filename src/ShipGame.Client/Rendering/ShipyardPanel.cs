@@ -48,6 +48,8 @@ public sealed class ShipyardPanel
     private const int ContractRowHeight = 64;
     private const int BadgeSize = 22;
     private const int PanelLeft = 24;
+    /// <summary>Trading is switched off for now: the menu doesn't offer contracts.</summary>
+    private static readonly bool TradeEnabled = false;
     private const float TitleScale = 3f;
     private const float LabelScale = 2f;
     private const float SmallScale = 1.5f;
@@ -176,17 +178,18 @@ public sealed class ShipyardPanel
 
         if (_page == Page.Choice)
         {
-            var height = headerHeight + ButtonHeight * 5 + Padding * 6 + (int)PixelFont.Height(SmallScale) + Padding;
+            var choices = TradeEnabled ? 5 : 4;
+            var height = headerHeight + ButtonHeight * choices + Padding * (choices + 1) + (int)PixelFont.Height(SmallScale) + Padding;
             panel = new Rectangle(x, (viewport.Height - height) / 2, PanelWidth, height);
             var y = panel.Y + headerHeight;
 
-            var cooldown = world.PlunderCooldownTicks(shipyard);
+            var plundered = world.IsPlundered(shipyard);
             var plundering = ship.PlunderIslandId == shipyard.Id;
             var plunderLabel = plundering ? "PLUNDERING..."
-                : cooldown > 0 ? $"PLUNDER  READY IN {(int)MathF.Ceiling(cooldown / (float)SimConstants.TickRate)}S"
+                : plundered ? "ALREADY PLUNDERED"
                 : $"PLUNDER  +{shipyard.PlunderGold} GOLD";
             buttons.Add(new Button(new Rectangle(panel.X + Padding, y, PanelWidth - Padding * 2, ButtonHeight), plunderLabel,
-                Enabled: !plundering && cooldown == 0, Command: new ChoosePlunderCommand(ship.OwnerPlayerId ?? 0)));
+                Enabled: !plundering && !plundered, Command: new ChoosePlunderCommand(ship.OwnerPlayerId ?? 0)));
 
             y += ButtonHeight + Padding;
             var repairCost = Shipyards.RepairCost(ship);
@@ -202,9 +205,12 @@ public sealed class ShipyardPanel
             buttons.Add(new Button(new Rectangle(panel.X + Padding, y, PanelWidth - Padding * 2, ButtonHeight), "WEAPONS AND SKILLS",
                 Enabled: true, GoTo: Page.Weapons));
 
-            y += ButtonHeight + Padding;
-            buttons.Add(new Button(new Rectangle(panel.X + Padding, y, PanelWidth - Padding * 2, ButtonHeight), "TRADE CONTRACTS",
-                Enabled: true, GoTo: Page.Contracts));
+            if (TradeEnabled)
+            {
+                y += ButtonHeight + Padding;
+                buttons.Add(new Button(new Rectangle(panel.X + Padding, y, PanelWidth - Padding * 2, ButtonHeight), "TRADE CONTRACTS",
+                    Enabled: true, GoTo: Page.Contracts));
+            }
             return buttons;
         }
 
