@@ -77,7 +77,6 @@ public class FriendlyFireTests
         Assert.DoesNotContain(other, world.Ships);
         Assert.Equal(KillRewards.Gold, world.Players[1].Gold);
         Assert.Equal(1, world.Players[1].Kills);
-        Assert.Equal(ShipStats.Sloop.MaxSpeed * (1f + KillRewards.SpeedBonus), shooter.Stats.MaxSpeed, 4);
         var sunk = Assert.Single(world.DrainEvents().OfType<ShipSunk>());
         Assert.Equal(shooter.Id, sunk.KillerShipId);
         Assert.True(world.Players[2].IsAwaitingRespawn); // the victim's teammate (the killer) is still afloat

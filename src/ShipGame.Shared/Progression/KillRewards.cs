@@ -1,31 +1,19 @@
 using ShipGame.Shared.Simulation;
-using ShipGame.Shared.Stats;
 
 namespace ShipGame.Shared.Progression;
 
-/// <summary>What a player earns for sinking an enemy ship.</summary>
+/// <summary>What a player earns for sinking an enemy ship: gold, more for higher levels. Nothing else.</summary>
 public static class KillRewards
 {
+    /// <summary>Gold for a level 1 kill; higher levels pay more (see <see cref="PirateLevels.KillGold"/>).</summary>
     public const int Gold = 5;
-    public const float SpeedBonus = 0.05f;
-    public const float CooldownSpeedBonus = 0.05f;
 
-    public const string Source = "kill-reward";
-
-    public static void Grant(World world, Ship killer)
+    public static void Grant(World world, Ship killer, Ship victim)
     {
         if (killer.OwnerPlayerId is not { } playerId)
             return; // NPC kills earn nothing
 
-        world.AddGold(playerId, Gold);
+        world.AddGold(playerId, PirateLevels.KillGold(victim.Level));
         world.GetOrAddPlayer(playerId).Kills++;
-
-        // Gold is the player's; the rest goes to the ship, and a ship that went down in the same exchange stays down.
-        if (killer.IsSunk)
-            return;
-
-        killer.AddModifier(new StatModifier(StatId.MaxSpeed, ModifierKind.Percent, SpeedBonus, Source));
-        killer.AddModifier(new StatModifier(StatId.CooldownSpeed, ModifierKind.Percent, CooldownSpeedBonus, Source));
-        killer.Health = killer.Stats.MaxHealth;
     }
 }

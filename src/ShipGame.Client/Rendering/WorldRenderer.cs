@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Xna.Framework;
 using ShipGame.Shared.Abilities;
-using ShipGame.Shared.Ai;
+using ShipGame.Shared.Maps;
 using ShipGame.Shared.Simulation;
 using NVector2 = System.Numerics.Vector2;
 
@@ -26,7 +26,6 @@ public sealed class WorldRenderer
     private static readonly Color Shoreline = new(120, 100, 60);
     private static readonly Color HutWallLit = new(170, 120, 70);
     private static readonly Color HutWallShade = new(120, 82, 48);
-    private static readonly Color AggroRing = new Color(230, 80, 60) * 0.35f;
     private static readonly Color MoveMarker = new Color(120, 255, 140) * 0.8f;
     private static readonly Color Cannonball = new(20, 20, 24);
     private static readonly Color Shadow = new Color(0, 0, 0) * 0.3f;
@@ -59,11 +58,21 @@ public sealed class WorldRenderer
     private static readonly Color HealthCrew = new(77, 208, 192);
     private static readonly Color HealthEnemy = new(210, 70, 60);
 
+    // Pirate levels: plain at or below the waters we're in, warmer the further above them.
+    private const float LevelScale = 1.5f;
+    private static readonly Color LevelBack = new Color(0, 0, 0) * 0.7f;
+    private static readonly Color LevelEven = new(235, 235, 240);
+    private static readonly Color LevelAbove = new(245, 175, 80);
+    private static readonly Color LevelFarAbove = new(245, 85, 70);
+    private static readonly Color FlagshipLabel = new(245, 205, 95);
+    private const float FlagshipBarScale = 2f;
+
     private readonly PrimitiveBatch _batch;
     private readonly SeaVisuals _sea;
     private readonly ShipVisuals _ships;
     private readonly IslandScenery _scenery;
     private readonly CombatVisuals _combat;
+    private readonly StormVisuals _storm;
     private readonly List<DrawItem> _drawItems = new();
     private readonly record struct DrawItem(NVector2 Position, Ship? Ship = null, float Heading = 0f,
         IslandScenery.Item? Scenery = null, CombatVisuals.Wreck? Wreck = null);
@@ -82,6 +91,7 @@ public sealed class WorldRenderer
         _ships = new ShipVisuals(batch);
         _scenery = new IslandScenery(batch);
         _combat = new CombatVisuals(batch);
+        _storm = new StormVisuals(batch);
     }
 
     public void Draw(World world, float alpha, int localPlayerId, Matrix view, AimPreview? aim = null)
@@ -107,13 +117,6 @@ public sealed class WorldRenderer
         }
 
         _combat.DrawGround();
-
-        // Guarding pirates show how close you can get before they come for you.
-        foreach (var ship in world.Ships)
-        {
-            if (ship.Stance == NpcStance.Guarding)
-                DrawGroundCircle(NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), HunterBehavior.AggroRange, AggroRing);
-        }
 
         foreach (var crate in world.Trade.Crates)
             DrawFloatingCrate(crate.Position);
@@ -195,9 +198,16 @@ public sealed class WorldRenderer
         _combat.DrawAir();
         _batch.Flush();
 
-        // Health bars float above everything, League-style.
+        if (world.Director is { } director)
+        {
+            _storm.Draw(world, director.StormY, view, time);
+            _batch.Flush();
+        }
+
+        // Health bars float above everything, League-style. Levels are judged against the waters we're in.
+        var localLevel = localShip is null ? 0 : Archipelago.LevelAt(localShip.Position);
         foreach (var ship in world.Ships)
-            DrawHealthBar(ship, NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), ship == localShip);
+            DrawHealthBar(ship, NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), ship == localShip, localLevel);
 
         _batch.Flush();
     }
@@ -381,10 +391,10 @@ public sealed class WorldRenderer
         DrawGroundCircle(position, 0.8f, AnchorRipple);
         const float half = 0.35f;
         const float height = 8f;
-        var top = IsoProjection.WorldToIso(position + new NVector2(-half, -half));
-        var right = IsoProjection.WorldToIso(position + new NVector2(half, -half));
-        var bottom = IsoProjection.WorldToIso(position + new NVector2(half, half));
-        var left = IsoProjection.WorldToIso(position + new NVector2(-half, half));
+        var top = IsoProjection.WorldToIso(position + IsoProjection.Grid(-half, -half));
+        var right = IsoProjection.WorldToIso(position + IsoProjection.Grid(half, -half));
+        var bottom = IsoProjection.WorldToIso(position + IsoProjection.Grid(half, half));
+        var left = IsoProjection.WorldToIso(position + IsoProjection.Grid(-half, half));
         var up = new Vector2(0, -height);
 
         Span<Vector2> face = stackalloc Vector2[4];
@@ -505,17 +515,43 @@ public sealed class WorldRenderer
         _batch.FillConvex(points, color);
     }
 
-    private void DrawHealthBar(Ship ship, NVector2 pos, bool isLocal)
+    private void DrawHealthBar(Ship ship, NVector2 pos, bool isLocal, int localLevel)
     {
-        var anchor = IsoProjection.WorldToIso(pos) - new Vector2(HealthBarWidth / 2f, ShipVisuals.HealthHeight);
+        var width = ship.IsBoss ? HealthBarWidth * FlagshipBarScale : HealthBarWidth;
+        var anchor = IsoProjection.WorldToIso(pos) - new Vector2(width / 2f, ShipVisuals.HealthHeight);
         var fraction = Math.Clamp(ship.Health / ship.Stats.MaxHealth, 0f, 1f);
 
-        FillRect(anchor, new Vector2(HealthBarWidth, HealthBarHeight), HealthBack);
-        FillRect(anchor + Vector2.One, new Vector2((HealthBarWidth - 2f) * fraction, HealthBarHeight - 2f),
+        FillRect(anchor, new Vector2(width, HealthBarHeight), HealthBack);
+        FillRect(anchor + Vector2.One, new Vector2((width - 2f) * fraction, HealthBarHeight - 2f),
             isLocal ? HealthOwn : ship.Team == Team.Players ? HealthCrew : HealthEnemy);
 
         if (ship.IsAnchored)
             DrawAnchorMark(anchor + new Vector2(-9f, HealthBarHeight / 2f));
+        if (ship.Level > 0)
+            DrawLevelBadge(ship.Level, anchor + new Vector2(width + 3f, HealthBarHeight / 2f), localLevel);
+        if (ship.IsBoss)
+        {
+            const string label = "PIRATE FLAGSHIP";
+            var labelWidth = PixelFont.Measure(label, LevelScale);
+            PixelFont.Draw(_batch, label, anchor + new Vector2((width - labelWidth) / 2f, -PixelFont.Height(LevelScale) - 5f),
+                LevelScale, FlagshipLabel);
+        }
+    }
+
+    /// <summary>
+    /// A ship's level in a dark box, its left edge at <paramref name="leftMiddle"/>: colored by how far it's above
+    /// <paramref name="localLevel"/> (the waters we're in), so outclassed foes stand out.
+    /// </summary>
+    private void DrawLevelBadge(int level, Vector2 leftMiddle, int localLevel)
+    {
+        var text = level.ToString();
+        var textWidth = PixelFont.Measure(text, LevelScale);
+        var textHeight = PixelFont.Height(LevelScale);
+        var topLeft = leftMiddle - new Vector2(0f, textHeight / 2f + 2f);
+        FillRect(topLeft, new Vector2(textWidth + 5f, textHeight + 4f), LevelBack);
+        var above = level - localLevel;
+        var color = localLevel == 0 || above <= 0 ? LevelEven : above == 1 ? LevelAbove : LevelFarAbove;
+        PixelFont.Draw(_batch, text, topLeft + new Vector2(2.5f, 2f), LevelScale, color);
     }
 
     /// <summary>The anchor line: from the bow down to a ripple a little ahead, where the anchor bit.</summary>

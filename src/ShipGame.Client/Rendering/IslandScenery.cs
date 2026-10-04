@@ -32,25 +32,27 @@ public sealed class IslandScenery
     private void Build(Island island)
     {
         var rng = new Random(island.Id * 7919);
-        var rocky = island.Name is "BRIMSTONE" or "GULL ROCK" or "SKERRY";
-        var dense = island.Name == "MANGROVE";
+        var rocky = island.Name is "BRIMSTONE" or "GULL ROCK" or "SKERRY" or "CINDER ISLE" or "GREY TOR" or "THE TEETH"
+            or "BONEYARD" or "IRONSIDE" or "WRECKERS REEF";
+        var dense = island.Name is "MANGROVE" or "SHIVER ISLE";
+        var dark = island.Name is "BRIMSTONE" or "CINDER ISLE" or "IRONSIDE";
         if (island.HasShipyard)
         {
             _items.Add(new Item(Kind.Boathouse, island.Center, 1f, island.Id));
-            _items.Add(new Item(Kind.Crate, island.Center + new NVector2(-1.25f, 0.25f), 1f, 0));
+            _items.Add(new Item(Kind.Crate, island.Center + IsoProjection.Grid(-1.25f, 0.25f), 1f, 0));
             var (shore, outward) = DockPose(island);
             var side = new NVector2(-outward.Y, outward.X);
             foreach (var along in new[] { 0.4f, 1.9f })
                 foreach (var sign in new[] { -1f, 1f })
                     _items.Add(new Item(Kind.DockPost, shore + outward * along + side * sign * 0.42f, 1f, 0));
         }
-        else if (island.Name == "OLD FORT")
-            _items.Add(new Item(Kind.Fort, island.Center, 1f, 0));
-        else if (island.Name == "WINDWARD")
+        else if (island.Name is "OLD FORT" or "THE CITADEL" or "DREAD HOLD")
+            _items.Add(new Item(Kind.Fort, island.Center, island.Name == "OLD FORT" ? 1f : 1.2f, 0));
+        else if (island.Name is "WINDWARD" or "LANTERN ROCK")
             _items.Add(new Item(Kind.Beacon, island.Center, 1f, 0));
         else if (rocky)
-            _items.Add(new Item(Kind.Rock, island.Center, island.Name == "BRIMSTONE" ? 2.2f : 1.6f, island.Name == "BRIMSTONE" ? 1 : 0));
-        else if (island.Name == "DEAD MANS REST")
+            _items.Add(new Item(Kind.Rock, island.Center, dark ? 2.2f : 1.6f, dark ? 1 : 0));
+        else if (island.Name is "DEAD MANS REST" or "GALLOWS KEY")
             _items.Add(new Item(Kind.Fort, island.Center, 0.65f, 1));
 
         var patches = new List<(NVector2 Position, float Size, Color Color)>();
@@ -80,7 +82,7 @@ public sealed class IslandScenery
                     if (NVector2.Dot(offset, outward) > 0.7f && MathF.Abs(NVector2.Dot(offset, across)) < 0.6f) continue;
                 }
                 var scale = 0.72f + (float)rng.NextDouble() * 0.45f;
-                _items.Add(new Item(kind, point, scale, rocky && island.Name == "BRIMSTONE" ? 1 : rng.Next(3)));
+                _items.Add(new Item(kind, point, scale, rocky && dark ? 1 : rng.Next(3)));
                 break;
             }
         }
@@ -125,7 +127,7 @@ public sealed class IslandScenery
         for (var i = 0; i < outline.Length; i++)
         {
             var middle = (outline[i] + outline[(i + 1) % outline.Length]) / 2f;
-            if (middle.X + middle.Y > depth) { depth = middle.X + middle.Y; shore = middle; }
+            if (middle.Y > depth) { depth = middle.Y; shore = middle; }
         }
         return (shore, NVector2.Normalize(shore - island.Center));
     }
@@ -221,12 +223,12 @@ public sealed class IslandScenery
         const float halfX = 0.8f, halfY = 0.62f, height = 22f;
         DrawBox(position, halfX, halfY, height, new Color(184, 137, 83), new Color(137, 94, 58), new Color(190, 144, 89));
         var up = new Vector2(0, -height);
-        var a = IsoProjection.WorldToIso(position + new NVector2(-halfX, -halfY)) + up;
-        var b = IsoProjection.WorldToIso(position + new NVector2(halfX, -halfY)) + up;
-        var c = IsoProjection.WorldToIso(position + new NVector2(halfX, halfY)) + up;
-        var d = IsoProjection.WorldToIso(position + new NVector2(-halfX, halfY)) + up;
-        var ridgeRear = IsoProjection.WorldToIso(position + new NVector2(-halfX, 0)) + up - new Vector2(0, 15);
-        var ridgeFront = IsoProjection.WorldToIso(position + new NVector2(halfX, 0)) + up - new Vector2(0, 15);
+        var a = IsoProjection.WorldToIso(position + IsoProjection.Grid(-halfX, -halfY)) + up;
+        var b = IsoProjection.WorldToIso(position + IsoProjection.Grid(halfX, -halfY)) + up;
+        var c = IsoProjection.WorldToIso(position + IsoProjection.Grid(halfX, halfY)) + up;
+        var d = IsoProjection.WorldToIso(position + IsoProjection.Grid(-halfX, halfY)) + up;
+        var ridgeRear = IsoProjection.WorldToIso(position + IsoProjection.Grid(-halfX, 0)) + up - new Vector2(0, 15);
+        var ridgeFront = IsoProjection.WorldToIso(position + IsoProjection.Grid(halfX, 0)) + up - new Vector2(0, 15);
         Span<Vector2> roof = stackalloc Vector2[] { a, b, ridgeFront, ridgeRear };
         _batch.FillConvex(roof, new Color(125, 59, 46));
         Span<Vector2> gable = stackalloc Vector2[] { b, c, ridgeFront };
@@ -250,9 +252,9 @@ public sealed class IslandScenery
         var half = 0.7f * scale;
         var height = 37f * scale;
         DrawBox(position, half, half, height, new Color(149, 151, 128), new Color(105, 121, 111), new Color(181, 179, 151));
-        var left = IsoProjection.WorldToIso(position + new NVector2(-half, half));
-        var front = IsoProjection.WorldToIso(position + new NVector2(half, half));
-        var right = IsoProjection.WorldToIso(position + new NVector2(half, -half));
+        var left = IsoProjection.WorldToIso(position + IsoProjection.Grid(-half, half));
+        var front = IsoProjection.WorldToIso(position + IsoProjection.Grid(half, half));
+        var right = IsoProjection.WorldToIso(position + IsoProjection.Grid(half, -half));
         for (var i = 1; i < 5; i++)
         {
             var up = new Vector2(0, -height * i / 5);
@@ -262,7 +264,7 @@ public sealed class IslandScenery
         DrawWallOpening(left, front, 0.55f, 0.2f, 17f * scale, 0);
         DrawWallOpening(front, right, 0.4f, 0.09f, 9f * scale, height * 0.55f);
         foreach (var offset in new[] { new NVector2(-half, -half), new NVector2(half, -half), new NVector2(half, half), new NVector2(-half, half) })
-            DrawBox(position + offset, 0.17f * scale, 0.17f * scale, (variant == 1 ? 3 : 8) * scale,
+            DrawBox(position + IsoProjection.Grid(offset.X, offset.Y), 0.17f * scale, 0.17f * scale, (variant == 1 ? 3 : 8) * scale,
                 new Color(155, 156, 131), new Color(106, 124, 111), new Color(193, 190, 157), height);
     }
 
@@ -281,10 +283,10 @@ public sealed class IslandScenery
     private void DrawBox(NVector2 position, float halfX, float halfY, float height, Color light, Color shade, Color top, float baseHeight = 0f)
     {
         var raised = new Vector2(0, baseHeight);
-        var a = IsoProjection.WorldToIso(position + new NVector2(-halfX, -halfY)) - raised;
-        var b = IsoProjection.WorldToIso(position + new NVector2(halfX, -halfY)) - raised;
-        var c = IsoProjection.WorldToIso(position + new NVector2(halfX, halfY)) - raised;
-        var d = IsoProjection.WorldToIso(position + new NVector2(-halfX, halfY)) - raised;
+        var a = IsoProjection.WorldToIso(position + IsoProjection.Grid(-halfX, -halfY)) - raised;
+        var b = IsoProjection.WorldToIso(position + IsoProjection.Grid(halfX, -halfY)) - raised;
+        var c = IsoProjection.WorldToIso(position + IsoProjection.Grid(halfX, halfY)) - raised;
+        var d = IsoProjection.WorldToIso(position + IsoProjection.Grid(-halfX, halfY)) - raised;
         var up = new Vector2(0, -height);
         Span<Vector2> face = stackalloc Vector2[] { d, c, c + up, d + up };
         _batch.FillConvex(face, light);

@@ -3,13 +3,13 @@ using System.Numerics;
 namespace ShipGame.Shared.Simulation;
 
 /// <summary>
-/// Map bearings. North is "up" on screen, which in the Y-down world plane under the isometric projection is
-/// (-1, -1); east is screen-right, (1, -1). So south-west, for example, is world +Y.
+/// Map bearings. North is "up" on screen, which is world -Y (the plane is Y-down, like the screen); east is
+/// screen-right, world +X. So south-west, for example, is (-1, 1) normalized.
 /// </summary>
 public static class Compass
 {
-    private static readonly Vector2 North = Vector2.Normalize(new Vector2(-1f, -1f));
-    private static readonly Vector2 East = Vector2.Normalize(new Vector2(1f, -1f));
+    private static readonly Vector2 North = new(0f, -1f);
+    private static readonly Vector2 East = new(1f, 0f);
 
     public const float SouthWest = 225f;
 

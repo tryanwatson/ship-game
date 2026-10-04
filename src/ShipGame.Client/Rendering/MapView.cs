@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using ShipGame.Shared.Maps;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Trading;
 using NVector2 = System.Numerics.Vector2;
@@ -12,9 +13,10 @@ namespace ShipGame.Client.Rendering;
 public sealed record RoutePreview(Island Origin, IReadOnlyList<TradeContract> Offers, int? HighlightedContractId);
 
 /// <summary>
-/// The full map (M). Drawn in the same isometric diamond as the game view, so directions on the map match what you
-/// see at sea. Only what your team has discovered is filled in: discovered water is blue and discovered islands
-/// appear (shipyards marked); everything else is blank parchment. The map's border is always drawn. Your ship is
+/// The full map (M): the whole run of seas from south to north, drawn through the same projection as the game view,
+/// so directions on the map match what you see at sea. Only what your team has discovered is filled in: discovered
+/// water is blue and discovered islands appear (shipyards marked); everything else is blank parchment. The map's
+/// border, the boundaries between seas (named, with their levels), and the storm are always drawn. Your ship is
 /// an arrow along its heading; teammates are dots. Where the cargo in your hold is bound is always marked, and while
 /// choosing a trade contract the map is drawn in an inset beside the panel with each offer's route on it.
 /// </summary>
@@ -37,6 +39,9 @@ public sealed class MapView
     private static readonly Color Crew = new(120, 230, 140);
     private static readonly Color Title = new(240, 220, 160);
     private static readonly Color Hint = new(190, 190, 200);
+    private static readonly Color SeaLine = new Color(70, 50, 30) * 0.6f;
+    private static readonly Color SeaName = new(226, 210, 160);
+    private static readonly Color Storm = new Color(20, 24, 40) * 0.7f;
 
     private readonly PrimitiveBatch _batch;
 
@@ -91,6 +96,13 @@ public sealed class MapView
             if (world.Discovery.IsDiscovered(team, island))
                 DrawIsland(island);
         }
+        foreach (var sea in Archipelago.Seas)
+        {
+            if (sea.South < size.Y)
+                _batch.Line(IsoProjection.WorldToIso(new NVector2(0, sea.South)), IsoProjection.WorldToIso(new NVector2(size.X, sea.South)), SeaLine);
+        }
+        if (world.Director is { } director && director.StormY < size.Y)
+            FillWorldRect(new NVector2(0, MathF.Max(0f, director.StormY)), size, Storm);
         DrawWorldOutline(size);
         _batch.Flush();
 
@@ -109,6 +121,8 @@ public sealed class MapView
         // Trade on top: destinations are charted whether or not the island has been discovered yet.
         _batch.Begin(hud.Transform);
         Vector2 ToHud(NVector2 point) => Vector2.Transform(IsoProjection.WorldToIso(point), toHud);
+        if (area is null)
+            DrawSeaNames(size, ToHud);
         if (routes is { } preview)
             DrawRoutes(world, preview, ToHud);
         if (localShip is not null)
@@ -118,6 +132,17 @@ public sealed class MapView
                 DrawHoldLegend(world, localShip, frame);
         }
         _batch.Flush();
+    }
+
+    /// <summary>Each sea's name and level, beside the map's eastern edge, level with the middle of the sea.</summary>
+    private void DrawSeaNames(NVector2 size, Func<NVector2, Vector2> toHud)
+    {
+        const float scale = 1.5f;
+        foreach (var sea in Archipelago.Seas)
+        {
+            var at = toHud(new NVector2(size.X, (sea.North + sea.South) / 2f)) + new Vector2(10f, -PixelFont.Height(scale) / 2f);
+            PixelFont.Draw(_batch, $"{sea.Name} {sea.Level}", at, scale, SeaName);
+        }
     }
 
     /// <summary>A line from the trading post to each offer's destination, lettered and colored to match the panel.</summary>
@@ -233,6 +258,18 @@ public sealed class MapView
             Span<Vector2> roof = stackalloc Vector2[] { c + new Vector2(0, -90), c + new Vector2(80, 10), c + new Vector2(-80, 10) };
             _batch.FillConvex(roof, Hut);
         }
+    }
+
+    private void FillWorldRect(NVector2 min, NVector2 max, Color color)
+    {
+        Span<Vector2> corners = stackalloc Vector2[]
+        {
+            IsoProjection.WorldToIso(min),
+            IsoProjection.WorldToIso(new NVector2(max.X, min.Y)),
+            IsoProjection.WorldToIso(max),
+            IsoProjection.WorldToIso(new NVector2(min.X, max.Y)),
+        };
+        _batch.FillConvex(corners, color);
     }
 
     private void DrawWorldOutline(NVector2 size)

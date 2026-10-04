@@ -36,13 +36,14 @@ public class IslandTests
     }
 
     [Fact]
-    public void MapIslands_AreBetween30And100Tiles_AndLeaveTheStartClear()
+    public void MapIslands_AreBetween30And100Tiles_AndLeaveTheStartAndFlagshipClear()
     {
         var islands = Archipelago.CreateIslands();
 
         Assert.NotEmpty(islands);
         Assert.All(islands, island => Assert.InRange(island.Area, 30f, 100f));
-        Assert.All(islands, island => Assert.True(island.DistanceTo(Archipelago.Size / 2f) > 15f));
+        Assert.All(islands, island => Assert.True(island.DistanceTo(Archipelago.Start) > 15f));
+        Assert.All(islands, island => Assert.True(island.DistanceTo(Archipelago.BossPosition) > 8f));
         Assert.All(islands, island =>
         {
             Assert.InRange(island.Center.X - island.BoundingRadius, 0f, Archipelago.Size.X);
@@ -57,7 +58,7 @@ public class IslandTests
     {
         var island = Block();
         var world = CreateWorld(island);
-        var ship = world.SpawnShip(new Vector2(20, 30), 0f, ShipStats.Sloop, PlayerId);
+        var ship = world.SpawnShip(new Vector2(20, 30), 0f, ShipStats.Sloop with { HealthRegen = 0f }, PlayerId);
         ship.Throttle = ShipMovement.ThrottleLevels;
         ship.Speed = ship.CruiseSpeed;
 
@@ -74,7 +75,7 @@ public class IslandTests
     public void HardImpact_DealsTenPercentOfStartingHealth_Once()
     {
         var world = CreateWorld(Block());
-        var ship = world.SpawnShip(new Vector2(20, 30), 0f, ShipStats.Sloop, PlayerId);
+        var ship = world.SpawnShip(new Vector2(20, 30), 0f, ShipStats.Sloop with { HealthRegen = 0f }, PlayerId);
         ship.Throttle = ShipMovement.ThrottleLevels;
         ship.Speed = ship.CruiseSpeed;
 
@@ -117,7 +118,7 @@ public class IslandTests
     {
         // 30 degrees into the shore at full sail: hard enough to hurt, and the bow stays angled in as it scrapes.
         var world = CreateWorld(Block());
-        var ship = world.SpawnShip(new Vector2(34, 36.5f), -MathF.PI / 6f, ShipStats.Sloop, PlayerId);
+        var ship = world.SpawnShip(new Vector2(34, 36.5f), -MathF.PI / 6f, ShipStats.Sloop with { HealthRegen = 0f }, PlayerId);
         ship.Throttle = ShipMovement.ThrottleLevels;
         ship.Speed = ship.CruiseSpeed;
 
@@ -156,25 +157,30 @@ public class IslandTests
     }
 
     [Fact]
-    public void Pirates_NeverSpawnOnOrAgainstLand()
+    public void BountyHunters_NeverSpawnOnOrAgainstLand()
     {
-        for (var seed = 0; seed < 15; seed++)
+        foreach (var sea in Archipelago.Seas.SkipLast(1)) // the storm never reaches the last sea
         {
-            var waves = new WaveDirector(seed);
-            var world = new World(Archipelago.Size) { Waves = waves };
-            foreach (var island in Archipelago.CreateIslands())
-                world.AddIsland(island);
-            world.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, PlayerId).IsAnchored = true;
-
-            for (var wave = 1; wave <= 4; wave++)
+            for (var seed = 0; seed < 5; seed++)
             {
-                while (waves.Wave < wave)
+                var world = Runs.CreateMap();
+                var director = new RunDirector(seed, world.WorldSize);
+                world.Director = director;
+                var at = new Vector2(48f, (sea.North + sea.South) / 2f);
+                var player = world.SpawnShip(at, 0f, ShipStats.Sloop, PlayerId);
+                player.AddModifier(new Stats.StatModifier(Stats.StatId.MaxHealth, Stats.ModifierKind.Flat, 1_000_000f, "test"));
+                player.IsAnchored = true;
+                director.Restore(new RunStatus(StormY: at.Y - 40f, TicksUntilStorm: 0, Hunters: 0));
+
+                // Checked where each one appears, before it sails anywhere.
+                var seen = new HashSet<int>();
+                for (var i = 0; i < RunDirector.FirstHunterTicks + RunDirector.HunterIntervalTicks * 2; i++)
+                {
                     world.Step();
-                foreach (var pirate in world.Ships.Where(s => s.Team == Team.Pirates))
-                    Assert.True(world.DistanceToLand(pirate.Position) >= 3.9f, $"seed {seed} wave {wave}: spawned {world.DistanceToLand(pirate.Position)} from land");
-                foreach (var pirate in world.Ships.Where(s => s.Team == Team.Pirates).ToList())
-                    pirate.Health = 0f;
-                world.Step();
+                    foreach (var hunter in world.Ships.Where(RunDirector.IsHunter).Where(h => seen.Add(h.Id)))
+                        Assert.True(world.DistanceToLand(hunter.Position) >= 3.9f, $"{sea.Name} seed {seed}: spawned {world.DistanceToLand(hunter.Position)} from land");
+                }
+                Assert.True(seen.Count == 3, $"{sea.Name} seed {seed}: {seen.Count} hunters");
             }
         }
     }

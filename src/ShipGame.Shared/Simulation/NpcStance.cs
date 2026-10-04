@@ -9,8 +9,8 @@ public enum NpcStance
     /// <summary>Not an NPC, or one with nothing to show.</summary>
     None,
 
-    /// <summary>Waiting at its post; will engage anything that comes close.</summary>
-    Guarding,
+    /// <summary>Going about its business (patrolling, roaming, holding station); will engage anything that comes close.</summary>
+    Patrolling,
 
     /// <summary>After someone.</summary>
     Hunting,

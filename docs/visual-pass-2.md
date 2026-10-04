@@ -55,3 +55,7 @@ The follow-up checks cover both branches and every capstone for Broadside, Long 
 Previews: [cluster footprint](visual-pass-2/cluster-shell-preview.png), [bombardment landing zones](visual-pass-2/bombardment-preview.png), [cluster flight warnings](visual-pass-2/upgraded-cluster-flight.png), [cluster impacts](visual-pass-2/cluster-shell-impact.png), [bombardment impacts](visual-pass-2/bombardment-impact.png), [piercing long gun](visual-pass-2/piercing-shot-preview.png), [rifled long gun](visual-pass-2/rangefinder-preview.png).
 
 Six new integration cases compare predicted mortar landing points with actual launch events across both upgraded branches, two ship headings, and out-of-range aim points. The solution now passes 242 simulation tests and 124 networking tests (366 total). The rendering harness also verified upgraded muzzle counts, weapon dispatch from different keys, all three bombardment impacts, and the primary blast plus four cluster impacts.
+
+## Cargo rotation fix
+
+The stern cargo crate now uses the ship's forward and sideways axes for all four corners, so its body and strap turn with the hull. Visible side faces are selected after rotation. Verified through the actual renderer at [eight ship headings](visual-pass-2/cargo-headings.png).

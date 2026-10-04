@@ -24,6 +24,9 @@ public sealed record AnchorKeyCommand(int PlayerId, bool Pressed) : Command(Play
 /// <summary>At a shipyard: plunder the island instead of trading (shipyards don't plunder unless asked).</summary>
 public sealed record ChoosePlunderCommand(int PlayerId) : Command(PlayerId);
 
+/// <summary>At a shipyard: pay to repair the hull to full health (see <c>Shipyards.RepairCost</c>).</summary>
+public sealed record PurchaseRepairCommand(int PlayerId) : Command(PlayerId);
+
 /// <summary>At a shipyard: buy the next level of an upgrade from <c>UpgradeCatalog</c>.</summary>
 public sealed record PurchaseUpgradeCommand(int PlayerId, string UpgradeId) : Command(PlayerId);
 

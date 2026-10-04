@@ -26,7 +26,19 @@ public static class Contracts
     public const float CapitalReturn = 0.25f;
 
     /// <summary>Gold per unit of cargo per tile between the two islands.</summary>
-    public const float PayPerUnitTile = 0.04f;
+    public const float PayPerUnitTile = 0.025f;
+
+    /// <summary>Hauling pay rises by this share for each level of the destination's waters past the first.</summary>
+    public const float DangerPremiumPerLevel = 0.25f;
+
+    /// <summary>Trading posts only offer runs to islands within this many tiles.</summary>
+    public const float MaxRouteDistance = 300f;
+
+    /// <summary>
+    /// Nor to islands more than this far south of the post: behind the crew is where the storm is. Islands abreast of
+    /// it are fine.
+    /// </summary>
+    public const float MaxSouthward = 30f;
 
     /// <summary>How close (tiles from ship center to shore) a ship must anchor off the destination to deliver.</summary>
     public const float DeliveryRange = Plundering.Range;
@@ -46,9 +58,13 @@ public static class Contracts
     /// <summary>Distance a contract is paid for: straight between the two islands' centers.</summary>
     public static float RouteDistance(Island from, Island to) => Vector2.Distance(from.Center, to.Center);
 
-    /// <summary>The original payout for a contract on these terms: more capital, more cargo, and more distance all pay more.</summary>
-    public static int PayoutFor(int cost, int cargoUnits, float distance) =>
-        RoundGold(cost * (1.0 + CapitalReturn) + cargoUnits * distance * PayPerUnitTile);
+    /// <summary>
+    /// The original payout for a contract on these terms: more capital, more cargo, more distance, and more dangerous
+    /// waters at the far end (<paramref name="destinationLevel"/>) all pay more.
+    /// </summary>
+    public static int PayoutFor(int cost, int cargoUnits, float distance, int destinationLevel = 1) =>
+        RoundGold(cost * (1.0 + CapitalReturn)
+            + cargoUnits * distance * PayPerUnitTile * (1.0 + DangerPremiumPerLevel * Math.Max(0, destinationLevel - 1)));
 
     /// <summary>Original payout × (remaining cargo / original cargo).</summary>
     public static int PayoutFor(TradeContract contract, int remainingUnits) =>
@@ -78,13 +94,16 @@ public static class Contracts
     }
 
     /// <summary>
-    /// A fresh contract from <paramref name="origin"/> to some other island, preferring destinations the post isn't
-    /// already offering so each one on the board is a different route. Null if there's nowhere to go.
+    /// A fresh contract from <paramref name="origin"/> to some other island within reach and not back south, preferring
+    /// destinations the post isn't already offering so each one on the board is a different route. Null if there's
+    /// nowhere to go.
     /// </summary>
     private static TradeContract? CreateContract(World world, Island origin, IReadOnlyList<TradeContract> alongside)
     {
         var rng = world.Trade.Rng;
-        var destinations = world.Islands.Where(i => i.Id != origin.Id).ToList();
+        var destinations = world.Islands.Where(i => i.Id != origin.Id
+            && RouteDistance(origin, i) <= MaxRouteDistance
+            && i.Center.Y - origin.Center.Y <= MaxSouthward).ToList();
         if (destinations.Count == 0)
             return null;
         var unused = destinations.Where(i => alongside.All(c => c.DestinationIslandId != i.Id)).ToList();
@@ -93,7 +112,7 @@ public static class Contracts
 
         var cost = MinCost + CostStep * rng.Next((MaxCost - MinCost) / CostStep + 1);
         var units = rng.Next(MinCargoUnits, MaxCargoUnits + 1);
-        var payout = PayoutFor(cost, units, RouteDistance(origin, destination));
+        var payout = PayoutFor(cost, units, RouteDistance(origin, destination), destination.Level);
         return new TradeContract(world.Trade.NextContractId(), origin.Id, destination.Id, cost, payout, units);
     }
 

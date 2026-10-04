@@ -100,22 +100,30 @@ public sealed class ShipVisuals
         // Laden ships carry a strapped crate on the stern deck, behind the mast and sail.
         if (ship.Cargo.Count > 0)
         {
-            var at = position - forward * length * 0.28f;
+            var along = -length * 0.28f;
             var half = beam * 0.2f;
-            var rear = IsoProjection.WorldToIso(at + new NVector2(-half, -half)) - new Vector2(0, DeckHeight);
-            var right = IsoProjection.WorldToIso(at + new NVector2(half, -half)) - new Vector2(0, DeckHeight);
-            var front = IsoProjection.WorldToIso(at + new NVector2(half, half)) - new Vector2(0, DeckHeight);
-            var left = IsoProjection.WorldToIso(at + new NVector2(-half, half)) - new Vector2(0, DeckHeight);
+            Span<Vector2> corners = stackalloc Vector2[]
+            {
+                Deck(along - half, -half), Deck(along + half, -half),
+                Deck(along + half, half), Deck(along - half, half),
+            };
             var up = new Vector2(0, -5);
-            face[0] = left; face[1] = front; face[2] = front + up; face[3] = left + up;
-            _batch.FillConvex(face, new Color(176, 125, 56));
-            face[0] = front; face[1] = right; face[2] = right + up; face[3] = front + up;
-            _batch.FillConvex(face, new Color(131, 85, 40));
-            face[0] = rear + up; face[1] = right + up; face[2] = front + up; face[3] = left + up;
+            for (var i = 0; i < corners.Length; i++)
+            {
+                var next = (i + 1) % corners.Length;
+                if (corners[next].X >= corners[i].X)
+                    continue;
+                face[0] = corners[i]; face[1] = corners[next];
+                face[2] = corners[next] + up; face[3] = corners[i] + up;
+                _batch.FillConvex(face, corners[next].Y > corners[i].Y
+                    ? new Color(131, 85, 40) : new Color(176, 125, 56));
+            }
+            for (var i = 0; i < corners.Length; i++)
+                face[i] = corners[i] + up;
             _batch.FillConvex(face, TradeMarkers.Cargo);
             for (var i = 0; i < face.Length; i++)
                 _batch.Stroke(face[i], face[(i + 1) % face.Length], 1f, Timber);
-            _batch.Stroke(rear + up, front + up, 1.3f, Timber);
+            _batch.Stroke(corners[0] + up, corners[2] + up, 1.3f, Timber);
         }
 
         var mastBase = Deck(0, 0);

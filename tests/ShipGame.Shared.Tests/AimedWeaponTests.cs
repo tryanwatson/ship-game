@@ -66,7 +66,7 @@ public class AimedWeaponTests
     public void LongGun_HitsTheFirstShipInItsPath_Only()
     {
         var (world, ship) = CreateWorld();
-        var near = world.SpawnShip(ship.Position + new Vector2(6, 0), MathF.PI / 2f, ShipStats.Sloop);
+        var near = world.SpawnShip(ship.Position + new Vector2(6, 0), MathF.PI / 2f, ShipStats.Sloop with { HealthRegen = 0f });
         var far = world.SpawnShip(ship.Position + new Vector2(11, 0), MathF.PI / 2f, ShipStats.Sloop);
 
         Cast(world, AbilitySlot.Two, far.Position);
@@ -94,8 +94,8 @@ public class AimedWeaponTests
     {
         var (world, ship) = CreateWorld();
         var aim = ship.Position + new Vector2(15, 0);
-        var a = world.SpawnShip(aim + new Vector2(1, 0), 0f, ShipStats.Sloop);
-        var b = world.SpawnShip(aim + new Vector2(-1, 1), MathF.PI / 2f, ShipStats.Sloop);
+        var a = world.SpawnShip(aim + new Vector2(1, 0), 0f, ShipStats.Sloop with { HealthRegen = 0f });
+        var b = world.SpawnShip(aim + new Vector2(-1, 1), MathF.PI / 2f, ShipStats.Sloop with { HealthRegen = 0f });
         var clear = world.SpawnShip(aim + new Vector2(0, 6), 0f, ShipStats.Sloop);
         foreach (var s in new[] { a, b, clear })
             s.IsAnchored = true;

@@ -14,13 +14,13 @@ public sealed class Discovery
     public const float CellSize = 4f;
 
     // Sight is exactly what a player sees at the camera's maximum zoom-out on the reference window (2560 x 1440 iso
-    // units: 1280 x 720 at zoom 0.5, see the client's Camera), centred on the ship. With 64 x 32 iso tiles, screen x
-    // is (dx - dy) * 32 and screen y is (dx + dy) * 16, so the half-extents in world terms are:
-    /// <summary>Half the sight extent along screen-x, as |dx - dy| in tiles (1280 / 32).</summary>
-    public const float SightHalfAcross = 40f;
+    // units: 1280 x 720 at zoom 0.5, see the client's Camera), centred on the ship. One tile spans 32 * sqrt 2 iso
+    // units across the screen and 16 * sqrt 2 up it, so the half-extents in tiles are:
+    /// <summary>Half the sight extent across the screen (east-west), in tiles: 1280 / (32 sqrt 2).</summary>
+    public const float SightHalfAcross = 28.28f;
 
-    /// <summary>Half the sight extent along screen-y, as |dx + dy| in tiles (720 / 16).</summary>
-    public const float SightHalfUpDown = 45f;
+    /// <summary>Half the sight extent up the screen (north-south), in tiles: 720 / (16 sqrt 2).</summary>
+    public const float SightHalfUpDown = 31.82f;
 
     private readonly Dictionary<Team, BitArray> _discovered = new();
 
@@ -38,7 +38,7 @@ public sealed class Discovery
 
     /// <summary>Whether a point offset (dx, dy) tiles from a ship is within its sight.</summary>
     public static bool SightContains(Vector2 offset) =>
-        MathF.Abs(offset.X - offset.Y) <= SightHalfAcross && MathF.Abs(offset.X + offset.Y) <= SightHalfUpDown;
+        MathF.Abs(offset.X) <= SightHalfAcross && MathF.Abs(offset.Y) <= SightHalfUpDown;
 
     public int CellIndex(int column, int row) => row * Columns + column;
 
@@ -85,7 +85,7 @@ public sealed class Discovery
         var revealed = new List<int>();
         var bits = BitsFor(team);
 
-        // Sight is a rotated rectangle; scan its bounding box and test each cell center.
+        // Scan sight's bounding box and test each cell center.
         var reach = MathF.Max(SightHalfAcross, SightHalfUpDown);
         var minColumn = Math.Max(0, (int)MathF.Floor((viewer.X - reach) / CellSize));
         var maxColumn = Math.Min(Columns - 1, (int)MathF.Floor((viewer.X + reach) / CellSize));

@@ -51,7 +51,8 @@ public class SkillTreeTests
     }
 
     /// <summary>A pirate lying side-on (facing +X) at <paramref name="position"/>, as a target.</summary>
-    private static Ship Target(World world, Vector2 position) => world.SpawnShip(position, 0f, ShipStats.Sloop);
+    // No regeneration, so its health shows exactly what hit it.
+    private static Ship Target(World world, Vector2 position) => world.SpawnShip(position, 0f, ShipStats.Sloop with { HealthRegen = 0f });
 
     private static void StepUntil(World world, Func<bool> done, int maxTicks = 300)
     {

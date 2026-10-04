@@ -27,6 +27,7 @@ public class WireTests
         new object[] { new PurchaseContractCommand(9, 123) },
         new object[] { new UnlockAbilityCommand(9, "mortar") },
         new object[] { new PurchaseSkillCommand(9, "heavy-volley") },
+        new object[] { new PurchaseRepairCommand(9) },
     };
 
     [Theory]
@@ -72,11 +73,12 @@ public class WireTests
         new object[] { new GoldChanged(10, 2, 35, -15) },
         new object[] { new IslandPlundered(10, 4, 2, 10, 1800) },
         new object[] { new UpgradePurchased(10, 3, "agility", 2) },
-        new object[] { new WaveStarted(10, 3, 5) },
+        new object[] { new ShipHidden(10, 77) },
         new object[] { new CommandRejected(10, 2, new PurchaseUpgradeCommand(2, "speed"), RejectionReason.NotEnoughGold) },
         new object[] { new PlayerSunk(10, 2, 300) },
         new object[] { new PlayerRespawned(10, 2, 55) },
         new object[] { new RunEnded(10) },
+        new object[] { new RunEnded(10, Victory: true) },
         new object[] { new ContractsOffered(10, 1, new[] { Contract, Contract with { Id = 32, DestinationIslandId = 9 } }) },
         new object[] { new ContractPurchased(10, 3, 2, Contract) },
         new object[] { new ContractDelivered(10, 3, 2, 31, 60) },
@@ -129,10 +131,10 @@ public class WireTests
     public void ShipInfo_RoundTrips()
     {
         var info = new ShipInfo(
-            123, 7, 2, Team.Players, ShipStats.Sloop with { WeaponRange = 1.3f, CargoCapacity = 16f },
+            123, 7, 2, Team.Players, ShipStats.Sloop with { WeaponRange = 1.3f, CargoCapacity = 16f, HealthRegen = 1.5f },
             new[] { "broadside", null, "long-gun", "mortar" },
             new[] { new StatModifier(StatId.MaxHealth, ModifierKind.Flat, 20, "upgrade:hull") },
-            new Vector2(96, 90), 1.25f, new[] { "heavy-volley", "point-blank" });
+            new Vector2(96, 90), 1.25f, new[] { "heavy-volley", "point-blank" }, Level: 6, IsBoss: true);
         var writer = new NetDataWriter();
         writer.PutShipInfo(info);
 
@@ -146,6 +148,7 @@ public class WireTests
         Assert.Equal(info.Modifiers, read.Modifiers);
         Assert.Equal((info.Position, info.Heading), (read.Position, read.Heading));
         Assert.Equal(info.SkillIds, read.SkillIds);
+        Assert.Equal((6, true), (read.Level, read.IsBoss));
     }
 
     [Fact]
@@ -162,8 +165,9 @@ public class WireTests
         world.AddGold(1, 25);
         var snapshot = Snapshot.Capture(world);
         snapshot.CommandAcks.Add((1, 4_000_000_000u));
-        snapshot.Waves = new ShipGame.Shared.Progression.WaveStatus(
-            Wave: 3, TicksUntilNextWave: 150, WavePiratesLeft: 2, NextWaveSize: 5, Raid: 4, TicksUntilNextRaid: 1234, RaidersLeft: 3, NextRaidSize: 5);
+        snapshot.Run = new ShipGame.Shared.Progression.RunStatus(StormY: 812.25f, TicksUntilStorm: 0, Hunters: 3);
+        snapshot.RunOver = true;
+        snapshot.Victory = true;
 
         var (header, ships) = RoundTrip(snapshot, out var chunks);
         Assert.True(chunks > 1);
@@ -181,7 +185,8 @@ public class WireTests
         Assert.Equal(-1, ships[0].Throttle); // rowing astern
         Assert.Equal(4_000_000_000u, header.AckFor(1));
         Assert.Equal(0u, header.AckFor(2));
-        Assert.Equal(snapshot.Waves, header.Waves); // the HUD's wave and raid forecast
+        Assert.Equal(snapshot.Run, header.Run); // the HUD's storm and raid forecast
+        Assert.True(header.RunOver && header.Victory);
     }
 
     [Fact]

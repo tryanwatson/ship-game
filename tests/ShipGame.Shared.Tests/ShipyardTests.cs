@@ -12,9 +12,11 @@ public class ShipyardTests
 {
     private const int PlayerId = 1;
 
-    // An 8x8 island spanning x 40..48, y 26..34; the ship anchors 3 tiles off its west shore.
+    // An 8x8 island spanning x 40..48, y 26..34; the ship anchors 3 tiles off its west shore. Far enough north that its
+    // shipyard stocks every level of everything.
     private static Island Isle(bool shipyard) =>
-        new(1, new[] { new Vector2(40, 26), new Vector2(48, 26), new Vector2(48, 34), new Vector2(40, 34) }, hasShipyard: shipyard);
+        new(1, new[] { new Vector2(40, 26), new Vector2(48, 26), new Vector2(48, 34), new Vector2(40, 34) }, hasShipyard: shipyard,
+            level: 10);
 
     private static (World world, Ship ship) Docked(bool shipyard = true, int gold = 1000, bool anchored = true)
     {
@@ -130,7 +132,7 @@ public class ShipyardTests
     public void Catalog_HasTheRequestedUpgrades()
     {
         var ids = UpgradeCatalog.All.Select(u => u.Id).ToList();
-        Assert.Equal(new[] { "hull", "speed", "reload", "damage", "shot-speed", "range", "agility" }, ids);
+        Assert.Equal(new[] { "hull", "repairs", "speed", "reload", "damage", "shot-speed", "range", "agility" }, ids);
         Assert.Equal(ids.Count, ids.Distinct().Count());
     }
 
@@ -162,9 +164,44 @@ public class ShipyardTests
     }
 
     [Fact]
+    public void Repair_RestoresFullHealth_ForGoldByTheDamage()
+    {
+        var (world, ship) = Docked(gold: 100);
+        ship.Health = 40f;
+        var cost = Shipyards.RepairCost(ship);
+        Assert.Equal((int)MathF.Ceiling(60f * Shipyards.RepairGoldPerHealth), cost);
+
+        world.Enqueue(new PurchaseRepairCommand(PlayerId));
+        world.Step();
+
+        Assert.Equal(ship.Stats.MaxHealth, ship.Health);
+        Assert.Equal(100 - cost, Gold(world));
+        Assert.Empty(world.DrainEvents().OfType<CommandRejected>());
+    }
+
+    [Theory]
+    [InlineData(100f, 1000, true, RejectionReason.NothingToRepair)]
+    [InlineData(10f, 2, true, RejectionReason.NotEnoughGold)]
+    [InlineData(10f, 1000, false, RejectionReason.NotAtShipyard)]
+    public void Repair_IsRefused_WhenItCantOrNeedntHappen(float health, int gold, bool anchored, RejectionReason expected)
+    {
+        var (world, ship) = Docked(gold: gold, anchored: anchored);
+        ship.Health = health;
+        world.DrainEvents();
+
+        world.Enqueue(new PurchaseRepairCommand(PlayerId));
+        world.Step();
+
+        Assert.Equal(expected, Assert.Single(world.DrainEvents().OfType<CommandRejected>()).Reason);
+        Assert.Equal(gold, Gold(world));
+        Assert.True(ship.Health < health + 1f, "no repair beyond a moment's regeneration");
+    }
+
+    [Fact]
     public void HullUpgrade_AddsFlatMaxHp_AndTheSameToCurrentHealth()
     {
         var (world, ship) = Docked();
+        ship.AddModifier(new Stats.StatModifier(Stats.StatId.HealthRegen, Stats.ModifierKind.Flat, -ShipStats.Sloop.HealthRegen, "test")); // health shows only the upgrade
         ship.Health = 60f;
 
         Buy(world, "hull");

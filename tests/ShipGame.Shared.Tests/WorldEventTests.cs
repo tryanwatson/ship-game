@@ -149,17 +149,21 @@ public class WorldEventTests
     }
 
     [Fact]
-    public void Waves_AnnounceThemselvesAndTheirPirates()
+    public void Hunters_MeltingIntoTheStorm_AreAnnounced()
     {
-        var world = new World(new Vector2(192, 192)) { Waves = new WaveDirector(1) };
-        world.SpawnShip(new Vector2(96, 96), 0f, ShipStats.Sloop, PlayerId).IsAnchored = true;
+        var world = new World(new Vector2(96, 900));
+        var director = new RunDirector(1, world.WorldSize);
+        world.Director = director;
+        world.SpawnShip(new Vector2(48, 100), 0f, ShipStats.Sloop, PlayerId).IsAnchored = true;
+        director.Restore(new RunStatus(StormY: 500f, TicksUntilStorm: 0, Hunters: 0));
+        var hunter = world.SpawnShip(new Vector2(48, 480), 0f, ShipStats.Sloop); // out of the storm
+        hunter.Behavior = new Ai.HunterBehavior(hunter.Position, relentless: true);
         world.DrainEvents();
 
-        var events = StepAndDrain(world, (int)(WaveDirector.FirstWaveDelaySeconds * SimConstants.TickRate) + 1);
+        world.Step();
 
-        var wave = Assert.Single(events.OfType<WaveStarted>());
-        Assert.Equal((1, WaveDirector.FirstWaveSize), (wave.Wave, wave.Pirates));
-        Assert.Equal(WaveDirector.FirstWaveSize, events.OfType<ShipSpawned>().Count());
+        Assert.Equal(hunter.Id, Assert.Single(world.DrainEvents().OfType<ShipHidden>()).ShipId);
+        Assert.Null(world.FindShip(hunter.Id));
     }
 
     [Theory]
@@ -249,9 +253,9 @@ public class WorldEventTests
         world.Step();
         Assert.Equal((HunterState.Returning, NpcStance.Returning), (hunter.State, pirate.Stance));
 
-        for (var t = 0; t < SimConstants.TickRate * 20 && hunter.State != HunterState.Guarding; t++)
+        for (var t = 0; t < SimConstants.TickRate * 20 && hunter.State != HunterState.Patrolling; t++)
             world.Step();
-        Assert.Equal((HunterState.Guarding, NpcStance.Guarding), (hunter.State, pirate.Stance));
+        Assert.Equal((HunterState.Patrolling, NpcStance.Patrolling), (hunter.State, pirate.Stance));
         Assert.Equal(NpcStance.None, player.Stance);
     }
 }

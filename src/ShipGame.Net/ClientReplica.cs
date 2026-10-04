@@ -58,7 +58,7 @@ public sealed class ClientReplica
 
     public ClientReplica()
     {
-        World = CreateWorld(Archipelago.Size, Vector2.Zero);
+        World = CreateWorld(Vector2.Zero);
     }
 
     /// <summary>Whose ship to predict; 0 for none.</summary>
@@ -90,7 +90,7 @@ public sealed class ClientReplica
     /// <summary>A new run: start from an empty world on the shared map.</summary>
     public void Reset(RunStart start)
     {
-        World = CreateWorld(start.WorldSize, start.Wind);
+        World = CreateWorld(start.Wind);
         World.FriendlyFire = start.FriendlyFire;
         World.SetTick(start.Tick);
         _snapshots.Clear();
@@ -131,6 +131,8 @@ public sealed class ClientReplica
                 ship.SetAbility((AbilitySlot)i, abilities[i]);
         }
 
+        ship.Level = info.Level;
+        ship.IsBoss = info.IsBoss;
         ship.ReplaceSkills((info.SkillIds ?? Array.Empty<string>()).Select(SkillTrees.Find).OfType<SkillDefinition>());
         var health = ship.Health;
         ship.ReplaceModifiers(info.Modifiers);
@@ -249,6 +251,9 @@ public sealed class ClientReplica
                 case ShipSunk sunk:
                     World.RemoveShip(sunk.ShipId);
                     break;
+                case ShipHidden hidden:
+                    World.RemoveShip(hidden.ShipId);
+                    break;
                 case ProjectileSpawned spawned:
                     _projectiles[spawned.ProjectileId] = spawned;
                     if (OwnShotOffset(spawned.OwnerShipId, spawned.Position) is { } offset)
@@ -289,8 +294,8 @@ public sealed class ClientReplica
                 case AreaDiscovered discovered:
                     World.Discovery.Reveal(discovered.Team, discovered.Cells);
                     break;
-                case RunEnded:
-                    World.EndRun();
+                case RunEnded ended:
+                    World.EndRun(ended.Victory);
                     break;
                 case ContractsOffered offered:
                     World.Trade.SetOffers(offered.IslandId, offered.Offers);
@@ -353,9 +358,9 @@ public sealed class ClientReplica
     private void ApplyHeader(Snapshot snapshot)
     {
         World.Wind = snapshot.Wind;
-        World.Waves?.Restore(snapshot.Waves);
+        World.Director?.Restore(snapshot.Run);
         if (snapshot.RunOver)
-            World.EndRun();
+            World.EndRun(snapshot.Victory);
 
         foreach (var p in snapshot.Players)
         {
@@ -435,12 +440,12 @@ public sealed class ClientReplica
         return drawnOrigin - origin;
     }
 
-    private static World CreateWorld(Vector2 size, Vector2 wind)
+    private static World CreateWorld(Vector2 wind)
     {
-        // A WaveDirector here only holds the server's counters for display; this world never steps.
-        var world = new World(size) { Wind = wind, Waves = new WaveDirector(seed: 0) };
-        foreach (var island in Archipelago.CreateIslands())
-            world.AddIsland(island);
+        // A RunDirector here only holds the server's counters for display; this world never steps.
+        var world = Runs.CreateMap();
+        world.Wind = wind;
+        world.Director = new RunDirector(seed: 0, world.WorldSize);
         return world;
     }
 }

@@ -97,11 +97,47 @@ public sealed class Ship
         Health = Math.Clamp(Health + MathF.Max(0f, gained), 0f, Stats.MaxHealth);
     }
 
+    /// <summary>
+    /// How dangerous a pirate is (see <see cref="Progression.PirateLevels"/>); 0 for player ships, which have no level.
+    /// Shown beside the health bar. Change through <see cref="Progression.PirateLevels.Apply"/> in game code.
+    /// </summary>
+    public int Level
+    {
+        get => _level;
+        set
+        {
+            if (_level == value)
+                return;
+            _level = value;
+            StatsVersion++;
+        }
+    }
+
+    private int _level;
+
+    /// <summary>The flagship waiting at the far north: sinking it wins the run.</summary>
+    public bool IsBoss
+    {
+        get => _isBoss;
+        set
+        {
+            if (_isBoss == value)
+                return;
+            _isBoss = value;
+            StatsVersion++;
+        }
+    }
+
+    private bool _isBoss;
+
     /// <summary>Whether the hull was against a shore last tick. Grounding only hurts on first contact.</summary>
     public bool IsAground { get; set; }
 
     /// <summary>Id of the ship that last damaged this one, for kill credit.</summary>
     public int? LastHitByShipId { get; set; }
+
+    /// <summary>The tick a weapon last damaged this ship (see <see cref="LastHitByShipId"/> for whose); null if never.</summary>
+    public long? LastHitTick { get; set; }
 
     /// <summary>Ships only damage, and NPCs only hunt, ships of other teams.</summary>
     public Team Team { get; set; }

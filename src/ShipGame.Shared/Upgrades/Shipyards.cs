@@ -10,6 +10,7 @@ public enum PurchaseResult
     NotAtShipyard,
     UnknownUpgrade,
     MaxLevel,
+    NotStockedHere,
     NotEnoughGold,
 }
 
@@ -41,9 +42,16 @@ public static class Shipyards
 
     public static int Level(Ship ship, UpgradeDefinition upgrade) => ship.ModifierCount(upgrade.Source);
 
+    /// <summary>Levels of every upgrade the southernmost shipyards stock; each level of the waters adds one more.</summary>
+    public const int BaseStockedLevels = 2;
+
+    /// <summary>How many levels of <paramref name="upgrade"/> a shipyard on <paramref name="port"/> sells: more the further north.</summary>
+    public static int StockedLevels(Island port, UpgradeDefinition upgrade) =>
+        Math.Min(upgrade.MaxLevel, BaseStockedLevels + port.Level);
+
     public static PurchaseResult TryPurchase(World world, Ship ship, string upgradeId)
     {
-        if (ship.OwnerPlayerId is not { } playerId || DockedAt(world, ship) is null)
+        if (ship.OwnerPlayerId is not { } playerId || DockedAt(world, ship) is not { } port)
             return PurchaseResult.NotAtShipyard;
 
         var upgrade = UpgradeCatalog.Find(upgradeId);
@@ -53,6 +61,8 @@ public static class Shipyards
         var level = Level(ship, upgrade);
         if (level >= upgrade.MaxLevel)
             return PurchaseResult.MaxLevel;
+        if (level >= StockedLevels(port, upgrade))
+            return PurchaseResult.NotStockedHere;
 
         var player = world.GetOrAddPlayer(playerId);
         var cost = upgrade.CostAt(level);
@@ -130,6 +140,32 @@ public static class Shipyards
         return null;
     }
 
+    /// <summary>Gold per point of health a shipyard repair puts back.</summary>
+    public const float RepairGoldPerHealth = 0.2f;
+
+    /// <summary>What it costs to repair <paramref name="ship"/> to full health: by the damage, at least 1 gold if there's any.</summary>
+    public static int RepairCost(Ship ship)
+    {
+        var missing = ship.Stats.MaxHealth - ship.Health;
+        return missing <= 0f ? 0 : Math.Max(1, (int)MathF.Ceiling(missing * RepairGoldPerHealth - 1e-3f));
+    }
+
+    /// <summary>Repairs the hull to full health, for <see cref="RepairCost"/>. A one-off service, not an upgrade. Null on success.</summary>
+    public static RejectionReason? TryRepair(World world, Ship ship)
+    {
+        if (ship.OwnerPlayerId is not { } playerId || DockedAt(world, ship) is null)
+            return RejectionReason.NotAtShipyard;
+        var cost = RepairCost(ship);
+        if (cost == 0)
+            return RejectionReason.NothingToRepair;
+        if (world.GetOrAddPlayer(playerId).Gold < cost)
+            return RejectionReason.NotEnoughGold;
+
+        world.AddGold(playerId, -cost);
+        ship.Health = ship.Stats.MaxHealth;
+        return null;
+    }
+
     /// <summary>Asks to plunder the shipyard we're anchored at (shipyards don't plunder unless asked). Null on success.</summary>
     public static RejectionReason? TryChoosePlunder(World world, Ship ship)
     {
@@ -148,6 +184,7 @@ public static class Shipyards
         PurchaseResult.NotAtShipyard => RejectionReason.NotAtShipyard,
         PurchaseResult.UnknownUpgrade => RejectionReason.UnknownUpgrade,
         PurchaseResult.MaxLevel => RejectionReason.MaxLevel,
+        PurchaseResult.NotStockedHere => RejectionReason.NotStockedHere,
         _ => RejectionReason.NotEnoughGold,
     };
 }

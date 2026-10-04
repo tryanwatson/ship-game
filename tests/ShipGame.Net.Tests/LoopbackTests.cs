@@ -4,6 +4,7 @@ using ShipGame.Net;
 using ShipGame.Server;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Upgrades;
@@ -441,20 +442,35 @@ public sealed class LoopbackTests : IDisposable
     }
 
     [Fact]
-    public void Waves_AppearOnClients()
+    public void Pirates_AppearOnClients_OnlyNearAPlayer_AndGoWhenLeftBehind()
     {
         var (a, _) = StartTwoPlayerRun();
+        var world = _server.World!;
 
-        PumpUntil(() => a.Replica.World.Ships.Any(s => s.Team == Team.Pirates), "the first wave to show up", timeoutSeconds: 15);
+        // The whole map's pirates are at sea from the start, but none is near the start line, so none is sent.
+        PumpFor(0.5);
+        Assert.Contains(world.Ships, s => s.Team == Team.Pirates);
+        Assert.DoesNotContain(a.Replica.World.Ships, s => s.Team == Team.Pirates);
 
-        Assert.Equal(1, a.Replica.World.Waves!.Wave);
-        // The forecast comes along: this wave's pirates left, the next wave's size, and the countdown to the first raid.
-        PumpUntil(() => a.Replica.World.Waves!.WavePiratesLeft == _server.World!.Waves!.WavePiratesLeft, "the forecast to catch up");
-        var forecast = a.Replica.World.Waves!.Status;
-        Assert.True(forecast.WavePiratesLeft > 0);
-        Assert.Equal(_server.World!.Waves!.NextWaveSize, forecast.NextWaveSize);
-        Assert.InRange(forecast.TicksUntilNextRaid, 1, WaveDirector.RaidIntervalTicks);
-        Assert.All(a.Replica.World.Ships.Where(s => s.Team == Team.Pirates), p => Assert.Equal(NpcStance.Guarding, p.Stance));
+        // Sail a's ship (by fiat) up beside a camp: its guards come into view, with their levels.
+        var camp = Archipelago.Camps[0];
+        var ship = world.GetPlayerShip(a.LocalPlayerId)!;
+        ship.Position = ship.PreviousPosition = camp.Position + new Vector2(0f, Relevance.EnterRange - 10f);
+        PumpUntil(() => a.Replica.World.Ships.Any(s => s.Team == Team.Pirates), "the camp to show up");
+        var seen = a.Replica.World.Ships.First(s => s.Team == Team.Pirates);
+        Assert.Equal(world.FindShip(seen.Id)!.Level, seen.Level);
+        Assert.Equal(camp.Level, seen.Level);
+        Assert.True(a.Replica.World.Ships.Count(s => s.Team == Team.Pirates) < world.Ships.Count(s => s.Team == Team.Pirates));
+        Assert.All(a.Replica.World.Ships.Where(s => s.Team == Team.Pirates), p => Assert.Equal(NpcStance.Patrolling, p.Stance));
+
+        // The forecast comes along too.
+        Assert.Equal(world.Director!.StormY, a.Replica.World.Director!.StormY, 1);
+        Assert.InRange(a.Replica.World.Director!.TicksUntilStorm, 1, (int)(RunDirector.StormDelaySeconds * SimConstants.TickRate));
+
+        // Back to the start: the camp is hidden again (though still afloat on the server).
+        ship.Position = ship.PreviousPosition = Archipelago.Start;
+        PumpUntil(() => !a.Replica.World.Ships.Any(s => s.Team == Team.Pirates), "the camp to be hidden");
+        Assert.NotNull(world.FindShip(seen.Id));
     }
 
     [Fact]

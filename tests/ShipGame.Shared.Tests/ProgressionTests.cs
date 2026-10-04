@@ -3,6 +3,7 @@ using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Stats;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Tests;
 
@@ -72,31 +73,50 @@ public class ProgressionTests
     }
 
     [Fact]
-    public void Kill_GrantsGoldFullHealAndBonuses()
+    public void Kill_GrantsGold_AndNothingElse()
     {
         var (world, player) = CreateWorld();
         player.Health = 30f;
+        var statsBefore = player.Stats;
 
         SinkEnemy(world, player);
 
         Assert.Equal(KillRewards.Gold, world.Players[PlayerId].Gold);
         Assert.Equal(1, world.Players[PlayerId].Kills);
-        Assert.Equal(player.Stats.MaxHealth, player.Health);
-        Assert.Equal(ShipStats.Sloop.MaxSpeed * 1.05f, player.Stats.MaxSpeed, 4);
-        Assert.Equal(1.05f, player.Stats.CooldownSpeed, 4);
+        Assert.Equal(statsBefore, player.Stats);              // no permanent bonus
+        Assert.InRange(player.Health, 30f, 31f);              // and no heal, beyond a moment's regeneration
     }
 
     [Fact]
-    public void KillBonuses_StackAdditively()
+    public void Ships_RegenerateHealthEverySecond_UpToTheirMaximum()
     {
         var (world, player) = CreateWorld();
+        player.Health = 50f;
 
-        for (var i = 0; i < 3; i++)
-            SinkEnemy(world, player);
+        for (var i = 0; i < SimConstants.TickRate * 4; i++)
+            world.Step();
+        Assert.Equal(50f + 4 * ShipStats.Sloop.HealthRegen, player.Health, 2);
 
-        Assert.Equal(3 * KillRewards.Gold, world.Players[PlayerId].Gold);
-        Assert.Equal(ShipStats.Sloop.MaxSpeed * 1.15f, player.Stats.MaxSpeed, 4);
-        Assert.Equal(1.15f, player.Stats.CooldownSpeed, 4);
+        player.Health = player.Stats.MaxHealth - 0.01f;
+        world.Step();
+        world.Step();
+        Assert.Equal(player.Stats.MaxHealth, player.Health);
+    }
+
+    [Fact]
+    public void RepairsUpgrade_RaisesRegeneration()
+    {
+        var (world, player) = CreateWorld();
+        var repairs = UpgradeCatalog.Find("repairs")!;
+        player.AddModifier(repairs.Modifier);
+        player.AddModifier(repairs.Modifier);
+        player.Health = 50f;
+
+        for (var i = 0; i < SimConstants.TickRate; i++)
+            world.Step();
+
+        Assert.Equal(ShipStats.Sloop.HealthRegen + 2 * repairs.ValuePerLevel, player.Stats.HealthRegen, 4);
+        Assert.Equal(50f + player.Stats.HealthRegen, player.Health, 2);
     }
 
     [Fact]

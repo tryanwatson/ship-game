@@ -65,6 +65,7 @@ public static class Wire
         PurchaseContract = 9,
         UnlockAbility = 10,
         PurchaseSkill = 11,
+        PurchaseRepair = 12,
     }
 
     public static void PutCommand(this NetDataWriter w, Command command)
@@ -110,6 +111,9 @@ public static class Wire
                 w.Put((byte)CommandTag.UnlockAbility);
                 w.Put(unlock.AbilityId);
                 break;
+            case PurchaseRepairCommand:
+                w.Put((byte)CommandTag.PurchaseRepair);
+                break;
             case PurchaseSkillCommand skill:
                 w.Put((byte)CommandTag.PurchaseSkill);
                 w.Put(skill.SkillId);
@@ -133,6 +137,7 @@ public static class Wire
         CommandTag.PurchaseContract => new PurchaseContractCommand(playerId, r.GetInt()),
         CommandTag.UnlockAbility => new UnlockAbilityCommand(playerId, r.GetString(64)),
         CommandTag.PurchaseSkill => new PurchaseSkillCommand(playerId, r.GetString(64)),
+        CommandTag.PurchaseRepair => new PurchaseRepairCommand(playerId),
         var tag => throw new InvalidDataException($"Unknown command tag {tag}."),
     };
 
@@ -149,7 +154,6 @@ public static class Wire
         GoldChanged = 7,
         IslandPlundered = 8,
         UpgradePurchased = 9,
-        WaveStarted = 10,
         CommandRejected = 11,
         PlayerSunk = 12,
         PlayerRespawned = 13,
@@ -165,6 +169,7 @@ public static class Wire
         CargoLost = 23,
         AbilityUnlocked = 24,
         SkillPurchased = 25,
+        ShipHidden = 26,
     }
 
     public static void PutEvent(this NetDataWriter w, WorldEvent e)
@@ -221,8 +226,8 @@ public static class Wire
             case SkillPurchased x:
                 Begin(w, EventTag.SkillPurchased, x); w.Put(x.ShipId); w.Put(x.SkillId);
                 break;
-            case WaveStarted x:
-                Begin(w, EventTag.WaveStarted, x); w.Put(x.Wave); w.Put(x.Pirates);
+            case ShipHidden x:
+                Begin(w, EventTag.ShipHidden, x); w.Put(x.ShipId);
                 break;
             case CommandRejected x:
                 Begin(w, EventTag.CommandRejected, x); w.Put(x.PlayerId); w.PutCommand(x.Command); w.Put((byte)x.Reason);
@@ -234,7 +239,7 @@ public static class Wire
                 Begin(w, EventTag.PlayerRespawned, x); w.Put(x.PlayerId); w.Put(x.ShipId);
                 break;
             case RunEnded x:
-                Begin(w, EventTag.RunEnded, x);
+                Begin(w, EventTag.RunEnded, x); w.Put(x.Victory);
                 break;
             case ContractsOffered x:
                 Begin(w, EventTag.ContractsOffered, x);
@@ -300,7 +305,7 @@ public static class Wire
             case EventTag.UpgradePurchased: return new UpgradePurchased(tick, r.GetInt(), r.GetString(64), r.GetInt());
             case EventTag.AbilityUnlocked: return new AbilityUnlocked(tick, r.GetInt(), r.GetString(64), (AbilitySlot)r.GetByte());
             case EventTag.SkillPurchased: return new SkillPurchased(tick, r.GetInt(), r.GetString(64));
-            case EventTag.WaveStarted: return new WaveStarted(tick, r.GetInt(), r.GetInt());
+            case EventTag.ShipHidden: return new ShipHidden(tick, r.GetInt());
             case EventTag.CommandRejected:
             {
                 var playerId = r.GetInt();
@@ -309,7 +314,7 @@ public static class Wire
             }
             case EventTag.PlayerSunk: return new PlayerSunk(tick, r.GetInt(), r.GetInt());
             case EventTag.PlayerRespawned: return new PlayerRespawned(tick, r.GetInt(), r.GetInt());
-            case EventTag.RunEnded: return new RunEnded(tick);
+            case EventTag.RunEnded: return new RunEnded(tick, r.GetBool());
             case EventTag.ContractsOffered:
             {
                 var islandId = r.GetInt();
@@ -395,6 +400,8 @@ public static class Wire
         w.Put((byte)skills.Count);
         foreach (var id in skills)
             w.Put(id);
+        w.Put((byte)Math.Clamp(info.Level, 0, byte.MaxValue));
+        w.Put(info.IsBoss);
     }
 
     public static ShipInfo GetShipInfo(this NetDataReader r)
@@ -421,7 +428,9 @@ public static class Wire
         var skills = new List<string>(skillCount);
         for (var i = 0; i < skillCount; i++)
             skills.Add(r.GetString(64));
-        return new ShipInfo(tick, shipId, owner, team, stats, abilities, modifiers, position, heading, skills);
+        var level = r.GetByte();
+        var isBoss = r.GetBool();
+        return new ShipInfo(tick, shipId, owner, team, stats, abilities, modifiers, position, heading, skills, level, isBoss);
     }
 
     private static void PutStats(NetDataWriter w, ShipStats s)
@@ -429,7 +438,7 @@ public static class Wire
         foreach (var value in new[]
                  {
                      s.MaxSpeed, s.Acceleration, s.CoastTimeConstant, s.MinDeceleration, s.MinTurnRadius, s.TurnRadiusAtMaxSpeed,
-                     s.Radius, s.Length, s.Beam, s.MaxHealth, s.CooldownSpeed, s.WeaponDamage, s.ProjectileSpeed, s.WeaponRange, s.CargoCapacity,
+                     s.Radius, s.Length, s.Beam, s.MaxHealth, s.CooldownSpeed, s.WeaponDamage, s.ProjectileSpeed, s.WeaponRange, s.CargoCapacity, s.HealthRegen,
                  })
             w.Put(value);
     }
@@ -438,28 +447,24 @@ public static class Wire
         MaxSpeed: r.GetFloat(), Acceleration: r.GetFloat(), CoastTimeConstant: r.GetFloat(), MinDeceleration: r.GetFloat(),
         MinTurnRadius: r.GetFloat(), TurnRadiusAtMaxSpeed: r.GetFloat(), Radius: r.GetFloat(), Length: r.GetFloat(),
         Beam: r.GetFloat(), MaxHealth: r.GetFloat(), CooldownSpeed: r.GetFloat(), WeaponDamage: r.GetFloat(),
-        ProjectileSpeed: r.GetFloat(), WeaponRange: r.GetFloat(), CargoCapacity: r.GetFloat());
+        ProjectileSpeed: r.GetFloat(), WeaponRange: r.GetFloat(), CargoCapacity: r.GetFloat(), HealthRegen: r.GetFloat());
 
     // ---- Snapshots (chunked: each chunk is one unreliable packet) ---------------------------------------
 
     /// <summary>
     /// Splits a snapshot into packets of at most <paramref name="maxBytes"/>, as many ships to a packet as fit. The
-    /// first chunk also carries the world-level header (players, command acks, waves, island cooldowns).
+    /// first chunk also carries the world-level header (players, command acks, storm and hunters, island cooldowns).
     /// </summary>
     public static List<NetDataWriter> WriteSnapshotChunks(Snapshot snapshot, int maxBytes = Protocol.MaxSnapshotChunkBytes)
     {
         var header = new NetDataWriter();
         header.Put(snapshot.Wind);
-        var waves = snapshot.Waves;
-        header.Put(waves.Wave);
-        header.Put(waves.TicksUntilNextWave);
-        header.Put((ushort)Math.Clamp(waves.WavePiratesLeft, 0, ushort.MaxValue));
-        header.Put((ushort)Math.Clamp(waves.NextWaveSize, 0, ushort.MaxValue));
-        header.Put(waves.Raid);
-        header.Put(waves.TicksUntilNextRaid);
-        header.Put((ushort)Math.Clamp(waves.RaidersLeft, 0, ushort.MaxValue));
-        header.Put((ushort)Math.Clamp(waves.NextRaidSize, 0, ushort.MaxValue));
+        var run = snapshot.Run;
+        header.Put(run.StormY);
+        header.Put(run.TicksUntilStorm);
+        header.Put((ushort)Math.Clamp(run.Hunters, 0, ushort.MaxValue));
         header.Put(snapshot.RunOver);
+        header.Put(snapshot.Victory);
         header.Put((byte)snapshot.Players.Count);
         foreach (var p in snapshot.Players)
         {
@@ -529,10 +534,9 @@ public static class Wire
         if (index == 0)
         {
             snapshot.Wind = r.GetVector2();
-            snapshot.Waves = new WaveStatus(
-                Wave: r.GetInt(), TicksUntilNextWave: r.GetInt(), WavePiratesLeft: r.GetUShort(), NextWaveSize: r.GetUShort(),
-                Raid: r.GetInt(), TicksUntilNextRaid: r.GetInt(), RaidersLeft: r.GetUShort(), NextRaidSize: r.GetUShort());
+            snapshot.Run = new RunStatus(StormY: r.GetFloat(), TicksUntilStorm: r.GetInt(), Hunters: r.GetUShort());
             snapshot.RunOver = r.GetBool();
+            snapshot.Victory = r.GetBool();
             var players = r.GetByte();
             for (var i = 0; i < players; i++)
                 snapshot.Players.Add(new PlayerSnapshot(r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt()));

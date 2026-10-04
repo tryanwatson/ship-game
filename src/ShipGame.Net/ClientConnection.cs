@@ -242,8 +242,9 @@ public sealed class ClientConnection : IDisposable
         if (chunk.Index == 0)
         {
             assembled.Wind = chunk.Partial.Wind;
-            assembled.Waves = chunk.Partial.Waves;
+            assembled.Run = chunk.Partial.Run;
             assembled.RunOver = chunk.Partial.RunOver;
+            assembled.Victory = chunk.Partial.Victory;
             assembled.Players = chunk.Partial.Players;
             assembled.IslandCooldowns = chunk.Partial.IslandCooldowns;
             assembled.CommandAcks = chunk.Partial.CommandAcks;

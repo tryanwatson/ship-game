@@ -119,8 +119,8 @@ public sealed class World
 
     public IReadOnlyDictionary<int, PlayerState> Players => _players;
 
-    /// <summary>Sends pirates in waves when set; null for worlds that place their own ships (tests, sandboxes).</summary>
-    public WaveDirector? Waves { get; set; }
+    /// <summary>Runs the storm and the bounty raids when set; null for worlds that only do what they're told (tests, sandboxes).</summary>
+    public RunDirector? Director { get; set; }
 
     /// <summary>
     /// Whether players' shots hurt other players (PvP). Pirates never hurt each other either way, and no ship
@@ -133,20 +133,27 @@ public sealed class World
         target.Id != attackerShipId
         && (target.Team != attackerTeam || (FriendlyFire && attackerTeam == Team.Players));
 
-    /// <summary>True once every player was sunk at the same time. Nothing respawns and no more waves come.</summary>
+    /// <summary>
+    /// True once every player was sunk at the same time, or the flagship was (see <see cref="IsVictory"/>). Nothing
+    /// respawns and no more raids come.
+    /// </summary>
     public bool IsRunOver { get; private set; }
 
-    public void EndRun()
+    /// <summary>The run ended with the flagship sunk.</summary>
+    public bool IsVictory { get; private set; }
+
+    public void EndRun(bool victory = false)
     {
         if (IsRunOver)
             return;
         IsRunOver = true;
+        IsVictory = victory;
         foreach (var player in _players.Values)
         {
             player.RespawnTicksRemaining = 0;
             player.LostShip = null;
         }
-        Emit(new RunEnded(Tick));
+        Emit(new RunEnded(Tick, victory));
     }
 
     /// <summary>Records an event for <see cref="DrainEvents"/>.</summary>
@@ -217,7 +224,7 @@ public sealed class World
 
     public bool RemoveProjectile(int id) => _projectiles.RemoveAll(p => p.Id == id) > 0;
 
-    /// <summary>Takes a player out of the run (they left): their ship goes and they stop counting toward wave size.</summary>
+    /// <summary>Takes a player out of the run (they left): their ship goes and they stop counting toward raid size.</summary>
     public void RemovePlayer(int playerId)
     {
         if (GetPlayerShip(playerId) is { } ship)
@@ -314,6 +321,7 @@ public sealed class World
 
         StepProjectiles(dt);
         StepStrikes();
+        Regenerate(dt);
 
         Plundering.Step(this);
         Contracts.Step(this);
@@ -321,7 +329,7 @@ public sealed class World
         ResolveSinkings();
         Respawning.Step(this);
 
-        Waves?.Update(this);
+        Director?.Update(this);
 
         Tick++;
     }
@@ -336,7 +344,7 @@ public sealed class World
             // Credit the kill even if the killer went down in the same exchange.
             var killer = _ships.Find(s => s.Id == killerId);
             if (killer is not null && CanDamage(killer.Id, killer.Team, victim))
-                KillRewards.Grant(this, killer);
+                KillRewards.Grant(this, killer, victim);
         }
 
         foreach (var victim in _ships)
@@ -349,12 +357,17 @@ public sealed class World
                 Respawning.OnPlayerSunk(this, victim, GetOrAddPlayer(playerId));
         }
 
+        // The flagship going down wins the run, even if the crew went down with it.
+        var flagshipSunk = _ships.Any(s => s.IsSunk && s.IsBoss);
+
         foreach (var ship in _ships)
         {
             if (ship.IsSunk)
                 _lastSightCell.Remove(ship.Id);
         }
         _ships.RemoveAll(s => s.IsSunk);
+        if (flagshipSunk)
+            EndRun(victory: true);
     }
 
     /// <summary>
@@ -388,6 +401,16 @@ public sealed class World
             Emit(new AreaDiscovered(Tick, team, cells));
     }
 
+    /// <summary>Every ship still afloat mends at its <see cref="ShipStats.HealthRegen"/> rate, up to its maximum.</summary>
+    private void Regenerate(float dt)
+    {
+        foreach (var ship in _ships)
+        {
+            if (!ship.IsSunk)
+                ship.Health = MathF.Min(ship.Stats.MaxHealth, ship.Health + ship.Stats.HealthRegen * dt);
+        }
+    }
+
     /// <summary>Bursts every shell that's due: hurts each hostile hull within its blast radius, and scatters any bomblets.</summary>
     private void StepStrikes()
     {
@@ -406,6 +429,7 @@ public sealed class World
                     continue;
                 ship.Health = MathF.Max(0f, ship.Health - strike.Damage);
                 ship.LastHitByShipId = strike.OwnerShipId;
+                ship.LastHitTick = Tick;
             }
             Emit(new AreaStrikeImpact(Tick, strike.Id, strike.Target, strike.Radius));
 
@@ -451,6 +475,7 @@ public sealed class World
                 var distance = Vector2.Distance(projectile.Origin, projectile.Position);
                 ship.Health = MathF.Max(0f, ship.Health - projectile.Damage * effects.DamageMultiplier(distance));
                 ship.LastHitByShipId = projectile.OwnerShipId;
+                ship.LastHitTick = Tick;
                 projectile.RecordHit(ship.Id);
 
                 if (effects.LongRangeRefund > 0f && effects.IsLongRange(distance) && effects.AbilityId is { } abilityId)
@@ -528,6 +553,8 @@ public sealed class World
                 return null;
             case ChoosePlunderCommand:
                 return Shipyards.TryChoosePlunder(this, ship);
+            case PurchaseRepairCommand:
+                return Shipyards.TryRepair(this, ship);
             case PurchaseUpgradeCommand purchase:
                 return Shipyards.ToRejection(Shipyards.TryPurchase(this, ship, purchase.UpgradeId));
             case UnlockAbilityCommand unlock:

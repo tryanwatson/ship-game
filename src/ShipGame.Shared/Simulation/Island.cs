@@ -10,9 +10,11 @@ public sealed class Island
     /// <summary>Gold for plundering an island unless its layout says otherwise.</summary>
     public const int DefaultPlunderGold = 10;
 
-    public Island(int id, IReadOnlyList<Vector2> outline, int plunderGold = DefaultPlunderGold, bool hasShipyard = false, string? name = null)
+    public Island(int id, IReadOnlyList<Vector2> outline, int plunderGold = DefaultPlunderGold, bool hasShipyard = false, string? name = null,
+        int level = 1)
     {
         Name = name ?? $"ISLE {id}";
+        Level = level;
         PlunderGold = plunderGold;
         HasShipyard = hasShipyard;
         if (outline.Count < 3)
@@ -36,6 +38,9 @@ public sealed class Island
     /// <summary>Gold a player earns for plundering this island.</summary>
     public int PlunderGold { get; }
 
+    /// <summary>The level of the waters it lies in (see <c>Archipelago.Seas</c>): richer plunder, and better shipyard stock.</summary>
+    public int Level { get; }
+
     /// <summary>Players anchored here can spend gold on upgrades; plundering it is opt-in.</summary>
     public bool HasShipyard { get; }
 
@@ -57,7 +62,7 @@ public sealed class Island
     /// <paramref name="area"/> square tiles, then centered on <paramref name="center"/>.
     /// </summary>
     public static Island FromTemplate(int id, IReadOnlyList<Vector2> template, Vector2 center, float area, float rotation, bool hasShipyard = false,
-        string? name = null)
+        string? name = null, int plunderGold = DefaultPlunderGold, int level = 1)
     {
         var templateCenter = Geometry.Centroid(template.ToArray());
         var scale = MathF.Sqrt(area / Geometry.Area(template.ToArray()));
@@ -68,6 +73,6 @@ public sealed class Island
             var local = (p - templateCenter) * scale;
             return center + new Vector2(local.X * cos - local.Y * sin, local.X * sin + local.Y * cos);
         }).ToList();
-        return new Island(id, outline, hasShipyard: hasShipyard, name: name);
+        return new Island(id, outline, plunderGold, hasShipyard, name, level);
     }
 }

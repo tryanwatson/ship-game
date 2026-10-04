@@ -151,7 +151,7 @@ public sealed class ShipyardPanel
         }
         else if (_page == Page.Upgrades)
         {
-            DrawUpgradeRows(ship, panel);
+            DrawUpgradeRows(ship, shipyard, panel);
         }
 
         var mouse = hud.FromScreen(input.Mouse.Position);
@@ -176,7 +176,7 @@ public sealed class ShipyardPanel
 
         if (_page == Page.Choice)
         {
-            var height = headerHeight + ButtonHeight * 4 + Padding * 5 + (int)PixelFont.Height(SmallScale) + Padding;
+            var height = headerHeight + ButtonHeight * 5 + Padding * 6 + (int)PixelFont.Height(SmallScale) + Padding;
             panel = new Rectangle(x, (viewport.Height - height) / 2, PanelWidth, height);
             var y = panel.Y + headerHeight;
 
@@ -187,6 +187,12 @@ public sealed class ShipyardPanel
                 : $"PLUNDER  +{shipyard.PlunderGold} GOLD";
             buttons.Add(new Button(new Rectangle(panel.X + Padding, y, PanelWidth - Padding * 2, ButtonHeight), plunderLabel,
                 Enabled: !plundering && cooldown == 0, Command: new ChoosePlunderCommand(ship.OwnerPlayerId ?? 0)));
+
+            y += ButtonHeight + Padding;
+            var repairCost = Shipyards.RepairCost(ship);
+            buttons.Add(new Button(new Rectangle(panel.X + Padding, y, PanelWidth - Padding * 2, ButtonHeight),
+                repairCost == 0 ? "FULL HEALTH" : $"REPAIR HULL  {repairCost}G",
+                Enabled: repairCost > 0 && Gold(world, ship) >= repairCost, Command: new PurchaseRepairCommand(ship.OwnerPlayerId ?? 0)));
 
             y += ButtonHeight + Padding;
             buttons.Add(new Button(new Rectangle(panel.X + Padding, y, PanelWidth - Padding * 2, ButtonHeight), "UPGRADE SHIP",
@@ -235,10 +241,12 @@ public sealed class ShipyardPanel
             var upgrade = UpgradeCatalog.All[i];
             var level = Shipyards.Level(ship, upgrade);
             var maxed = level >= upgrade.MaxLevel;
+            var stocked = level < Shipyards.StockedLevels(shipyard, upgrade);
             var cost = upgrade.CostAt(level);
             var rowTop = panel.Y + headerHeight + i * RowHeight;
             var bounds = new Rectangle(panel.Right - Padding - 84, rowTop + (RowHeight - ButtonHeight) / 2 - 4, 84, ButtonHeight);
-            buttons.Add(new Button(bounds, maxed ? "MAX" : $"{cost}G", Enabled: !maxed && gold >= cost,
+            // Past what this yard stocks, the next level is sold further north.
+            buttons.Add(new Button(bounds, maxed ? "MAX" : stocked ? $"{cost}G" : "NORTH", Enabled: !maxed && stocked && gold >= cost,
                 Command: new PurchaseUpgradeCommand(ship.OwnerPlayerId ?? 0, upgrade.Id)));
         }
 
@@ -579,7 +587,7 @@ public sealed class ShipyardPanel
         return x + PixelFont.Measure(text, SmallScale);
     }
 
-    private void DrawUpgradeRows(Ship ship, Rectangle panel)
+    private void DrawUpgradeRows(Ship ship, Island shipyard, Rectangle panel)
     {
         var headerHeight = (int)PixelFont.Height(TitleScale) + Padding * 2;
         for (var i = 0; i < UpgradeCatalog.All.Count; i++)
@@ -591,11 +599,17 @@ public sealed class ShipyardPanel
             PixelFont.Draw(_batch, upgrade.Name, new Vector2(panel.X + Padding, top), LabelScale, Text);
             PixelFont.Draw(_batch, upgrade.Effect, new Vector2(panel.X + Padding, top + PixelFont.Height(LabelScale) + 6), SmallScale, Muted);
 
-            // Level pips between the name and the buy button.
+            // Level pips between the name and the buy button: owned, for sale here, and only sold further north.
+            var stocked = Shipyards.StockedLevels(shipyard, upgrade);
             for (var pip = 0; pip < upgrade.MaxLevel; pip++)
             {
-                var pipRect = new Rectangle(panel.X + 196 + pip * 14, top + 4, 10, 10);
-                FillRect(pipRect, pip < level ? PipOn : PipOff);
+                var pipRect = new Rectangle(panel.X + 190 + pip * 12, top + 4, 9, 9);
+                if (pip < level)
+                    FillRect(pipRect, PipOn);
+                else if (pip < stocked)
+                    FillRect(pipRect, PipOff);
+                else
+                    OutlineRect(pipRect, PipOff);
             }
         }
     }

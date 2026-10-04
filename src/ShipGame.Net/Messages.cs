@@ -29,7 +29,9 @@ public sealed record ShipInfo(
     IReadOnlyList<StatModifier> Modifiers,
     Vector2 Position,
     float Heading,
-    IReadOnlyList<string>? SkillIds = null);
+    IReadOnlyList<string>? SkillIds = null,
+    int Level = 0,
+    bool IsBoss = false);
 
 /// <summary>A ship's fast-changing state at one tick.</summary>
 public sealed class ShipState
@@ -62,8 +64,9 @@ public sealed class Snapshot
 {
     public long Tick;
     public Vector2 Wind;
-    public WaveStatus Waves;
+    public RunStatus Run;
     public bool RunOver;
+    public bool Victory;
     public List<PlayerSnapshot> Players = new();
     public List<(int IslandId, int Ticks)> IslandCooldowns = new();
     public List<ShipState> Ships = new();
@@ -83,21 +86,26 @@ public sealed class Snapshot
         return 0;
     }
 
-    public static Snapshot Capture(World world)
+    /// <param name="include">Which ships to send (by default, all of them): the server leaves out those nobody is near.</param>
+    public static Snapshot Capture(World world, Func<Ship, bool>? include = null)
     {
         var snapshot = new Snapshot
         {
             Tick = world.Tick,
             Wind = world.Wind,
-            Waves = world.Waves?.Status ?? default,
+            Run = world.Director?.Status ?? default,
             RunOver = world.IsRunOver,
+            Victory = world.IsVictory,
         };
         foreach (var player in world.Players.Values)
             snapshot.Players.Add(new PlayerSnapshot(player.PlayerId, player.Gold, player.Kills, player.RespawnTicksRemaining));
         foreach (var (islandId, ticks) in world.PlunderCooldowns)
             snapshot.IslandCooldowns.Add((islandId, ticks));
         foreach (var ship in world.Ships)
-            snapshot.Ships.Add(CaptureShip(ship));
+        {
+            if (include is null || include(ship))
+                snapshot.Ships.Add(CaptureShip(ship));
+        }
         return snapshot;
     }
 
@@ -142,5 +150,7 @@ public sealed class Snapshot
         ship.Modifiers.ToList(),
         ship.Position,
         ship.Heading,
-        ship.Skills.Select(s => s.Id).ToList());
+        ship.Skills.Select(s => s.Id).ToList(),
+        ship.Level,
+        ship.IsBoss);
 }

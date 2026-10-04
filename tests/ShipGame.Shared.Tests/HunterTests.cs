@@ -36,9 +36,48 @@ public class HunterTests
 
         RunTicks(world, SimConstants.TickRate * 10);
 
-        Assert.Equal(HunterState.Guarding, behavior.State);
+        Assert.Equal(HunterState.Patrolling, behavior.State);
         Assert.Equal(home, hunter.Position); // at anchor, not drifting
         Assert.Empty(world.Projectiles);
+    }
+
+    [Fact]
+    public void Guarding_AggroesOnWhoeverHitsIt_EvenFromBeyondItsSight()
+    {
+        var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
+        var player = world.SpawnShip(new Vector2(100, 100), 0f, ShipStats.Sloop, PlayerId, Loadouts.FullArsenal);
+        player.IsAnchored = true;
+        var distance = Mortar.Range - 2f; // well past aggro, and past the range at which a chase is given up
+        var (hunter, behavior) = SpawnHunter(world, new Vector2(100 + distance, 100), MathF.PI);
+        Assert.True(distance > HunterBehavior.DisengageRange - 5f);
+
+        Assert.True(world.TryCastAbility(player, AbilitySlot.Three, hunter.Position));
+        var strike = Assert.Single(world.Strikes);
+        RunTicks(world, (int)(strike.ImpactTick - world.Tick) + 2);
+
+        Assert.True(hunter.Health < hunter.Stats.MaxHealth, "the shell should have landed");
+        Assert.Equal(HunterState.Hunting, behavior.State);
+        Assert.Same(player, behavior.Target);
+        Assert.False(hunter.IsAnchored);
+
+        // Provoked, it doesn't give up for distance; it closes in.
+        RunTicks(world, SimConstants.TickRate * 3);
+        Assert.Equal(HunterState.Hunting, behavior.State);
+        Assert.True(Vector2.Distance(hunter.Position, player.Position) < distance);
+    }
+
+    [Fact]
+    public void Hits_FromItsOwnSide_DontProvokeIt()
+    {
+        var world = new World(new Vector2(192, 192)) { Wind = Vector2.Zero };
+        var (hunter, behavior) = SpawnHunter(world, new Vector2(100, 100), 0f);
+        var other = world.SpawnShip(new Vector2(130, 100), 0f, ShipStats.Sloop);
+        hunter.LastHitByShipId = other.Id;
+        hunter.LastHitTick = world.Tick;
+
+        RunTicks(world, 2);
+
+        Assert.Equal(HunterState.Patrolling, behavior.State);
     }
 
     [Fact]
@@ -49,7 +88,7 @@ public class HunterTests
         var (hunter, behavior) = SpawnHunter(world, new Vector2(100 + HunterBehavior.AggroRange + 5f, 100), MathF.PI);
 
         world.Enqueue(new MoveCommand(PlayerId, new Vector2(115, 100))); // sail toward it
-        for (var t = 0; t < SimConstants.TickRate * 10 && behavior.State == HunterState.Guarding; t++)
+        for (var t = 0; t < SimConstants.TickRate * 10 && behavior.State == HunterState.Patrolling; t++)
             world.Step();
 
         Assert.Equal(HunterState.Hunting, behavior.State);
@@ -100,10 +139,10 @@ public class HunterTests
         world.Step();
         Assert.Equal(HunterState.Returning, behavior.State);
 
-        for (var t = 0; t < SimConstants.TickRate * 30 && behavior.State != HunterState.Guarding; t++)
+        for (var t = 0; t < SimConstants.TickRate * 30 && behavior.State != HunterState.Patrolling; t++)
             world.Step();
 
-        Assert.Equal(HunterState.Guarding, behavior.State);
+        Assert.Equal(HunterState.Patrolling, behavior.State);
         Assert.True(Vector2.Distance(hunter.Position, behavior.Home) <= ShipMovement.ArriveRadius + 0.5f);
         Assert.True(hunter.IsAnchored);
     }
@@ -164,7 +203,7 @@ public class HunterTests
         Assert.Equal(HunterState.Returning, behavior.State);
 
         RunTicks(world, SimConstants.TickRate * 15);
-        Assert.Equal(HunterState.Guarding, behavior.State);
+        Assert.Equal(HunterState.Patrolling, behavior.State);
     }
 
     [Fact]
@@ -237,7 +276,7 @@ public class HunterTests
         {
             world.Step();
             Assert.False(Touching(world, hunter), $"tick {t}: ran onto the island at {hunter.Position}");
-            guarding = behavior.State == HunterState.Guarding;
+            guarding = behavior.State == HunterState.Patrolling;
         }
 
         Assert.True(guarding, $"never made it home; at {hunter.Position}, state {behavior.State}");

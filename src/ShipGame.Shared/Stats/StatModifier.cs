@@ -23,6 +23,9 @@ public enum StatId
 
     /// <summary>Units of contract cargo the hold carries.</summary>
     CargoCapacity,
+
+    /// <summary>Health recovered per second.</summary>
+    HealthRegen,
 }
 
 public enum ModifierKind

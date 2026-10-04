@@ -15,11 +15,11 @@ public class WindTests
     }
 
     [Theory]
-    [InlineData(0f, -1f, -1f)]   // north is screen-up: world (-1, -1)
-    [InlineData(90f, 1f, -1f)]   // east is screen-right: world (1, -1)
-    [InlineData(180f, 1f, 1f)]
-    [InlineData(270f, -1f, 1f)]
-    [InlineData(225f, 0f, 1.414f)] // south-west is world +Y
+    [InlineData(0f, 0f, -1f)]    // north is screen-up: world -Y
+    [InlineData(90f, 1f, 0f)]    // east is screen-right: world +X
+    [InlineData(180f, 0f, 1f)]
+    [InlineData(270f, -1f, 0f)]
+    [InlineData(225f, -1f, 1f)]  // south-west, between them
     public void Compass_MapsBearingsToScreenDirections(float bearing, float x, float y)
     {
         var expected = Vector2.Normalize(new Vector2(x, y));

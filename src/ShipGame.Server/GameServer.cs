@@ -42,8 +42,6 @@ public sealed class GameServer : IDisposable
         public uint LastCommandApplied { get; set; }
     }
 
-    private const float StartSpacing = 6f;
-
     // Rate limit on commands and lobby messages per player: a sustained MessagesPerSecond, bursts up to
     // MessageBurst. The client sends at most one move order per tick plus key presses, far below this; anything
     // over it is dropped.
@@ -54,6 +52,9 @@ public sealed class GameServer : IDisposable
     private readonly NetManager _net;
     private readonly Dictionary<int, RemotePlayer> _byPeerId = new();
     private readonly Dictionary<int, int> _sentStatsVersions = new();
+    private readonly Relevance _relevance = new();
+    private readonly List<Ship> _enteredRange = new();
+    private readonly List<int> _leftRange = new();
     private readonly NetDataWriter _writer = new();
     private readonly Action<string> _log;
     private readonly byte[]? _password;
@@ -112,7 +113,7 @@ public sealed class GameServer : IDisposable
         SendWorldOutput(World);
 
         if (World.IsRunOver)
-            EndRun("the crew was sunk");
+            EndRun(World.IsVictory ? "the flagship was sunk" : "the crew was sunk");
     }
 
     public void Dispose() => _net.Stop();
@@ -201,25 +202,21 @@ public sealed class GameServer : IDisposable
     private void StartRun()
     {
         var seed = _runSeed++;
-        var world = new World(Archipelago.Size) { Waves = new WaveDirector(seed), FriendlyFire = FriendlyFire };
-        foreach (var island in Archipelago.CreateIslands())
-            world.AddIsland(island);
-        Contracts.OpenMarkets(world, seed);
-
-        // Line the crew up abreast at the center, facing the same way.
+        // Line the crew up abreast at the southern edge, facing north.
         var players = _byPeerId.Values.OrderBy(p => p.PlayerId).ToList();
-        for (var i = 0; i < players.Count; i++)
+        var crew = players
+            .Select(p => (p.PlayerId, (p.StartingWeapon ?? WeaponCatalog.Broadside).Ability)) // everyone ready means everyone chose
+            .ToList();
+        var world = Runs.Create(seed, crew, FriendlyFire);
+        foreach (var player in players)
         {
-            var offset = (i - (players.Count - 1) / 2f) * StartSpacing;
-            var weapon = players[i].StartingWeapon ?? WeaponCatalog.Broadside; // everyone ready means everyone chose
-            world.SpawnShip(Archipelago.Size / 2f + new Vector2(offset, -offset), 0f, ShipStats.Sloop, players[i].PlayerId,
-                Loadouts.Starting(weapon.Ability));
-            players[i].Ready = false;
-            players[i].StartingWeapon = null; // next run is a fresh choice
+            player.Ready = false;
+            player.StartingWeapon = null; // next run is a fresh choice
         }
 
         World = world;
         _sentStatsVersions.Clear();
+        _relevance.Clear();
         _log($"Run started with {players.Count} player(s), friendly fire {(FriendlyFire ? "on" : "off")}");
 
         _writer.Reset();
@@ -232,7 +229,7 @@ public sealed class GameServer : IDisposable
 
     private void EndRun(string why)
     {
-        _log($"Run ended: {why} (wave {World?.Waves?.Wave ?? 0})");
+        _log($"Run ended: {why}");
         World = null;
         foreach (var player in _byPeerId.Values)
             player.Ready = false;
@@ -244,11 +241,23 @@ public sealed class GameServer : IDisposable
     /// <summary>
     /// Ship info first (so every event and snapshot refers to ships the client knows), then this tick's
     /// events on the same reliable channel, then the snapshot (unreliable: a lost one is replaced by the next).
+    /// Only ships near some player are sent (see <see cref="Relevance"/>): one coming into range is described
+    /// afresh, and one going out of it is hidden.
     /// </summary>
     private void SendWorldOutput(World world)
     {
+        _enteredRange.Clear();
+        _leftRange.Clear();
+        _relevance.Update(world, _enteredRange, _leftRange);
+        foreach (var ship in _enteredRange)
+            _sentStatsVersions.Remove(ship.Id);
+        foreach (var id in _leftRange)
+            _sentStatsVersions.Remove(id);
+
         foreach (var ship in world.Ships)
         {
+            if (!_relevance.IsShown(ship.Id))
+                continue;
             if (_sentStatsVersions.TryGetValue(ship.Id, out var version) && version == ship.StatsVersion)
                 continue;
             _sentStatsVersions[ship.Id] = ship.StatsVersion;
@@ -264,6 +273,7 @@ public sealed class GameServer : IDisposable
 
         // Rejections are private; everything else goes to everyone.
         var shared = events.Where(e => e is not CommandRejected).ToList();
+        shared.AddRange(_leftRange.Select(id => new ShipHidden(world.Tick, id)));
         if (shared.Count > 0)
             SendEvents(shared, null);
         foreach (var rejection in events.OfType<CommandRejected>())
@@ -275,7 +285,7 @@ public sealed class GameServer : IDisposable
 
         if (world.Tick % Protocol.SnapshotEveryTicks == 0 || world.IsRunOver)
         {
-            var snapshot = Snapshot.Capture(world);
+            var snapshot = Snapshot.Capture(world, ship => _relevance.IsShown(ship.Id));
             foreach (var player in _byPeerId.Values)
                 snapshot.CommandAcks.Add((player.PlayerId, player.LastCommandApplied));
             foreach (var chunk in Wire.WriteSnapshotChunks(snapshot))

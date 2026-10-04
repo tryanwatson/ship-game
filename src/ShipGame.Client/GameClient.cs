@@ -67,7 +67,8 @@ public sealed class GameClient : Game
     private MainMenu _menu = null!;
     private WeaponPicker _weaponPicker = null!;
     private GameMenu _gameMenu = null!;
-    private WaveForecast _waveForecast = null!;
+    private RunForecast _runForecast = null!;
+    private SeaBanner _seaBanner = null!;
     private bool _mapOpen;
 
     // Solo: choosing the starting weapon, before the run starts (online, the lobby does this).
@@ -160,7 +161,7 @@ public sealed class GameClient : Game
         LeaveSession();
         _pickingSoloWeapon = false;
         _session = new LocalGameSession(EmptySea(), SoloPlayerId);
-        _camera.Position = IsoProjection.WorldToIso(Archipelago.Size / 2f);
+        _camera.Position = IsoProjection.WorldToIso(Archipelago.Start);
         _menu.Open(message, onJoinPage);
     }
 
@@ -195,23 +196,12 @@ public sealed class GameClient : Game
         ResetControls();
     }
 
-    private static World EmptySea()
-    {
-        var world = new World(Archipelago.Size);
-        foreach (var island in Archipelago.CreateIslands())
-            world.AddIsland(island);
-        return world;
-    }
+    private static World EmptySea() => Runs.CreateMap();
 
-    /// <summary>A fresh run: the player's ship at the center carrying <paramref name="weapon"/>, pirates arriving in waves.</summary>
+    /// <summary>A fresh run: the player's ship at the southern edge carrying <paramref name="weapon"/>, the seas ahead.</summary>
     private void StartRun(WeaponOffer weapon)
     {
-        var seed = Environment.TickCount;
-        var world = new World(Archipelago.Size) { Waves = new WaveDirector(seed) };
-        foreach (var island in Archipelago.CreateIslands())
-            world.AddIsland(island);
-        Contracts.OpenMarkets(world, seed);
-        world.SpawnShip(Archipelago.Size / 2f, 0f, ShipStats.Sloop, SoloPlayerId, Loadouts.Starting(weapon.Ability));
+        var world = Runs.Create(Environment.TickCount, new[] { (SoloPlayerId, weapon.Ability) });
 
         _session = new LocalGameSession(world, SoloPlayerId);
         ResetControls();
@@ -246,7 +236,8 @@ public sealed class GameClient : Game
         _menu = new MainMenu(_primitives);
         _weaponPicker = new WeaponPicker(_primitives);
         _gameMenu = new GameMenu(_primitives);
-        _waveForecast = new WaveForecast(_primitives);
+        _runForecast = new RunForecast(_primitives);
+        _seaBanner = new SeaBanner(_primitives);
     }
 
     protected override void UnloadContent()
@@ -450,10 +441,15 @@ public sealed class GameClient : Game
         _abilityBar.Draw(localShip, plunderReady, shipyardReady, Hud, AnchorDropProgress);
         _compass.Draw(_session.World.Wind, Hud);
         var gold = _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
-        _hudCounters.Draw(gold, _session.World.Waves?.Wave ?? 0, Hud);
-        // What's coming, while there's a run to come to (not in the lobby or after a wipe).
-        if (_session.World.Waves is { } waves && !_session.World.IsRunOver && Online is null or { Connection.Status: ConnectionStatus.InRun })
-            _waveForecast.Draw(waves.Status, Hud);
+        var inRun = !_session.World.IsRunOver && Online is null or { Connection.Status: ConnectionStatus.InRun };
+        var here = localShip?.Position ?? _session.World.GetPlayerShip(LocalPlayerId)?.Position ?? IsoProjection.IsoToWorld(_camera.Position);
+        _hudCounters.Draw(gold, Archipelago.LevelAt(here), Hud);
+        // Where we are and what's coming, while there's a run to come to (not in the lobby or after it ends).
+        if (_session.World.Director is { } director && inRun)
+        {
+            _runForecast.Draw(director.Status, Archipelago.SeaAt(here), here, Hud);
+            _seaBanner.Draw(localShip is null ? null : Archipelago.SeaAt(localShip.Position), Hud);
+        }
         // Choosing a contract charts each route beside the panel; otherwise M shows the full map.
         if (_shipyardPanel.CurrentRoutes(_session.World, localShip, _input, Hud) is { } routes)
             _mapView.Draw(_session.World, LocalPlayerId, Hud, ShipyardPanel.RouteMapArea(Hud), routes);
@@ -625,15 +621,33 @@ public sealed class GameClient : Game
             return;
 
         if (world.IsRunOver)
-        {
-            var wave = world.Waves?.Wave ?? 0;
-            _statusBanner.Draw("RUN OVER", $"SUNK ON WAVE {wave}  -  PRESS ENTER FOR A NEW RUN", Hud);
-        }
+            _statusBanner.Draw(RunOverTitle(world), $"{RunOverSummary(world)}  -  PRESS ENTER FOR A NEW RUN", Hud);
         else if (world.Players.TryGetValue(LocalPlayerId, out var player) && player.IsAwaitingRespawn)
         {
             var seconds = (int)Math.Ceiling(player.RespawnTicksRemaining / (double)SimConstants.TickRate);
             _statusBanner.Draw("SUNK", $"RESPAWNING IN {seconds}", Hud);
         }
+    }
+
+    private static string RunOverTitle(World world) => world.IsVictory ? "VICTORY" : "RUN OVER";
+
+    /// <summary>How the run ended: the flagship sunk, or how far north the crew got.</summary>
+    private string RunOverSummary(World world)
+    {
+        return world.IsVictory ? "THE PIRATE FLAGSHIP IS SUNK" : $"REACHED {Archipelago.SeaAt(FurthestNorth(world)).Name}";
+    }
+
+    /// <summary>Roughly where the crew's furthest-north ship got to: a sight's depth behind the northernmost charted water.</summary>
+    private static NVector2 FurthestNorth(World world)
+    {
+        var discovery = world.Discovery;
+        for (var index = 0; index < discovery.CellCount; index++)
+        {
+            // Cells run row by row from the north, so the first charted one is the furthest north.
+            if (discovery.IsDiscovered(Team.Players, index))
+                return discovery.CellCenter(index) + new NVector2(0f, Discovery.SightHalfUpDown);
+        }
+        return Archipelago.Start;
     }
 
     /// <summary>Online-only banners: connecting, refused or dropped, and the lobby. True if one was drawn.</summary>
@@ -653,7 +667,7 @@ public sealed class GameClient : Game
                 var prompt = weapon is null ? "CHOOSE YOUR STARTING WEAPON"
                     : IsLocallyReady(online) ? "READY - WAITING FOR THE CREW"
                     : "PRESS ENTER WHEN READY";
-                var title = _session.World.IsRunOver ? $"RUN OVER - WAVE {_session.World.Waves?.Wave ?? 0}" : "LOBBY";
+                var title = _session.World.IsRunOver ? RunOverTitle(_session.World) : "LOBBY";
                 var mode = connection.Lobby?.FriendlyFire == true ? "FRIENDLY FIRE ON" : "CO-OP";
                 _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {mode}  -  {prompt}", Hud);
                 _weaponPicker.Draw(_input, Hud, weapon);
@@ -681,20 +695,19 @@ public sealed class GameClient : Game
         var world = _session.World;
         var ship = world.GetPlayerShip(LocalPlayerId);
         var fps = _framesSinceTitle / _titleTimer;
-        var wave = world.Waves?.Wave ?? 0;
-        var pirates = world.Ships.Count(s => s.Team == Team.Pirates);
         var gold = world.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
 
-        // The window title doubles as a status line until the game has text rendering.
+        // The window title doubles as a status line.
         string status;
         if (world.IsRunOver)
-            status = $"RUN OVER on wave {wave} with {gold} gold - press Enter for a new run";
+            status = $"{(world.IsVictory ? "VICTORY" : "RUN OVER")} with {gold} gold - press Enter for a new run";
         else if (ship is null)
             status = "sunk - respawning";
-        else if (world.Waves is { } waves && pirates == 0)
-            status = $"wave {wave + 1} in {Math.Ceiling(waves.TicksUntilNextWave / (double)SimConstants.TickRate):0}s";
         else
-            status = $"wave {wave}: {pirates} pirates";
+        {
+            var sea = Archipelago.SeaAt(ship.Position);
+            status = $"{sea.Name.ToLowerInvariant()} (level {sea.Level})";
+        }
 
         if (ship?.Anchor == AnchorState.Down)
             status += ship.PlunderIslandId is null ? " | at anchor" : " | at anchor, plundering";

@@ -15,6 +15,7 @@ namespace ShipGame.Shared.Simulation;
 /// <param name="MinTurnRadius">Tightest turning radius, approached as the ship slows to a crawl.</param>
 /// <param name="TurnRadiusAtMaxSpeed">Turning radius at full sail. Radius scales linearly with speed in between.</param>
 /// <param name="CargoCapacity">Units of contract cargo the hold carries (see <c>Contracts</c>).</param>
+/// <param name="HealthRegen">Health recovered per second, up to <paramref name="MaxHealth"/>; upgrades raise it.</param>
 public readonly record struct ShipStats(
     float MaxSpeed,
     float Acceleration,
@@ -30,7 +31,8 @@ public readonly record struct ShipStats(
     float WeaponDamage = 1f,
     float ProjectileSpeed = 1f,
     float WeaponRange = 1f,
-    float CargoCapacity = 12f)
+    float CargoCapacity = 12f,
+    float HealthRegen = 0.5f)
 {
     public static readonly ShipStats Sloop = new(
         MaxSpeed: 5f,
@@ -43,6 +45,25 @@ public readonly record struct ShipStats(
         Length: 2.4f,
         Beam: 0.9f,
         MaxHealth: 100f);
+
+    /// <summary>
+    /// The pirates' sloop: a player's hull with half the health, so trading broadsides favors the player. Levels add to
+    /// it from there (see <c>PirateLevels</c>).
+    /// </summary>
+    public static readonly ShipStats PirateSloop = Sloop with { MaxHealth = 50f };
+
+    /// <summary>The pirate flagship at the far north: twice a sloop's length, heavily built, slow to turn.</summary>
+    public static readonly ShipStats Flagship = new(
+        MaxSpeed: 4f,
+        Acceleration: 1.2f,
+        CoastTimeConstant: 2.5f,
+        MinDeceleration: 0.2f,
+        MinTurnRadius: 3f,
+        TurnRadiusAtMaxSpeed: 7f,
+        Radius: 2f,
+        Length: 5f,
+        Beam: 1.8f,
+        MaxHealth: 500f);
 
     /// <summary>Slowing from water drag alone: dv/dt = -(v / CoastTimeConstant + MinDeceleration).</summary>
     public float DecelerationAt(float speed) => speed / CoastTimeConstant + MinDeceleration;

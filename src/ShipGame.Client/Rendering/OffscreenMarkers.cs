@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using ShipGame.Net;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Trading;
 using NVector2 = System.Numerics.Vector2;
@@ -10,8 +11,9 @@ namespace ShipGame.Client.Rendering;
 
 /// <summary>
 /// Arrows pinned to the screen edge pointing at pirates out of view: bright when one is after you, dim while it
-/// guards its spot. On a big map, the only way to find a wave until there's a minimap. Islands our cargo is bound for
-/// get a gold arrow too, so a delivery can be steered for without opening the map.
+/// guards its spot. Only pirates within <see cref="Relevance.EnterRange"/> of our ship get one (the range an online
+/// server sends), not the whole map's. Islands our cargo is bound for get a gold arrow too, so a delivery can be
+/// steered for without opening the map.
 /// </summary>
 public sealed class OffscreenMarkers
 {
@@ -34,9 +36,10 @@ public sealed class OffscreenMarkers
         _batch.Begin(hud.Transform);
         foreach (var ship in world.Ships)
         {
-            if (ship.Team != Team.Pirates)
+            if (ship.Team != Team.Pirates || localShip is null
+                || NVector2.Distance(ship.Position, localShip.Position) > Relevance.EnterRange)
                 continue;
-            var hostile = ship.Stance != NpcStance.Guarding;
+            var hostile = ship.Stance != NpcStance.Patrolling;
             DrawArrow(NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), hostile ? Hostile : Dormant, view, hud);
         }
 

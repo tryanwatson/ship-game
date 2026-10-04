@@ -52,14 +52,14 @@ public class RespawnAndScalingTests
     }
 
     [Fact]
-    public void Respawn_KeepsGoldUpgradesAndKillBonuses()
+    public void Respawn_KeepsGoldAndUpgrades()
     {
         var world = CoopWorld(players: 2);
         var ship = world.GetPlayerShip(1)!;
         world.AddGold(1, 42);
         ship.AddModifier(UpgradeCatalog.Find("hull")!.Modifier);
         ship.AddModifier(UpgradeCatalog.Find("damage")!.Modifier);
-        ship.AddModifier(new Stats.StatModifier(Stats.StatId.MaxSpeed, Stats.ModifierKind.Percent, KillRewards.SpeedBonus, KillRewards.Source));
+        ship.AddModifier(UpgradeCatalog.Find("repairs")!.Modifier);
         var statsBefore = ship.Stats;
 
         Sink(world, 1);
@@ -131,47 +131,5 @@ public class RespawnAndScalingTests
 
         var back = Assert.Single(world.DrainEvents().OfType<PlayerRespawned>());
         Assert.Equal(world.GetPlayerShip(2)!.Id, back.ShipId);
-    }
-
-    [Theory]
-    [InlineData(1, 1, 2)]
-    [InlineData(2, 1, 3)]
-    [InlineData(4, 1, 5)]
-    [InlineData(1, 7, 8)]
-    [InlineData(2, 7, 12)]
-    [InlineData(1, 50, 8)]
-    [InlineData(12, 50, 40)] // 8 x 6.5 = 52, held at the absolute ceiling
-    public void WaveSize_ScalesWithPlayers(int players, int wave, int expected)
-    {
-        Assert.Equal(expected, WaveDirector.WaveSize(wave, players));
-    }
-
-    [Fact]
-    public void Waves_SpawnMorePiratesForMorePlayers()
-    {
-        var waves = new WaveDirector(5);
-        var world = new World(new Vector2(192, 192)) { Waves = waves };
-        for (var id = 1; id <= 3; id++)
-            world.SpawnShip(new Vector2(80 + id * 10, 96), 0f, ShipStats.Sloop, id).IsAnchored = true;
-
-        while (waves.Wave < 1)
-            world.Step();
-
-        Assert.Equal(WaveDirector.WaveSize(1, players: 3), world.Ships.Count(s => s.Team == Team.Pirates));
-        Assert.Equal(4, WaveDirector.WaveSize(1, players: 3));
-    }
-
-    [Fact]
-    public void Waves_StopOnceTheRunIsOver()
-    {
-        var waves = new WaveDirector(5);
-        var world = new World(new Vector2(192, 192)) { Waves = waves };
-        world.SpawnShip(new Vector2(96, 96), 0f, ShipStats.Sloop, 1);
-        Sink(world, 1);
-
-        RunTicks(world, (int)(WaveDirector.FirstWaveDelaySeconds * SimConstants.TickRate) * 3);
-
-        Assert.Equal(0, waves.Wave);
-        Assert.DoesNotContain(world.Ships, s => s.Team == Team.Pirates);
     }
 }

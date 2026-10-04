@@ -4,7 +4,7 @@ using Microsoft.Xna.Framework.Graphics;
 
 namespace ShipGame.Client.Rendering;
 
-/// <summary>Top-right readouts beneath the compass: gold, then the current wave. Right-aligned icon + number panels.</summary>
+/// <summary>Top-right readouts beneath the compass: gold, then the level of the waters we're in. Right-aligned icon + number panels.</summary>
 public sealed class HudCounters
 {
     private const float RightMargin = 20f;
@@ -23,7 +23,7 @@ public sealed class HudCounters
     private static readonly Color GoldDigits = new(250, 225, 140);
     private static readonly Color FlagPole = new(200, 200, 210);
     private static readonly Color Flag = new(210, 70, 60);
-    private static readonly Color WaveDigits = new(235, 235, 240);
+    private static readonly Color LevelDigits = new(235, 235, 240);
 
     /// <summary>Where the counters end (HUD units from the top), for readouts stacked beneath them.</summary>
     public static float Bottom => FirstTop + DigitSize.Y + 2 * PanelPadding + RowGap + DigitSize.Y + PanelPadding;
@@ -35,14 +35,14 @@ public sealed class HudCounters
         _batch = batch;
     }
 
-    public void Draw(int gold, int wave, HudView hud)
+    public void Draw(int gold, int seaLevel, HudView hud)
     {
         var viewport = hud.Viewport;
         _batch.Begin(hud.Transform);
         var right = viewport.Width - RightMargin;
 
         DrawCounter(right, FirstTop, gold, GoldDigits, DrawCoin);
-        DrawCounter(right, FirstTop + DigitSize.Y + 2 * PanelPadding + RowGap, wave, WaveDigits, DrawFlag);
+        DrawCounter(right, FirstTop + DigitSize.Y + 2 * PanelPadding + RowGap, seaLevel, LevelDigits, DrawFlag);
 
         _batch.Flush();
     }

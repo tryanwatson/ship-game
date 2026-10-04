@@ -1,4 +1,5 @@
 using System.Numerics;
+using ShipGame.Shared.Maps;
 using ShipGame.Shared.Simulation;
 
 namespace ShipGame.Shared.Progression;
@@ -54,8 +55,7 @@ public static class Respawning
         var abilities = lost?.Abilities.Select(a => a?.Definition).ToList();
 
         var position = PickSpawnPoint(world, player.PlayerId);
-        var toCenter = world.WorldSize / 2f - position;
-        var ship = world.SpawnShip(position, MathF.Atan2(toCenter.Y, toCenter.X), stats, player.PlayerId, abilities);
+        var ship = world.SpawnShip(position, Archipelago.StartHeading, stats, player.PlayerId, abilities);
 
         // Upgrades, kill bonuses, and skills carry over; re-applying them also tops health up to the new maximum.
         if (lost is not null)
@@ -71,14 +71,14 @@ public static class Respawning
     }
 
     /// <summary>
-    /// A clear patch of water beside a living teammate: away from land and pirates. Candidates are spread evenly
-    /// around the teammate (no randomness, so the server stays reproducible); the best one wins.
+    /// A clear patch of water beside a living teammate: away from land and pirates, and out of the storm. Candidates
+    /// are spread evenly around the teammate (no randomness, so the server stays reproducible); the best one wins.
     /// </summary>
     private static Vector2 PickSpawnPoint(World world, int playerId)
     {
         var teammates = world.Ships.Where(s => s.OwnerPlayerId is not null && s.OwnerPlayerId != playerId).ToList();
         if (teammates.Count == 0)
-            return world.WorldSize / 2f;
+            return Archipelago.Start;
 
         var anchor = teammates[(int)((world.Tick + playerId) % teammates.Count)].Position;
         var pirates = world.Ships.Where(s => s.Team == Team.Pirates).Select(s => s.Position).ToList();
@@ -95,10 +95,11 @@ public static class Respawning
 
             var land = world.DistanceToLand(candidate);
             var pirate = pirates.Count == 0 ? float.MaxValue : pirates.Min(p => Vector2.Distance(p, candidate));
-            if (land >= MinDistanceFromLand && pirate >= MinDistanceFromPirates)
+            var storm = world.Director?.InStorm(candidate) == true;
+            if (land >= MinDistanceFromLand && pirate >= MinDistanceFromPirates && !storm)
                 return candidate;
 
-            var score = MathF.Min(land / MinDistanceFromLand, pirate / MinDistanceFromPirates);
+            var score = MathF.Min(land / MinDistanceFromLand, pirate / MinDistanceFromPirates) - (storm ? 10f : 0f);
             if (score > bestScore)
             {
                 best = candidate;

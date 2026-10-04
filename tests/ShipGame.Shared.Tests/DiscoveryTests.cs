@@ -9,12 +9,12 @@ public class DiscoveryTests
 
     [Theory]
     [InlineData(0f, 0f, true)]
-    [InlineData(20f, -20f, true)]    // |dx - dy| = 40: the left/right edge of sight
-    [InlineData(21f, -21f, false)]   // just past it
-    [InlineData(22f, 22f, true)]     // |dx + dy| = 44: inside the top/bottom edge
-    [InlineData(23f, 23f, false)]    // |dx + dy| = 46: past it
-    [InlineData(30f, 0f, true)]      // 30 tiles straight along world X: across 30, down 30
-    [InlineData(46f, 0f, false)]
+    [InlineData(28f, 0f, true)]      // the left/right edge of sight, 28.3 tiles across
+    [InlineData(-29f, 0f, false)]    // just past it
+    [InlineData(0f, 31.5f, true)]    // the top/bottom edge, 31.8 tiles up and down
+    [InlineData(0f, -32.5f, false)]  // past it
+    [InlineData(20f, 20f, true)]     // a diagonal corner, inside both
+    [InlineData(20f, 33f, false)]
     public void Sight_MatchesTheMaxZoomView(float dx, float dy, bool visible)
     {
         Assert.Equal(visible, Discovery.SightContains(new Vector2(dx, dy)));
