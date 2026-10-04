@@ -193,9 +193,14 @@ public class PirateLifeTests
         var world = Runs.Create(seed: 1, crew);
         var flagship = world.Ships.Single(s => s.IsBoss);
 
-        RunTicks(world, SimConstants.TickRate * 20);
+        var furthest = 0f;
+        for (var t = 0; t < SimConstants.TickRate * 20; t++)
+        {
+            world.Step();
+            furthest = MathF.Max(furthest, Vector2.Distance(flagship.Position, Archipelago.BossPosition));
+        }
 
-        Assert.True(Vector2.Distance(flagship.Position, Archipelago.BossPosition) > 1f, "the flagship should be under way");
-        Assert.True(Vector2.Distance(flagship.Position, Archipelago.BossPosition) <= PirateCamps.FlagshipPatrolRadius + 4f);
+        Assert.True(furthest > 1f, "the flagship should be under way");
+        Assert.True(furthest <= PirateCamps.FlagshipPatrolRadius + 4f);
     }
 }

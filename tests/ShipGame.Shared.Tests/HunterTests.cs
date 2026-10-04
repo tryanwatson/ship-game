@@ -12,7 +12,8 @@ public class HunterTests
 
     private static (Ship ship, HunterBehavior behavior) SpawnHunter(World world, Vector2 position, float heading, Vector2? home = null)
     {
-        var hunter = world.SpawnShip(position, heading, ShipStats.Sloop, abilities: Loadouts.FullArsenal);
+        // Broadside only: a mortar would shell targets over the islands these tests sail round.
+        var hunter = world.SpawnShip(position, heading, ShipStats.Sloop, abilities: Loadouts.Pirate);
         var behavior = new HunterBehavior(home ?? position);
         hunter.Behavior = behavior;
         hunter.IsAnchored = true;

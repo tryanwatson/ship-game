@@ -26,7 +26,7 @@ public static class Loadouts
         .Take(Simulation.Ship.AbilitySlotCount)
         .ToArray();
 
-    /// <summary>Pirate sloops carry the broadside only (the hunter AI only knows how to use that).</summary>
+    /// <summary>A buccaneer's loadout, and the flagship's: the broadside only. Other pirates carry one other weapon (see <see cref="Progression.PirateRoles"/>).</summary>
     public static readonly IReadOnlyList<Ability?> Pirate = new Ability?[]
     {
         WeaponCatalog.Broadside.Ability,

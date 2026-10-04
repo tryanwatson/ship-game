@@ -4,6 +4,7 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Maps;
+using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using NVector2 = System.Numerics.Vector2;
 
@@ -65,6 +66,10 @@ public sealed class WorldRenderer
     private static readonly Color LevelAbove = new(245, 175, 80);
     private static readonly Color LevelFarAbove = new(245, 85, 70);
     private static readonly Color FlagshipLabel = new(245, 205, 95);
+
+    // Pirates' names (their role) over their health bars: smaller and quieter than the flagship's.
+    private const float NameScale = 1f;
+    private static readonly Color NameLabel = new(235, 225, 210);
     private const float FlagshipBarScale = 2f;
 
     private readonly PrimitiveBatch _batch;
@@ -530,12 +535,16 @@ public sealed class WorldRenderer
         if (ship.Level > 0)
             DrawLevelBadge(ship.Level, anchor + new Vector2(width + 3f, HealthBarHeight / 2f), localLevel);
         if (ship.IsBoss)
-        {
-            const string label = "PIRATE FLAGSHIP";
-            var labelWidth = PixelFont.Measure(label, LevelScale);
-            PixelFont.Draw(_batch, label, anchor + new Vector2((width - labelWidth) / 2f, -PixelFont.Height(LevelScale) - 5f),
-                LevelScale, FlagshipLabel);
-        }
+            DrawLabel("PIRATE FLAGSHIP", anchor, width, LevelScale, FlagshipLabel);
+        else if (PirateRoles.Of(ship) is { } role)
+            DrawLabel(PirateRoles.Name(role).ToUpperInvariant(), anchor, width, NameScale, NameLabel);
+    }
+
+    /// <summary>Text centered over a health bar of <paramref name="width"/> whose top left is <paramref name="anchor"/>.</summary>
+    private void DrawLabel(string text, Vector2 anchor, float width, float scale, Color color)
+    {
+        var textWidth = PixelFont.Measure(text, scale);
+        PixelFont.Draw(_batch, text, anchor + new Vector2((width - textWidth) / 2f, -PixelFont.Height(scale) - 5f), scale, color);
     }
 
     /// <summary>

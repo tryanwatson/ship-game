@@ -8,7 +8,7 @@ namespace ShipGame.Shared.Progression;
 
 /// <summary>
 /// Puts the map's pirates to sea at the start of a run. Each <see cref="PirateCamp"/> breaks up into groups of one to
-/// <see cref="MaxGroupSize"/> that sail together, and then either guards the island it lies off (cruising round it and
+/// <see cref="MaxGroupSize"/> that sail together, each pirate in them of any <see cref="PirateRole"/>, and then either guards the island it lies off (cruising round it and
 /// going for anyone who comes near) or roams its sea. Which, and how the camp splits, is down to the run's seed. The
 /// flagship patrols its waters at the far north. Bigger crews meet bigger camps. Camps don't come back once sunk.
 /// </summary>
@@ -70,14 +70,15 @@ public static class PirateCamps
                 var groupSize = rng.Next(1, Math.Min(MaxGroupSize, size - placed) + 1);
                 for (var i = 0; i < groupSize; i++, placed++)
                 {
-                    var pirate = SpawnPirate(world, GuardPosition(world, camp.Position, placed, size), ShipStats.PirateSloop, camp.Level);
+                    var pirate = SpawnPirate(world, GuardPosition(world, camp.Position, placed, size), ShipStats.PirateSloop, camp.Level,
+                        PirateRoles.Loadout(PirateRoles.Pick(rng)));
                     group.Add(pirate);
                     pirate.Behavior = new HunterBehavior(orders, rng.Next(), groupSize > 1 ? group : null);
                 }
             }
         }
 
-        var flagship = SpawnPirate(world, Archipelago.BossPosition, ShipStats.Flagship, Archipelago.BossLevel);
+        var flagship = SpawnPirate(world, Archipelago.BossPosition, ShipStats.Flagship, Archipelago.BossLevel, Loadouts.Pirate);
         flagship.IsBoss = true;
         flagship.Behavior = new HunterBehavior(new GuardPost(Archipelago.BossPosition, FlagshipPatrolRadius, Watch: FlagshipWatch), rng.Next());
     }
@@ -99,10 +100,10 @@ public static class PirateCamps
         return new RoamOrders(sea.North, MathF.Min(sea.South, Archipelago.Start.Y - StartBerth));
     }
 
-    private static Ship SpawnPirate(World world, Vector2 position, ShipStats hull, int level)
+    private static Ship SpawnPirate(World world, Vector2 position, ShipStats hull, int level, IReadOnlyList<Ability?> loadout)
     {
         // Facing south, the way trouble comes from.
-        var pirate = world.SpawnShip(position, MathF.PI / 2f, hull, abilities: Loadouts.Pirate);
+        var pirate = world.SpawnShip(position, MathF.PI / 2f, hull, abilities: loadout);
         pirate.Stance = NpcStance.Patrolling;
         PirateLevels.Apply(pirate, level);
         return pirate;

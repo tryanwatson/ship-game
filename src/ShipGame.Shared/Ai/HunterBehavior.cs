@@ -20,8 +20,9 @@ public enum HunterState
 /// Aggressive pirate. Between fights it follows its <see cref="Orders"/>: cruising round the patch it guards, or
 /// roaming its sea, or keeping station on the leader of its <see cref="Group"/>. It goes for enemies that come within
 /// <see cref="AggroRange"/> of it, trespassers on the patch it guards, whoever shoots it, and whoever the rest of its
-/// group is fighting; it chases at full sail and, once in range, steers to hold the target abeam at a comfortable
-/// distance and fires whichever broadside bears. Steers by rudder, like a player on WASD. Leashed: if dragged too far
+/// group is fighting; it chases at full sail and, once in range of its gun, circles the target at the distance that
+/// gun likes (see <see cref="FightingRanges"/>), keeping it abeam, and fires whenever a shot would land: a broadside
+/// when the target is in either lane, a long gun or mortar aimed where the target will be. Steers by rudder, like a player on WASD. Leashed: if dragged too far
 /// from its patch (or, roaming, from where the chase began), or the target gets away, it sails back and carries on.
 ///
 /// A <see cref="Relentless"/> hunter (a raider) has no orders: it hunts from the moment it spawns, always going
@@ -63,12 +64,6 @@ public sealed class HunterBehavior : INpcBehavior
     private const int GuardThrottle = 2;
     private const int RoamThrottle = 3;
 
-    // Inside this range, stop chasing and maneuver for a broadside.
-    private const float EngageRange = BroadsideVolley.Range + 2f;
-
-    // Distance to hold the target at while engaged: well inside volley range, outside ramming distance.
-    private const float PreferredRange = BroadsideVolley.Range * 0.6f;
-
     // How far (degrees) the helm will angle in or out from straight abeam to close or open the range.
     private const float RangeCorrectionDegrees = 45f;
 
@@ -77,6 +72,16 @@ public sealed class HunterBehavior : INpcBehavior
 
     // Only fire when the predicted target center is this deep in the firing lane (fraction of hull radius).
     private const float AimTightness = 0.5f;
+
+    // Refinements of an aimed shot's lead: each re-times the flight to where the last guess put the target.
+    private const int LeadIterations = 2;
+
+    /// <summary>
+    /// How much of a target's motion over a shell's flight a bomber allows for: 0 drops it where the target is now,
+    /// 1 where it will be if it holds its course. Full lead punishes holding a straight course; a turn or a change
+    /// of sail once the landing spot shows gets out from under it (pirate shells are slow; see <see cref="Mortar"/>).
+    /// </summary>
+    public const float MortarLead = 1f;
 
     // Cap on how far ahead to lead a chase, so a distant target's predicted position stays sensible.
     private const float MaxChaseLeadSeconds = 3f;
@@ -533,8 +538,9 @@ public sealed class HunterBehavior : INpcBehavior
         var distance = toTarget.Length();
         var bearing = MathF.Atan2(toTarget.Y, toTarget.X);
 
+        var (engageRange, preferredRange) = FightingRanges(ship);
         float desiredHeading;
-        if (distance > EngageRange)
+        if (distance > engageRange)
         {
             ship.Throttle = ChaseThrottle;
             var leadSeconds = MathF.Min(MaxChaseLeadSeconds, distance / MathF.Max(ship.Stats.MaxSpeed, 1f));
@@ -552,40 +558,95 @@ public sealed class HunterBehavior : INpcBehavior
 
             // Put the target abeam on our chosen side (heading = bearing -/+ 90 degrees), angled in when too far
             // and out when too close.
-            var rangeError = Math.Clamp((distance - PreferredRange) / PreferredRange, -1f, 1f);
+            var rangeError = Math.Clamp((distance - preferredRange) / preferredRange, -1f, 1f);
             var offAbeam = (90f - RangeCorrectionDegrees * rangeError) * MathF.PI / 180f;
             desiredHeading = bearing - _side * offAbeam;
         }
 
         Steer(world, ship, desiredHeading);
 
-        FireIfBearing(world, ship, target, distance);
+        Fire(world, ship, target, distance);
     }
+
+    /// <summary>
+    /// Inside the first range, a pirate stops chasing and circles to hold the target at the second, going by its main
+    /// gun (the one on 1): a buccaneer well inside volley range but clear of ramming; a sniper and a bomber further
+    /// off, out of a broadside's reach.
+    /// </summary>
+    public static (float Engage, float Preferred) FightingRanges(Ship ship) =>
+        ship.Abilities[(int)AbilitySlot.One]?.Definition switch
+        {
+            LongGun => (LongGun.Range, LongGun.Range * 0.75f),
+            Mortar => (Mortar.Range, Mortar.Range * 0.6f),
+            _ => (BroadsideVolley.Range + 2f, BroadsideVolley.Range * 0.6f),
+        };
 
     /// <summary>Whether <paramref name="target"/> is on the patch this pirate guards.</summary>
     private bool Trespassing(Ship target) =>
         Orders is GuardPost { Watch: > 0f } post && Vector2.Distance(target.Position, post.Center) <= post.Watch;
 
-    private static void FireIfBearing(World world, Ship ship, Ship target, float distance)
+    /// <summary>Fires every gun that's loaded and would land a shot on <paramref name="target"/> now.</summary>
+    private static void Fire(World world, Ship ship, Ship target, float distance)
+    {
+        for (var slot = 0; slot < Ship.AbilitySlotCount; slot++)
+        {
+            var ability = ship.Abilities[slot];
+            Vector2? aim = ability?.Definition switch
+            {
+                BroadsideVolley => BroadsideAim(world, ship, target, distance, ability),
+                LongGun when ability.IsReady => LongGunAim(world, ship, target),
+                Mortar when ability.IsReady => MortarAim(ship, target),
+                _ => null,
+            };
+            if (aim is { } point)
+                world.TryCastAbility(ship, (AbilitySlot)slot, point);
+        }
+    }
+
+    /// <summary>Where to aim a broadside, if the target will be in a loaded side's lane when the balls get there.</summary>
+    private static Vector2? BroadsideAim(World world, Ship ship, Ship target, float distance, AbilityState broadside)
     {
         // Cannonballs carry the firing ship's motion, so what matters is the target's motion relative to us
         // over the shot's flight time.
         var flightSeconds = distance / BroadsideVolley.ProjectileSpeedFor(ship);
         var predicted = target.Position + (target.Velocity - ship.Velocity) * flightSeconds;
 
-        for (var slot = 0; slot < Ship.AbilitySlotCount; slot++)
-        {
-            var ability = ship.Abilities[slot];
-            if (ability is not { Definition: BroadsideVolley })
-                continue;
+        // Aim at the predicted position: the broadside fires whichever side that's on, if that side is loaded.
+        var side = BroadsideVolley.SideCovering(ship, predicted, target.Stats.Radius * AimTightness);
+        return side != BroadsideSide.None
+               && broadside.IsChannelReady(BroadsideVolley.ChannelOf(side))
+               && !Navigation.LineBlockedByLand(world, ship.Position, predicted)
+            ? predicted
+            : null;
+    }
 
-            // Aim at the predicted position: the broadside fires whichever side that's on, if that side is loaded.
-            var side = BroadsideVolley.SideCovering(ship, predicted, target.Stats.Radius * AimTightness);
-            if (side != BroadsideSide.None
-                && ability.IsChannelReady(BroadsideVolley.ChannelOf(side))
-                && !Navigation.LineBlockedByLand(world, ship.Position, predicted))
-                world.TryCastAbility(ship, (AbilitySlot)slot, predicted);
+    /// <summary>Where to aim the long gun to meet the target, if that's in reach with no land in the way.</summary>
+    private static Vector2? LongGunAim(World world, Ship ship, Ship target)
+    {
+        // The ball doesn't carry our motion: lead the target by its own velocity over the flight time.
+        var speed = LongGun.SpeedFor(ship);
+        var aim = target.Position;
+        for (var i = 0; i < LeadIterations; i++)
+            aim = target.Position + target.Velocity * (Vector2.Distance(ship.Position, aim) / speed);
+        return Vector2.Distance(ship.Position, aim) <= LongGun.RangeFor(ship)
+               && !Navigation.LineBlockedByLand(world, ship.Position, aim)
+            ? aim
+            : null;
+    }
+
+    /// <summary>
+    /// Where to drop a shell on the target, allowing for <see cref="MortarLead"/> of its motion, if that's in range
+    /// (shells fly over land).
+    /// </summary>
+    private static Vector2? MortarAim(Ship ship, Ship target)
+    {
+        var aim = target.Position;
+        for (var i = 0; i < LeadIterations && MortarLead > 0f; i++)
+        {
+            var flightSeconds = (float)Mortar.FlightTicks(ship, Vector2.Distance(ship.Position, aim)) / SimConstants.TickRate;
+            aim = target.Position + target.Velocity * flightSeconds * MortarLead;
         }
+        return Vector2.Distance(ship.Position, aim) <= Mortar.RangeFor(ship) ? aim : null;
     }
 
     private bool IsPrey(World world, Ship other) => _prey is null || _prey(world, other);

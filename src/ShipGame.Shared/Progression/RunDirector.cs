@@ -180,7 +180,8 @@ public sealed class RunDirector
     {
         var position = PickSpawnPoint(world, prey.Position);
         var toPrey = prey.Position - position;
-        var hunter = world.SpawnShip(position, MathF.Atan2(toPrey.Y, toPrey.X), ShipStats.PirateSloop, abilities: Loadouts.Pirate);
+        var hunter = world.SpawnShip(position, MathF.Atan2(toPrey.Y, toPrey.X), ShipStats.PirateSloop,
+            abilities: PirateRoles.Loadout(PirateRoles.Pick(_rng)));
         hunter.Behavior = new HunterBehavior(home: position, relentless: true, prey: (w, ship) => w.Director?.InStorm(ship.Position) == true);
         hunter.Stance = NpcStance.Hunting;
         hunter.Throttle = ShipMovement.ThrottleLevels;

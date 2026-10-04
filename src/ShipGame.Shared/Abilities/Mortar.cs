@@ -22,6 +22,13 @@ public sealed class Mortar : Ability
     public const float MinFlightSeconds = 0.5f;
     public const float ShellSpeed = 25f;
 
+    /// <summary>
+    /// Pirates' shells fly this much longer and burst this much smaller than a player's, so a player who sees the
+    /// landing spot in time can sail out from under it. Applied to what the server sends, so clients just follow.
+    /// </summary>
+    public const float PirateFlightTimeScale = 1.5f;
+    public const float PirateBlastRadiusScale = 0.8f;
+
     /// <summary>In a salvo, each shell after the first lands this much later, this far from the aim point.</summary>
     public const int SalvoGapTicks = 6;
     public const float SalvoSpread = 1.5f;
@@ -44,7 +51,8 @@ public sealed class Mortar : Ability
 
     public static float RangeFor(Ship ship) => Range * ship.Stats.WeaponRange * ship.AbilityValue(AbilityId, AbilityStat.Range, 1f);
 
-    public static float BlastRadiusFor(Ship ship) => ship.AbilityValue(AbilityId, AbilityStat.BlastRadius, BlastRadius);
+    public static float BlastRadiusFor(Ship ship) =>
+        ship.AbilityValue(AbilityId, AbilityStat.BlastRadius, BlastRadius) * (ship.Team == Team.Pirates ? PirateBlastRadiusScale : 1f);
 
     public static float DamageFor(Ship ship) => Damage * ship.Stats.WeaponDamage * ship.AbilityValue(AbilityId, AbilityStat.Damage, 1f);
 
@@ -64,7 +72,8 @@ public sealed class Mortar : Ability
     public static int FlightTicks(Ship ship, float distance)
     {
         var seconds = (MinFlightSeconds + distance / (ShellSpeed * ship.Stats.ProjectileSpeed))
-                      * ship.AbilityValue(AbilityId, AbilityStat.FlightTime, 1f);
+                      * ship.AbilityValue(AbilityId, AbilityStat.FlightTime, 1f)
+                      * (ship.Team == Team.Pirates ? PirateFlightTimeScale : 1f);
         return Math.Max(1, (int)MathF.Ceiling(seconds * SimConstants.TickRate));
     }
 
