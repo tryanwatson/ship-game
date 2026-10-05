@@ -63,6 +63,7 @@ public static class PixelFont
         ['*'] = Rows("00000", "10101", "01110", "11111", "01110", "10101", "00000"),
         ['['] = Rows("01110", "01000", "01000", "01000", "01000", "01000", "01110"),
         [']'] = Rows("01110", "00010", "00010", "00010", "00010", "00010", "01110"),
+        ['\''] = Rows("00100", "00100", "01000", "00000", "00000", "00000", "00000"),
     };
 
     /// <summary>Pixel width of <paramref name="text"/> at <paramref name="scale"/> screen pixels per font pixel.</summary>

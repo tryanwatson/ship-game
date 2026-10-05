@@ -1,5 +1,6 @@
-# Push a tag like v0.3.0 to build the client for each platform, attach the zips to a GitHub release, and update the
-# dedicated server to match (see docs/hosting.md, "Automatic updates"; skipped until that's set up).
+# Push a tag like v0.3.0 to build the client and launcher for each platform, attach them to a GitHub release, and
+# update the dedicated server to match (see docs/hosting.md, "Automatic updates"; skipped until that's set up).
+# The launcher installs the latest release's ShipGame-<version>-<rid>.zip, so keep those names and layouts stable.
 # Run it by hand (Actions > Release > Run workflow) to get the zips as workflow artifacts without a release.
 name: Release
 
@@ -40,24 +41,37 @@ jobs:
           dotnet publish src/ShipGame.Client -c Release -r ${{ matrix.rid }} --self-contained
           -p:Version=$VERSION -p:DebugType=None -p:DebugSymbols=false -o publish/ShipGame
 
+      # One file on Windows and Linux; an app bundle on macOS, where single-file builds' unpacked libraries are unsigned.
+      - name: Publish launcher
+        run: >
+          dotnet publish src/ShipGame.Launcher -c Release -r ${{ matrix.rid }} --self-contained
+          -p:PublishSingleFile=${{ runner.os != 'macOS' }}
+          -p:Version=$VERSION -p:DebugType=None -p:DebugSymbols=false -o publish/launcher
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        run: cd publish && 7z a -tzip "../ShipGame-$VERSION-${{ matrix.rid }}.zip" ShipGame
+        run: |
+          (cd publish && 7z a -tzip "../ShipGame-$VERSION-${{ matrix.rid }}.zip" ShipGame)
+          cp publish/launcher/ShipGame.Launcher.exe "ShipGame-Launcher-${{ matrix.rid }}.exe"
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
           scripts/make-macos-app.sh publish/ShipGame publish/app "$VERSION"
           ditto -c -k --keepParent publish/app/ShipGame.app "ShipGame-$VERSION-${{ matrix.rid }}.zip"
+          scripts/make-macos-app.sh publish/launcher publish/launcher-app "$VERSION" ShipGame.Launcher com.tryanwatson.shipgame.launcher
+          ditto -c -k --keepParent publish/launcher-app/ShipGame.app "ShipGame-Launcher-${{ matrix.rid }}.zip"
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
-        run: cd publish && zip -qr "../ShipGame-$VERSION-${{ matrix.rid }}.zip" ShipGame
+        run: |
+          (cd publish && zip -qr "../ShipGame-$VERSION-${{ matrix.rid }}.zip" ShipGame)
+          (cd publish/launcher && zip -q "../../ShipGame-Launcher-${{ matrix.rid }}.zip" ShipGame.Launcher)
 
       - uses: actions/upload-artifact@v7
         with:
           name: ShipGame-${{ matrix.rid }}
-          path: ShipGame-*.zip
+          path: ShipGame-*
           if-no-files-found: error
 
   release:
@@ -71,7 +85,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
 
