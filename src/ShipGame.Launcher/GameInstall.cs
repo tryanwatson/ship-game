@@ -26,13 +26,17 @@ public sealed class GameInstall
         Environment.GetEnvironmentVariable("SHIPGAME_INSTALL_DIR") is { Length: > 0 } dir ? dir
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShipGame");
 
-    /// <summary>This machine's runtime identifier, as the release zips are named: win-x64, osx-arm64, linux-x64.</summary>
+    /// <summary>
+    /// The launcher's own runtime identifier, as the release zips are named: win-x64, osx-arm64, linux-x64. It's the
+    /// process's architecture rather than the machine's, so the x64 launcher running emulated on an Arm PC still gets
+    /// the x64 game.
+    /// </summary>
     public static string Rid
     {
         get
         {
             var os = OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux";
-            return $"{os}-{RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant()}";
+            return $"{os}-{RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()}";
         }
     }
 

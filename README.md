@@ -28,7 +28,7 @@ one, then starts the game (if it can't reach GitHub, it starts the version you a
 - **Linux**: [ShipGame-Launcher-linux-x64.zip](https://github.com/tryanwatson/ship-game/releases/latest/download/ShipGame-Launcher-linux-x64.zip).
   Unzip it and run `./ShipGame.Launcher`.
 
-Games are installed in `%LocalAppData%\ShipGame`, `~/Library/Application Support/ShipGame` or
+The launcher installs the game in `%LocalAppData%\ShipGame`, `~/Library/Application Support/ShipGame` or
 `~/.local/share/ShipGame`. Any arguments to the launcher are passed on to the game. Each release on the
 [Releases](https://github.com/tryanwatson/ship-game/releases) page also has the game itself as a plain zip
 (`ShipGame-<version>-<system>.zip`) if you'd rather not use the launcher.
