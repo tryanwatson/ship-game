@@ -72,9 +72,13 @@ public static class CardIcons
                     var radius = (i % 2 == 0 ? 0.9f : 0.42f) * r;
                     star[i] = c + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * radius;
                 }
+                Span<Vector2> spike = stackalloc Vector2[4];
                 for (var i = 0; i < star.Length; i += 2)
                 {
-                    Span<Vector2> spike = stackalloc Vector2[] { c, star[(i + star.Length - 1) % star.Length], star[i], star[i + 1] };
+                    spike[0] = c;
+                    spike[1] = star[(i + star.Length - 1) % star.Length];
+                    spike[2] = star[i];
+                    spike[3] = star[i + 1];
                     batch.FillConvex(spike, color);
                 }
                 break;
@@ -140,13 +144,13 @@ public static class CardIcons
             case CardIcon.Fire:
             {
                 // Three tongues of flame.
+                Span<Vector2> flame = stackalloc Vector2[4];
                 foreach (var (dx, height) in new[] { (-0.45f, 0.75f), (0.45f, 0.75f), (0f, 1f) })
                 {
-                    Span<Vector2> flame = stackalloc Vector2[]
-                    {
-                        c + new Vector2(dx, 0.85f - height * 1.6f) * r, c + new Vector2(dx + 0.3f, 0.5f) * r,
-                        c + new Vector2(dx, 0.85f) * r, c + new Vector2(dx - 0.3f, 0.5f) * r,
-                    };
+                    flame[0] = c + new Vector2(dx, 0.85f - height * 1.6f) * r;
+                    flame[1] = c + new Vector2(dx + 0.3f, 0.5f) * r;
+                    flame[2] = c + new Vector2(dx, 0.85f) * r;
+                    flame[3] = c + new Vector2(dx - 0.3f, 0.5f) * r;
                     batch.FillConvex(flame, dx == 0f ? color : color * 0.7f);
                 }
                 break;

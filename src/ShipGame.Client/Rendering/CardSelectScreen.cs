@@ -81,7 +81,7 @@ public sealed class CardSelectScreen
     {
         if (player is { CardOffers.Count: 0, NeedsStartingWeapon: true } && _shown == WeaponChoice)
             return PickWeapon(input, hud);
-        if (player is null || player.CardOffers.Count == 0 || player.CardOffers[0] != _shown)
+        if (player is null || player.CardOffers.Count == 0 || !ReferenceEquals(player.CardOffers[0], _shown))
             return null;
         var offer = player.CardOffers[0].Cards;
         var canReroll = player.CardOffers[0].FreeRerolls > 0 || player.Gold >= CardRewards.RerollCost(player.Rerolls);
@@ -122,7 +122,7 @@ public sealed class CardSelectScreen
         var offer = player?.CardOffers.Count > 0 ? player.CardOffers[0] : null;
         var choosingWeapon = offer is null && player?.NeedsStartingWeapon == true;
         var showing = (object?)offer ?? (choosingWeapon ? WeaponChoice : null);
-        if (showing is not null && showing != _shown)
+        if (showing is not null && !ReferenceEquals(showing, _shown))
         {
             _shown = showing;
             _shownAt = now;
