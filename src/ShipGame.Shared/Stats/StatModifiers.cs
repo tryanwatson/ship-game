@@ -47,12 +47,19 @@ public sealed class StatModifiers
         return MathF.Max(0f, (baseValue + flat) * (1f + percent) * multiplier);
     }
 
+    /// <summary>
+    /// Upgrades can tighten a ship's turns to this share of its hull's radius and no further (2.5x the turn rate). Much
+    /// past it the helm spins the ship faster than anyone can steer, and at zero she flips end for end every tick.
+    /// </summary>
+    public const float TightestTurn = 0.4f;
+
     public ShipStats Apply(ShipStats baseStats) => Apply(baseStats, _modifiers);
 
     /// <summary>The ship's stats through <paramref name="modifiers"/> (an upgrade list plus anything else, such as cards).</summary>
     public static ShipStats Apply(ShipStats baseStats, IReadOnlyCollection<StatModifier> modifiers)
     {
         float Stat(StatId stat, float baseValue) => Combine(modifiers, stat, baseValue);
+        float TurnRadius(float baseValue) => MathF.Max(baseValue * TightestTurn, Stat(StatId.TurnRadius, baseValue));
         return baseStats with
         {
             MaxSpeed = Stat(StatId.MaxSpeed, baseStats.MaxSpeed),
@@ -61,8 +68,8 @@ public sealed class StatModifiers
             WeaponDamage = Stat(StatId.WeaponDamage, baseStats.WeaponDamage),
             ProjectileSpeed = Stat(StatId.ProjectileSpeed, baseStats.ProjectileSpeed),
             WeaponRange = Stat(StatId.WeaponRange, baseStats.WeaponRange),
-            MinTurnRadius = Stat(StatId.TurnRadius, baseStats.MinTurnRadius),
-            TurnRadiusAtMaxSpeed = Stat(StatId.TurnRadius, baseStats.TurnRadiusAtMaxSpeed),
+            MinTurnRadius = TurnRadius(baseStats.MinTurnRadius),
+            TurnRadiusAtMaxSpeed = TurnRadius(baseStats.TurnRadiusAtMaxSpeed),
             CargoCapacity = Stat(StatId.CargoCapacity, baseStats.CargoCapacity),
             HealthRegen = Stat(StatId.HealthRegen, baseStats.HealthRegen)
                 + Stat(StatId.HealthRegenFraction, 0f) * Stat(StatId.MaxHealth, baseStats.MaxHealth),

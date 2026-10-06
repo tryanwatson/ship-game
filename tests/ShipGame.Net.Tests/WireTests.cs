@@ -32,6 +32,8 @@ public class WireTests
         new object[] { new PurchaseRepairCommand(9) },
         new object[] { new ChooseCardCommand(9, "double-battery") },
         new object[] { new RerollCardsCommand(9) },
+        new object[] { new RerollCardsCommand(9, CardTier.Silver) },
+        new object[] { new RerollCardsCommand(9, CardTier.Prismatic) },
     };
 
     [Theory]
@@ -112,6 +114,27 @@ public class WireTests
         Assert.Equal(worldEvent, ReaderFor(writer).GetEvent());
     }
 
+    [Fact]
+    public void Events_SendAVolleyOfShotsAsOneRecord_AndReadThemBackApart()
+    {
+        // A ring of 20, then a lone shot of another ship's, then a broken run (an id skipped), round a couple of others.
+        var events = new List<WorldEvent> { new ShipRammed(10, 3, 812) };
+        for (var i = 0; i < 20; i++)
+            events.Add(new ProjectileSpawned(10, 100 + i, 3, Team.Players, new Vector2(i, -i), new Vector2(14f, i * 0.5f), 6f, 18));
+        events.Add(new ProjectileSpawned(10, 120, 4, Team.Players, new Vector2(1, 2), new Vector2(3, 4), 6f, 18));
+        events.Add(new ProjectileSpawned(10, 122, 3, Team.Players, new Vector2(1, 2), new Vector2(3, 4), 6f, 18));
+        events.Add(new FireStarted(10, 99, 3, Team.Players, new Vector2(40, 41.5f), 2.5f, 17.5f, 190));
+
+        var batched = new NetDataWriter();
+        batched.PutEvents(events);
+        var oneByOne = new NetDataWriter();
+        foreach (var e in events)
+            oneByOne.PutEvent(e);
+
+        Assert.Equal(events, ReaderFor(batched).GetEvents());
+        Assert.True(batched.Length < oneByOne.Length / 2, $"{batched.Length} bytes batched against {oneByOne.Length}");
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -137,6 +160,15 @@ public class WireTests
         writer.PutLobby(new LobbyState(false, new[] { new LobbyPlayer(1, false) }, StartingGold: 2500));
 
         Assert.Equal(2500, ReaderFor(writer).GetLobby().StartingGold);
+    }
+
+    [Fact]
+    public void Lobby_CarriesTheTestingOption()
+    {
+        var writer = new NetDataWriter();
+        writer.PutLobby(new LobbyState(false, new[] { new LobbyPlayer(1, false) }, Testing: true));
+
+        Assert.True(ReaderFor(writer).GetLobby().Testing);
     }
 
     [Fact]
@@ -197,6 +229,7 @@ public class WireTests
         for (var i = 0; i < 30; i++)
             world.SpawnShip(new Vector2(20 + i, 40), 0f, ShipStats.Sloop);
         world.AddGold(1, 25);
+        world.ApplyStatus(player, StatusId.Burning, 4.5f, sourceShipId: 7, stacks: 3);
         var snapshot = Snapshot.Capture(world);
         snapshot.CommandAcks.Add((1, 4_000_000_000u));
         snapshot.Run = new ShipGame.Shared.Progression.RunStatus(FortressesTaken: 5, BossesSunk: 2, BossCountdownTicks: 287, BossAfloat: true);
@@ -217,6 +250,8 @@ public class WireTests
         Assert.Equal(new Vector2(0.25f, -0.5f), ships[0].WindDrift);
         Assert.Equal(17, ships[0].AnchorDropTicks);
         Assert.Equal(-1, ships[0].Throttle); // rowing astern
+        Assert.Equal(new[] { (StatusId.Burning, 3, 4.5f, Statuses.Get(StatusId.Burning).Ticks) }, ships[0].Statuses);
+        Assert.Empty(ships[1].Statuses);
         Assert.Equal(4_000_000_000u, header.AckFor(1));
         Assert.Equal(0u, header.AckFor(2));
         Assert.Equal(snapshot.Run, header.Run); // the HUD's fortress and boss forecast

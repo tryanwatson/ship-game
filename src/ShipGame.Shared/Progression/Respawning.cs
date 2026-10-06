@@ -61,7 +61,7 @@ public static class Respawning
         // from the player, since some may have been chosen while they waited.
         if (lost is not null)
         {
-            foreach (var modifier in lost.Modifiers.Where(m => m.Source != World.SlowSource)) // a slow doesn't come back with you
+            foreach (var modifier in lost.Modifiers.Where(m => !Statuses.IsStatusSource(m.Source))) // buffs and debuffs don't come back with you
                 ship.AddModifier(modifier);
             foreach (var skill in lost.Skills)
                 ship.AddSkill(skill);

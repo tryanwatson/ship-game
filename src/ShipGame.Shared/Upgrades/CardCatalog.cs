@@ -38,7 +38,7 @@ public enum Perk
     /// <summary>Share of max health regained for each ship or fort sunk.</summary>
     PrizeCrewHeal,
 
-    /// <summary>Damage dealt to whatever the ship runs into.</summary>
+    /// <summary>Damage dealt to whatever the ship runs into, at a stock sloop's top speed (see <see cref="World.RamDamageAt"/>).</summary>
     RamDamage,
 
     /// <summary>Extra damage, from everyone, to whatever the ship hits, for a few seconds.</summary>
@@ -46,6 +46,12 @@ public enum Perk
 
     /// <summary>Every weapon fires again a moment later, at this share of its damage.</summary>
     Echo,
+
+    /// <summary>Every hit adds a stack of <see cref="StatusId.Burning"/>: damage a second per stack.</summary>
+    BurnOnHit,
+
+    /// <summary>Every kill adds a stack of <see cref="StatusId.Frenzy"/>: reload speed per stack (and half that in speed).</summary>
+    Frenzy,
 }
 
 /// <summary>One change a card makes to the ship's own stats.</summary>
@@ -84,6 +90,9 @@ public readonly record struct CardPick(string Id, int Level, float Roll = 0f)
     public float[] Values => Definition.ValuesFor(this);
 
     public string Description => Definition.Describe(Values);
+
+    /// <summary>How it works out on <paramref name="ship"/> right now, for cards whose numbers depend on the ship; else null.</summary>
+    public string? DescriptionOn(Ship ship) => Definition.DescribeOn?.Invoke(Values, ship);
 }
 
 /// <summary>
@@ -114,6 +123,9 @@ public sealed class CardDefinition
 
     /// <summary>What it does, in the HUD's capitals, given its numbers.</summary>
     public required Func<float[], string> Describe { get; init; }
+
+    /// <summary>For a card whose effect depends on the ship (its speed, say): what that comes to on a given ship, right now.</summary>
+    public Func<float[], Ship, string>? DescribeOn { get; init; }
 
     public Func<float[], IEnumerable<CardStat>>? Stats { get; init; }
 
@@ -230,7 +242,8 @@ public static class CardCatalog
         {
             Values = new[] { V(0.3f, 0.6f) },
             Describe = v => $"TURN {P(v[0])} TIGHTER.",
-            Stats = v => new[] { CardStat.Percent(StatId.TurnRadius, -v[0]) },
+            // Compounds rather than adds, so copies can't drive the radius through zero (see StatModifiers.TightestTurn).
+            Stats = v => new[] { new CardStat(StatId.TurnRadius, ModifierKind.Multiplier, 1f - v[0]) },
         },
         new("patchwork-hull", "PATCHWORK HULL", CardTier.Silver)
         {
@@ -307,6 +320,20 @@ public static class CardCatalog
         },
 
         // ---- Gold: big, clean boosts -----------------------------------------------------------------------
+        new("heated-shot", "HEATED SHOT", CardTier.Gold)
+        {
+            Values = new[] { V(3f, 8f) },
+            Describe = v => $"EVERY HIT SETS ITS TARGET BURNING: {N(v[0])} DAMAGE A SECOND FOR EACH STACK, UP TO "
+                            + $"{Statuses.Get(StatusId.Burning).MaxStacks}. EACH HIT KEEPS IT BURNING {N(Statuses.Get(StatusId.Burning).Seconds)} SECONDS MORE.",
+            Perks = v => new[] { (Perk.BurnOnHit, v[0]) },
+        },
+        new("frenzy", "FRENZY", CardTier.Gold)
+        {
+            Values = new[] { V(0.06f, 0.12f) },
+            Describe = v => $"EVERY SHIP YOU SINK ADDS A STACK OF FRENZY, UP TO {Statuses.Get(StatusId.Frenzy).MaxStacks}: +{P(v[0])} RELOAD SPEED "
+                            + $"AND +{P(v[0] / 2f)} SPEED EACH. IT LASTS {N(Statuses.Get(StatusId.Frenzy).Seconds)} SECONDS FROM YOUR LAST KILL.",
+            Perks = v => new[] { (Perk.Frenzy, v[0]) },
+        },
         new("full-sail", "FULL SAIL", CardTier.Gold)
         {
             Values = new[] { V(0.3f, 0.7f) },
@@ -377,6 +404,42 @@ public static class CardCatalog
             Describe = v => $"+{P(v[0])} BROADSIDE DAMAGE.",
             WeaponEffects = v => new[] { Times(Damage, 1f + v[0]) },
         },
+        new("gun-captains", "GUN CAPTAINS", CardTier.Gold)
+        {
+            AbilityId = BroadsideVolley.AbilityId,
+            Values = new[] { V(0.15f, 0.4f) },
+            Describe = v => $"EACH BROADSIDE DECK FIRES BY ITSELF WHENEVER IT'S LOADED AND AN ENEMY IS IN ITS LANE. RELOADS {P(v[0])} FASTER.",
+            WeaponEffects = v => new[] { Flat(AutoFire, 1f), Times(Cooldown, Faster(v[0])) },
+        },
+        new("grapeshot", "GRAPESHOT", CardTier.Gold)
+        {
+            AbilityId = BroadsideVolley.AbilityId,
+            Values = new[] { V(2f, 4f) },
+            Describe = v => $"EVERY CANNON FIRES {N(v[0])} MORE BALLS OF GRAPE, FANNED OUT. A BALL OF GRAPE DOES {P(BroadsideVolley.GrapeDamageFraction)} DAMAGE.",
+            WeaponEffects = v => new[] { Flat(Grapeshot, Whole(v[0])) },
+        },
+        new("skip-shot", "SKIP SHOT", CardTier.Gold)
+        {
+            AbilityId = BroadsideVolley.AbilityId,
+            Values = new[] { V(1f, 3f) },
+            Describe = v => Whole(v[0]) == 1 ? "CANNONBALLS SKIP ON ONCE, OFF THE WATER OR WHATEVER THEY HIT."
+                : $"CANNONBALLS SKIP ON UP TO {N(v[0])} TIMES, OFF THE WATER OR WHATEVER THEY HIT.",
+            WeaponEffects = v => new[] { Flat(Skips, Whole(v[0])) },
+        },
+        new("hot-guns", "HOT GUNS", CardTier.Gold)
+        {
+            AbilityId = BroadsideVolley.AbilityId,
+            Values = new[] { V(0.04f, 0.1f) },
+            Describe = v => $"EVERY BROADSIDE HIT TAKES {P1(v[0])} OF THE RELOAD OFF BOTH DECKS.",
+            WeaponEffects = v => new[] { Flat(HitRefund, v[0]) },
+        },
+        new("incendiary-shot", "INCENDIARY SHOT", CardTier.Gold)
+        {
+            AbilityId = BroadsideVolley.AbilityId,
+            Values = new[] { V(2f, 4f), V(6f, 15f) },
+            Describe = v => $"BROADSIDE HITS SET THE WATER BURNING FOR {D(v[0])} SECONDS, {N(v[1])} DAMAGE A SECOND.",
+            WeaponEffects = v => new[] { Flat(FireSeconds, v[0]), Flat(FireDps, v[1]) },
+        },
         new("rifled-barrel", "RIFLED BARREL", CardTier.Gold)
         {
             AbilityId = LongGun.AbilityId,
@@ -398,6 +461,27 @@ public static class CardCatalog
             Values = new[] { V(0.5f, 1.25f) },
             Describe = v => $"+{P(v[0])} LONG GUN DAMAGE.",
             WeaponEffects = v => new[] { Times(Damage, 1f + v[0]) },
+        },
+        new("explosive-rounds", "EXPLOSIVE ROUNDS", CardTier.Gold)
+        {
+            AbilityId = LongGun.AbilityId,
+            Values = new[] { V(2f, 3.5f), V(0.5f, 1f) },
+            Describe = v => $"LONG GUN HITS EXPLODE, HURTING EVERYTHING WITHIN {D(v[0])} TILES FOR {P(v[1])} OF THE SHOT'S DAMAGE.",
+            WeaponEffects = v => new[] { Flat(ExplosionRadius, v[0]), Flat(ExplosionDamage, v[1]) },
+        },
+        new("burning-wake", "BURNING WAKE", CardTier.Gold)
+        {
+            AbilityId = LongGun.AbilityId,
+            Values = new[] { V(2f, 4f), V(8f, 20f) },
+            Describe = v => $"LONG GUN SHOTS LEAVE THE WATER BURNING BEHIND THEM FOR {D(v[0])} SECONDS, {N(v[1])} DAMAGE A SECOND.",
+            WeaponEffects = v => new[] { Flat(FireSeconds, v[0]), Flat(FireDps, v[1]) },
+        },
+        new("volley-gun", "VOLLEY GUN", CardTier.Gold)
+        {
+            AbilityId = LongGun.AbilityId,
+            Values = new[] { V(2f, 4f) },
+            Describe = v => $"THE LONG GUN FIRES {N(v[0])} MORE SHOTS AT ONCE, IN A FAN.",
+            WeaponEffects = v => new[] { Flat(ShotCount, Whole(v[0])) },
         },
         new("mortar-crew", "MORTAR CREW", CardTier.Gold)
         {
@@ -444,7 +528,8 @@ public static class CardCatalog
         new("ram", "RAM", CardTier.Prismatic)
         {
             Values = new[] { V(40f, 100f) },
-            Describe = v => $"RUNNING INTO A SHIP DEALS IT {N(v[0])} DAMAGE, AND YOU NONE.",
+            Describe = v => $"RAMMING A SHIP DEALS {N(v[0])} DAMAGE AT A SLOOP'S TOP SPEED, MORE IF FASTER. YOU TAKE NONE.",
+            DescribeOn = (v, ship) => $"AT YOUR TOP SPEED: {N(World.RamDamageAt(v[0], ship.Stats.MaxSpeed))} DAMAGE.",
             Perks = v => new[] { (Perk.RamDamage, v[0]) },
         },
         new("hunters-mark", "HUNTERS MARK", CardTier.Prismatic)
@@ -479,6 +564,16 @@ public static class CardCatalog
             Describe = v => $"BROADSIDE HITS SLOW THE SHIP THEY STRIKE BY {P(v[0])} FOR 3 SECONDS.",
             WeaponEffects = v => new[] { Flat(SlowOnHit, MathF.Min(0.85f, v[0])) },
         },
+        new("man-o-war", "MAN O' WAR", CardTier.Prismatic)
+        {
+            AbilityId = BroadsideVolley.AbilityId,
+            Values = new[] { V(0f, 0.5f) },
+            Describe = v => "THE BROADSIDE BECOMES A RING OF SHOT ALL ROUND THE SHIP, AND FIRES BY ITSELF WHENEVER IT'S LOADED AND AN ENEMY IS IN RANGE."
+                            + (v[0] < 0.005f ? "" : $" +{P(v[0])} DAMAGE."),
+            DescribeOn = (_, ship) =>
+                $"YOUR RING: {BroadsideVolley.RingShotsFor(ship)} BALLS, EVERY {BroadsideVolley.ReloadSecondsFor(ship):0.0} SECONDS.",
+            WeaponEffects = v => new[] { Flat(Ring, 1f), Times(Damage, 1f + v[0]) },
+        },
         new("railgun", "RAILGUN", CardTier.Prismatic)
         {
             AbilityId = LongGun.AbilityId,
@@ -493,6 +588,20 @@ public static class CardCatalog
             Describe = v => Whole(v[0]) == 1 ? "A LONG GUN HIT BOUNCES ON TO THE NEAREST OTHER ENEMY WITHIN 10 TILES."
                 : $"A LONG GUN HIT BOUNCES ON TO THE NEAREST OTHER ENEMY WITHIN 10 TILES, UP TO {N(v[0])} TIMES.",
             WeaponEffects = v => new[] { Flat(Ricochets, Whole(v[0])) },
+        },
+        new("fork", "FORK", CardTier.Prismatic)
+        {
+            AbilityId = LongGun.AbilityId,
+            Values = new[] { V(2f, 4f) },
+            Describe = v => $"A LONG GUN HIT SPLITS IN TWO, EACH HALF FLYING ON TO ANOTHER ENEMY WITHIN 10 TILES. THE HALVES SPLIT TOO, {N(v[0])} TIMES IN ALL.",
+            WeaponEffects = v => new[] { Flat(Forks, Whole(v[0])) },
+        },
+        new("headhunter", "HEADHUNTER", CardTier.Prismatic)
+        {
+            AbilityId = LongGun.AbilityId,
+            Values = new[] { V(0f, 0.5f) },
+            Describe = v => "SINKING A SHIP WITH THE LONG GUN RELOADS IT AT ONCE." + (v[0] < 0.005f ? "" : $" +{P(v[0])} DAMAGE."),
+            WeaponEffects = v => new[] { Flat(KillRefund, 1f), Times(Damage, 1f + v[0]) },
         },
         new("carpet-bombing", "CARPET BOMBING", CardTier.Prismatic)
         {

@@ -378,7 +378,7 @@ public sealed class Ship
             _abilityModifiers.AddRange(card.Definition.AbilityModifiersFor(card));
     }
 
-    // ---- What cards do in a fight. Server-side, except Marked, which snapshots carry. ----------------------------
+    // ---- What cards do in a fight. Server-side, except statuses, which snapshots carry. --------------------------
 
     /// <summary>Scales the damage of what the ship fires right now: below 1 while a card's echo fires.</summary>
     public float CastDamageScale { get; set; } = 1f;
@@ -386,16 +386,28 @@ public sealed class Ship
     /// <summary>What's firing right now is an echo (it changes no reloads).</summary>
     public bool IsEchoing { get; set; }
 
-    /// <summary>Until when it takes extra damage from everyone (Hunter's Mark), and how much.</summary>
-    public long MarkedUntilTick { get; set; } = -1;
+    private readonly List<StatusEffect> _statuses = new();
 
-    public float MarkBonus { get; set; }
+    /// <summary>Its buffs and debuffs right now (change them through <see cref="World.ApplyStatus"/>).</summary>
+    public IReadOnlyList<StatusEffect> Statuses => _statuses;
 
-    /// <summary>Marked as a target right now: shown over its health bar.</summary>
-    public bool IsMarked { get; set; }
+    public StatusEffect? FindStatus(StatusId id) => _statuses.Find(s => s.Id == id);
 
-    /// <summary>Until when it's slowed (Chain Shot): a speed modifier that comes off then.</summary>
-    public long SlowedUntilTick { get; set; } = -1;
+    public int StacksOf(StatusId id) => FindStatus(id)?.Stacks ?? 0;
+
+    /// <summary>Under a Hunter's Mark: everyone's hits on it do more. Shown over its health bar.</summary>
+    public bool IsMarked => FindStatus(StatusId.Marked) is not null;
+
+    internal void AddStatus(StatusEffect status) => _statuses.Add(status);
+
+    internal void RemoveStatus(StatusEffect status) => _statuses.Remove(status);
+
+    /// <summary>Replaces every status at once, for a client mirroring the server's ship (its stats come with its info).</summary>
+    public void ReplaceStatuses(IEnumerable<StatusEffect> statuses)
+    {
+        _statuses.Clear();
+        _statuses.AddRange(statuses);
+    }
 
     /// <summary>When Second Wind can next save it.</summary>
     public long SecondWindReadyTick { get; set; }

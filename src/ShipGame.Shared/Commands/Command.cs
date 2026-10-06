@@ -1,5 +1,6 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
+using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Commands;
 
@@ -61,7 +62,8 @@ public sealed record ChooseCardCommand(int PlayerId, string CardId) : Command(Pl
 public sealed record ChooseStartingWeaponCommand(int PlayerId, string AbilityId) : Command(PlayerId);
 
 /// <summary>Pays gold to swap the cards in the player's oldest offer for a fresh draw (see <c>CardRewards.TryReroll</c>).</summary>
-public sealed record RerollCardsCommand(int PlayerId) : Command(PlayerId);
+/// <param name="Tier">For a testing hand: the tier to deal it in. Ignored otherwise.</param>
+public sealed record RerollCardsCommand(int PlayerId, CardTier? Tier = null) : Command(PlayerId);
 
 /// <summary>
 /// Casts the ability in <paramref name="Slot"/>. <paramref name="Target"/> is the cursor's world position.

@@ -8,7 +8,9 @@ namespace ShipGame.Net;
 
 /// <summary>Who's connected and who's ready, plus whether a run is underway (no joining mid-run).</summary>
 /// <param name="StartingGold">Gold everyone starts the next run with; any player in the lobby can set it (for playtesting).</param>
-public sealed record LobbyState(bool RunInProgress, IReadOnlyList<LobbyPlayer> Players, bool FriendlyFire = false, int StartingGold = 0);
+/// <param name="Testing">The next run opens with a late game's worth of cards to choose (for playtesting; the host sets it).</param>
+public sealed record LobbyState(bool RunInProgress, IReadOnlyList<LobbyPlayer> Players, bool FriendlyFire = false, int StartingGold = 0,
+    bool Testing = false);
 
 /// <param name="Name">What they're called (see <c>PlayerNames</c>); empty until they give one, which readying up needs.</param>
 public sealed record LobbyPlayer(int PlayerId, bool Ready, string Name = "");
@@ -67,8 +69,8 @@ public sealed class ShipState
     // The rest of the movement state, so a client predicting its own ship can carry on from exactly here.
     public bool IsHoldingCourse;
     public Vector2 WindDrift;
-    /// <summary>Under a Hunter's Mark: everyone's hits on it do more.</summary>
-    public bool Marked;
+    /// <summary>Its buffs and debuffs: which, how many stacks, how strong each, and ticks left (from the snapshot's tick).</summary>
+    public (StatusId Id, int Stacks, float Power, int RemainingTicks)[] Statuses = Array.Empty<(StatusId, int, float, int)>();
     /// <summary>Per ability slot, per cooldown channel: (remaining, duration) ticks. Empty for an empty slot.</summary>
     public (int Remaining, int Duration)[][] Cooldowns = new (int, int)[Ship.AbilitySlotCount][];
 }
@@ -129,12 +131,12 @@ public sealed class Snapshot
         foreach (var ship in world.Ships)
         {
             if (include is null || include(ship))
-                snapshot.Ships.Add(CaptureShip(ship));
+                snapshot.Ships.Add(CaptureShip(ship, world.Tick));
         }
         return snapshot;
     }
 
-    private static ShipState CaptureShip(Ship ship)
+    private static ShipState CaptureShip(Ship ship, long tick)
     {
         var state = new ShipState
         {
@@ -154,7 +156,7 @@ public sealed class Snapshot
             MoveTarget = ship.MoveTarget,
             IsHoldingCourse = ship.IsHoldingCourse,
             WindDrift = ship.WindDrift,
-            Marked = ship.IsMarked,
+            Statuses = ship.Statuses.Select(s => (s.Id, s.Stacks, s.Power, (int)Math.Max(0, s.UntilTick - tick))).ToArray(),
         };
         for (var i = 0; i < Ship.AbilitySlotCount; i++)
         {

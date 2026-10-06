@@ -18,6 +18,9 @@ public sealed class LongGun : Ability
     public const float ProjectileSpeed = 26f;
     public const float ShotRadius = 0.3f;
 
+    /// <summary>Volley Gun: its shots fan out this many degrees apart.</summary>
+    public const float VolleySpreadDegrees = 5f;
+
     /// <summary>Hits at least this fraction of the gun's reach from the muzzle count as long range.</summary>
     public const float LongRangeFraction = 0.6f;
 
@@ -62,12 +65,14 @@ public sealed class LongGun : Ability
             : ship.Forward;
     }
 
+    /// <summary>Shots it fires at once: 1, or a fan with Volley Gun.</summary>
+    public static int ShotsFor(Ship ship) => Math.Max(1, (int)MathF.Round(ship.AbilityValue(AbilityId, AbilityStat.ShotCount, 1f)));
+
     public override bool Cast(World world, Ship caster, Vector2 target)
     {
-        var direction = AimDirection(caster, target);
+        var aim = AimDirection(caster, target);
         var speed = SpeedFor(caster);
         var lifetimeTicks = (int)MathF.Ceiling(RangeFor(caster) / speed * SimConstants.TickRate);
-        var muzzle = caster.Position + direction * (caster.Stats.Beam / 2f);
         var effects = new ShotEffects
         {
             AbilityId = Id,
@@ -77,8 +82,22 @@ public sealed class LongGun : Ability
             LongRangeRefund = caster.AbilityValue(Id, AbilityStat.LongRangeRefund, 0f),
             IgnoresLand = caster.AbilityValue(Id, AbilityStat.IgnoresLand, 0f) >= 0.5f,
             Ricochets = (int)MathF.Round(caster.AbilityValue(Id, AbilityStat.Ricochets, 0f)),
+            Forks = (int)MathF.Round(caster.AbilityValue(Id, AbilityStat.Forks, 0f)),
+            KillRefund = caster.AbilityValue(Id, AbilityStat.KillRefund, 0f),
+            Wake = FireFor(caster, Id),
+            ExplosionRadius = caster.AbilityValue(Id, AbilityStat.ExplosionRadius, 0f),
+            ExplosionDamage = caster.AbilityValue(Id, AbilityStat.ExplosionDamage, 0f),
         };
-        world.SpawnProjectile(caster, muzzle, direction * speed, DamageFor(caster), lifetimeTicks, ShotRadius, effects);
+
+        // A volley fans out evenly either side of the aim.
+        var shots = ShotsFor(caster);
+        var spread = VolleySpreadDegrees * MathF.PI / 180f;
+        for (var i = 0; i < shots; i++)
+        {
+            var direction = Geometry.Rotate(aim, (i - (shots - 1) / 2f) * spread);
+            var muzzle = caster.Position + direction * (caster.Stats.Beam / 2f);
+            world.SpawnProjectile(caster, muzzle, direction * speed, DamageFor(caster), lifetimeTicks, ShotRadius, effects);
+        }
         return true;
     }
 }

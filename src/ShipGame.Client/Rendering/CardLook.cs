@@ -71,8 +71,18 @@ public static class CardLook
                 return CardIcon.Coin;
             case "free-armory" or "twin-decks":
                 return CardIcon.Cannonballs;
-            case "firestorm":
+            case "firestorm" or "incendiary-shot" or "burning-wake" or "heated-shot":
                 return CardIcon.Fire;
+            case "man-o-war" or "explosive-rounds":
+                return CardIcon.Blast;
+            case "gun-captains" or "volley-gun":
+                return CardIcon.Cannonballs;
+            case "grapeshot":
+                return CardIcon.Cluster;
+            case "skip-shot" or "fork":
+                return CardIcon.Pierce;
+            case "hot-guns" or "headhunter" or "frenzy":
+                return CardIcon.Reload;
             case "echo":
                 return CardIcon.Echo;
         }

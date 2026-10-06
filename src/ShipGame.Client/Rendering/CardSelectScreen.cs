@@ -20,12 +20,14 @@ namespace ShipGame.Client.Rendering;
 /// already held shows as an upgrade, with the numbers it would improve to. They rise in one after another and lift under the
 /// mouse; click one to take it (no number keys, which are the weapons, so a fight's last shots don't pick by accident). Under them, a reroll button (or R) pays gold for a fresh three; it doubles in price
 /// every time. There's no time limit: the game waits for everyone. Having chosen, you see your card while the rest of
-/// the crew make up their minds.
+/// the crew make up their minds. A testing run's hands (a late game's worth, before setting sail) reroll for free, as
+/// often as you like, into whichever tier is picked on the chips beside the button.
 /// </summary>
 public sealed class CardSelectScreen
 {
     /// <summary>What the player did on the screen this frame: picked a card, asked for a reroll, or picked their starting weapon.</summary>
-    public readonly record struct Action(string? CardId, bool Reroll, string? WeaponId = null);
+    /// <param name="Tier">For a testing hand's reroll: the tier to deal it in.</param>
+    public readonly record struct Action(string? CardId, bool Reroll, string? WeaponId = null, CardTier? Tier = null);
 
     /// <summary>What a card shows, whether it's a card or (at the start of a run) a weapon.</summary>
     /// <param name="Label">Top left: its tier, or that it's an upgrade.</param>
@@ -39,6 +41,9 @@ public sealed class CardSelectScreen
 
     private const float RerollWidth = 330f;
     private const float RerollHeight = 40f;
+    private const float ChipWidth = 112f;
+    private const float ChipGap = 6f;
+    private static readonly CardTier[] Tiers = { CardTier.Silver, CardTier.Gold, CardTier.Prismatic };
     private static readonly Color Gold = new(250, 215, 110);
     private static readonly Color Disabled = new(110, 112, 122);
     private const float CardWidth = 250f;
@@ -68,6 +73,9 @@ public sealed class CardSelectScreen
     private long _lastDraw;
     private readonly float[] _lift = new float[CardRewards.TopOfferSize];
 
+    // What a testing hand's reroll deals; it stays picked from one hand to the next.
+    private CardTier _testingTier = CardRewards.DefaultTestingTier;
+
     public CardSelectScreen(PrimitiveBatch batch)
     {
         _batch = batch;
@@ -84,9 +92,11 @@ public sealed class CardSelectScreen
         if (player is null || player.CardOffers.Count == 0 || !ReferenceEquals(player.CardOffers[0], _shown))
             return null;
         var offer = player.CardOffers[0].Cards;
-        var canReroll = player.CardOffers[0].FreeRerolls > 0 || player.Gold >= CardRewards.RerollCost(player.Rerolls);
+        var testing = player.CardOffers[0].Source == OfferSource.Testing;
+        var reroll = new Action(null, true, Tier: testing ? _testingTier : null);
+        var canReroll = testing || player.CardOffers[0].FreeRerolls > 0 || player.Gold >= CardRewards.RerollCost(player.Rerolls);
         if (canReroll && input.WasKeyPressed(Keys.R))
-            return new Action(null, true);
+            return reroll;
         if (!input.WasLeftMousePressed)
             return null;
         var mouse = hud.FromScreen(input.Mouse.Position);
@@ -95,7 +105,12 @@ public sealed class CardSelectScreen
             if (CardRect(hud, i, offer.Count, 0f).Contains(mouse))
                 return new Action(offer[i].Id, false);
         }
-        return canReroll && RerollRect(hud).Contains(mouse) ? new Action(null, true) : null;
+        for (var i = 0; testing && i < Tiers.Length; i++)
+        {
+            if (ChipRect(hud, i).Contains(mouse))
+                _testingTier = Tiers[i];
+        }
+        return canReroll && RerollRect(hud).Contains(mouse) ? reroll : null;
     }
 
     private static Action? PickWeapon(InputState input, HudView hud)
@@ -135,13 +150,16 @@ public sealed class CardSelectScreen
 
         // At the start of a run everyone picks a card, then a weapon; after a fortress falls or a boss sinks, a card.
         var starting = player?.NeedsStartingWeapon == true;
-        var title = starting || offer?.Source == OfferSource.Start ? "SET SAIL"
+        var testing = offer?.Source == OfferSource.Testing;
+        var title = testing ? "LATE-GAME TEST"
+            : starting || offer?.Source == OfferSource.Start ? "SET SAIL"
             : offer?.Source == OfferSource.Boss ? "PIRATE FLAGSHIP SUNK"
             : fortress is null ? "FORTRESS TAKEN" : $"{fortress} TAKEN";
         DrawCentered(title, 56f, 4f, Title, viewport.Width);
         var waiting = world.Players.Values.Count(p => (p.CardOffers.Count > 0 || p.NeedsStartingWeapon) && p.PlayerId != player?.PlayerId);
         var subtitle = choosingWeapon ? "CHOOSE YOUR STARTING WEAPON"
             : offer is null ? "WAITING FOR THE CREW TO CHOOSE"
+            : testing ? $"CARD {CardRewards.TestingHands - player!.CardOffers.Count(o => o.Source == OfferSource.Testing) + 1} OF {CardRewards.TestingHands}  -  CHOOSE A CARD"
             : starting ? "CHOOSE A STARTING CARD"
             : player!.CardOffers.Count > 1 ? $"LEVEL {offer.Level} SPOILS  -  CHOOSE A CARD  -  {player.CardOffers.Count - 1} MORE TO COME"
             : $"LEVEL {offer.Level} SPOILS  -  CHOOSE A CARD";
@@ -152,7 +170,7 @@ public sealed class CardSelectScreen
         var age = (now - _shownAt) / 1000f;
         if (offer is not null)
         {
-            DrawFaces(offer.Cards.Where(c => CardCatalog.Find(c.Id) is not null).Select(c => FaceOf(c, player!.Cards)).ToList(),
+            DrawFaces(offer.Cards.Where(c => CardCatalog.Find(c.Id) is not null).Select(c => FaceOf(c, player!.Cards, world.GetPlayerShip(player.PlayerId))).ToList(),
                 age, dt, input, hud, null);
             DrawReroll(player!, offer, input, hud);
         }
@@ -201,10 +219,16 @@ public sealed class CardSelectScreen
 
     /// <summary>
     /// The reroll button: free while the offer has a free reroll (level 7 and 8 fortresses), otherwise its price and the
-    /// gold to pay it with; greyed out when that's not enough.
+    /// gold to pay it with; greyed out when that's not enough. A testing hand's is always free, with the tier chips
+    /// to its left.
     /// </summary>
     private void DrawReroll(PlayerState player, CardOffer offer, InputState input, HudView hud)
     {
+        if (offer.Source == OfferSource.Testing)
+        {
+            DrawTestingReroll(input, hud);
+            return;
+        }
         var free = offer.FreeRerolls > 0;
         var cost = CardRewards.RerollCost(player.Rerolls);
         var affordable = free || player.Gold >= cost;
@@ -216,6 +240,39 @@ public sealed class CardSelectScreen
         DrawCentered(label, rect.Y + (rect.Height - PixelFont.Height(2f)) / 2f, 2f, affordable ? Gold : Disabled, rect.Center.X * 2f);
         var purse = free ? $"THEN {cost} GOLD" : affordable ? $"YOU HAVE {player.Gold} GOLD" : $"YOU HAVE {player.Gold} GOLD - NOT ENOUGH";
         PixelFont.Draw(_batch, purse, new Vector2(rect.Right + 14f, rect.Y + (rect.Height - PixelFont.Height(1.5f)) / 2f), 1.5f, Muted);
+    }
+
+    /// <summary>The tier chips (silver, gold, prismatic; the one picked filled in) and the free reroll into that tier.</summary>
+    private void DrawTestingReroll(InputState input, HudView hud)
+    {
+        var mouse = hud.FromScreen(input.Mouse.Position);
+        var time = Environment.TickCount64 / 1000f;
+        for (var i = 0; i < Tiers.Length; i++)
+        {
+            var chip = ChipRect(hud, i);
+            var picked = Tiers[i] == _testingTier;
+            var color = Tiers[i] == CardTier.Prismatic ? CardLook.Hue(time * 0.15f) : CardLook.TierColor(Tiers[i]);
+            FillRect(chip, picked ? color * 0.3f : (chip.Contains(mouse) ? BodyHover : Body) * 0.95f);
+            OutlineRect(chip, color * (picked ? 1f : 0.5f));
+            DrawCentered(Tiers[i].ToString().ToUpperInvariant(), chip.Y + (chip.Height - PixelFont.Height(1.5f)) / 2f, 1.5f,
+                picked ? color : Muted, chip.Center.X * 2f);
+        }
+
+        var rect = RerollRect(hud);
+        var hovered = rect.Contains(mouse);
+        FillRect(rect, (hovered ? BodyHover : Body) * 0.95f);
+        OutlineRect(rect, Gold * (hovered ? 1f : 0.7f));
+        var label = $"REROLL  -  {CardRewards.TopOfferSize} {_testingTier.ToString().ToUpperInvariant()}S  [R]";
+        DrawCentered(label, rect.Y + (rect.Height - PixelFont.Height(2f)) / 2f, 2f, Gold, rect.Center.X * 2f);
+        PixelFont.Draw(_batch, "FREE  -  TESTING", new Vector2(rect.Right + 14f, rect.Y + (rect.Height - PixelFont.Height(1.5f)) / 2f), 1.5f, Muted);
+    }
+
+    /// <summary>Tier chip <paramref name="index"/> of <see cref="Tiers"/>, in a row ending just left of the reroll button.</summary>
+    private static Rectangle ChipRect(HudView hud, int index)
+    {
+        var reroll = RerollRect(hud);
+        var left = reroll.Left - 14f - Tiers.Length * ChipWidth - (Tiers.Length - 1) * ChipGap + index * (ChipWidth + ChipGap);
+        return new Rectangle((int)left, reroll.Y, (int)ChipWidth, reroll.Height);
     }
 
     private static Rectangle RerollRect(HudView hud) =>
@@ -320,14 +377,14 @@ public sealed class CardSelectScreen
     }
 
     /// <summary>A card as dealt: a prismatic already in <paramref name="hand"/> shows as the upgrade it would be.</summary>
-    private static Face FaceOf(CardPick pick, IReadOnlyList<CardPick> hand)
+    private static Face FaceOf(CardPick pick, IReadOnlyList<CardPick> hand, Ship? ship = null)
     {
         var card = pick.Definition;
         var becomes = CardStacking.WouldBecome(hand, pick);
         var upgrade = becomes != pick;
         var label = upgrade ? "UPGRADE" : card.Tier.ToString().ToUpperInvariant();
         return new Face(card.Name, becomes.Description, CardLook.Icon(card, becomes.Values), CardLook.TierColor(card.Tier), CardLook.Category(card), label,
-            CardLook.TagColor(card), card.Tier == CardTier.Prismatic);
+            CardLook.TagColor(card), card.Tier == CardTier.Prismatic, ship is null ? "" : becomes.DescriptionOn(ship) ?? "");
     }
 
     private static Face FaceOf(WeaponOffer weapon) => new(weapon.Ability.Name.ToUpperInvariant(), weapon.Ability.Description,

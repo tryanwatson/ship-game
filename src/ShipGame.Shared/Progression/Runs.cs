@@ -18,10 +18,13 @@ public static class Runs
     /// (unarmed, with <paramref name="startingGold"/>), the fortresses manned, the pirates at sea, and the director to
     /// hand out cards and send bosses. It opens paused: each player chooses a free starting card (any card, weapon
     /// cards included, rerollable with their gold), then the weapon to set sail with, and play starts once everyone has.
+    /// A <paramref name="testing"/> run deals a late game's worth of hands instead of the one starting card (see
+    /// <see cref="CardRewards.OfferTesting"/>), to try out late-game fights without playing up to them.
     /// </summary>
     /// <param name="crew">Who's sailing, and what they're called.</param>
     /// <param name="startingGold">Gold each player starts with: 0 normally, more for playtesting (up to <see cref="MaxStartingGold"/>).</param>
-    public static World Create(int seed, IReadOnlyList<(int PlayerId, string Name)> crew, bool friendlyFire = false, int startingGold = 0)
+    public static World Create(int seed, IReadOnlyList<(int PlayerId, string Name)> crew, bool friendlyFire = false, int startingGold = 0,
+        bool testing = false)
     {
         var world = CreateMap();
         world.Director = new RunDirector(seed);
@@ -43,7 +46,10 @@ public static class Runs
 
         PirateCamps.Populate(world, seed: seed);
         // The starting card: free, dealt at level 1, and no fortress to count toward a boss.
-        CardRewards.OfferAll(world, world.Director.Rng, OfferSource.Start, 1);
+        if (testing)
+            CardRewards.OfferTesting(world, world.Director.Rng);
+        else
+            CardRewards.OfferAll(world, world.Director.Rng, OfferSource.Start, 1);
         return world;
     }
 

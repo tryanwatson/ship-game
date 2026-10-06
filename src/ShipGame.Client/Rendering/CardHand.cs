@@ -4,6 +4,7 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using ShipGame.Client.Input;
 using ShipGame.Shared.Progression;
+using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Client.Rendering;
@@ -11,7 +12,8 @@ namespace ShipGame.Client.Rendering;
 /// <summary>
 /// Down the right edge, under the run forecast: the cards this player holds, one row each (a count for any held more
 /// than once), under a small "CARDS" label. Each row is marked and colored by tier. Hovering a row shows the card
-/// beside the list: its emblem, tier, what it's for, and what it does at the level it's held (every copy, if stacked).
+/// beside the list: its emblem, tier, what it's for, and what it does at the level it's held (every copy, if stacked),
+/// and for a card that depends on the ship (Ram, on its speed), what that comes to right now.
 /// </summary>
 public sealed class CardHand
 {
@@ -41,7 +43,7 @@ public sealed class CardHand
         _batch = batch;
     }
 
-    public void Draw(PlayerState? player, InputState input, HudView hud)
+    public void Draw(PlayerState? player, Ship? ship, InputState input, HudView hud)
     {
         if (player is null || player.Cards.Count == 0)
             return;
@@ -84,7 +86,7 @@ public sealed class CardHand
         }
 
         if (hovered is not null)
-            DrawTip(hovered, left - TipGap, hoveredTop - TipPadding, hud);
+            DrawTip(hovered, ship, left - TipGap, hoveredTop - TipPadding, hud);
         _batch.Flush();
     }
 
@@ -95,7 +97,7 @@ public sealed class CardHand
         tier == CardTier.Prismatic ? CardLook.Shimmer(index * 0.15f) : CardLook.TierColor(tier);
 
     /// <summary>The card, to the left of the list with its right edge at <paramref name="right"/>, kept on screen.</summary>
-    private void DrawTip(List<CardPick> copies, float right, float top, HudView hud)
+    private void DrawTip(List<CardPick> copies, Ship? ship, float right, float top, HudView hud)
     {
         var card = copies[0].Definition;
         var frame = TierColor(card.Tier, 0);
@@ -110,6 +112,11 @@ public sealed class CardHand
             var prefix = copies.Count > 1 ? $"{n + 1}. " : "";
             foreach (var line in PixelFont.Wrap(prefix + pick.Description, 1.5f, textWidth))
                 lines.Add((line, Text));
+            if (ship is not null && pick.DescriptionOn(ship) is { } now)
+            {
+                foreach (var line in PixelFont.Wrap(now, 1.5f, textWidth))
+                    lines.Add((line, frame));
+            }
         }
         if (card.Improves && copies[0].Level > card.LevelRange.Max)
             lines.Add(($"IMPROVED PAST LEVEL {card.LevelRange.Max}", frame));

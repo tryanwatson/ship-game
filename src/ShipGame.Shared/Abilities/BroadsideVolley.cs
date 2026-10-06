@@ -9,7 +9,9 @@ namespace ShipGame.Shared.Abilities;
 /// that with <see cref="AbilityStat.AimArc"/>). The two decks reload independently (cooldown channels <see cref="PortChannel"/> and
 /// <see cref="StarboardChannel"/>), so alternating sides keeps the guns working.
 /// Skills can change the number of cannon, and add damage up close (<see cref="AbilityStat.CloseRangeDamage"/>)
-/// or when fired near full sail (<see cref="AbilityStat.SpeedDamage"/>).
+/// or when fired near full sail (<see cref="AbilityStat.SpeedDamage"/>). Cards can turn it into a ring all round the
+/// ship (<see cref="AbilityStat.Ring"/>), and make it fire by itself (<see cref="AbilityStat.AutoFire"/>, and the ring
+/// always does): see <see cref="World"/>'s FireBroadsidesByThemselves.
 /// </summary>
 public sealed class BroadsideVolley : Ability
 {
@@ -33,6 +35,41 @@ public sealed class BroadsideVolley : Ability
 
     /// <summary>However far skills widen the window, the guns still fire off the side.</summary>
     public const float MaxAimArcDegrees = 75f;
+
+    /// <summary>Man o' War: in a ring, every gun fires this many ways.</summary>
+    public const int RingShotsPerCannon = 3;
+
+    /// <summary>Grapeshot: a cannon's balls of grape fan out this many degrees either side of its aim, each this share of a ball's damage.</summary>
+    public const float GrapeSpreadDegrees = 6f;
+    public const float GrapeDamageFraction = 0.6f;
+
+    /// <summary>Skip Shot: every skip carries a ball on for this share of its flight again.</summary>
+    public const float SkipFlightFraction = 0.6f;
+
+    /// <summary>Man o' War: the broadside is a ring all round the ship, and fires by itself.</summary>
+    public static bool FiresRing(Ship ship) => ship.AbilityValue(AbilityId, AbilityStat.Ring, 0f) >= 0.5f;
+
+    /// <summary>Gun Captains: each deck fires by itself when there's an enemy in its lane.</summary>
+    public static bool FiresItself(Ship ship) => ship.AbilityValue(AbilityId, AbilityStat.AutoFire, 0f) >= 0.5f;
+
+    /// <summary>Balls each cannon fires: 1, or more with Grapeshot.</summary>
+    public static int GrapeFor(Ship ship) => 1 + Math.Max(0, (int)MathF.Round(ship.AbilityValue(AbilityId, AbilityStat.Grapeshot, 0f)));
+
+    /// <summary>
+    /// The most balls one cast throws (a ring, or a side's grape). Past it, the balls it would have thrown go into
+    /// those it does, as damage: the sim and the network carry a few hundred balls a broadside, not thousands.
+    /// </summary>
+    public const int MaxShotsPerCast = 240;
+
+    /// <summary>Balls a Man o' War ring would throw: every gun's, every way round, both decks' with Twin Decks.</summary>
+    private static int RingWorthFor(Ship ship) => CannonCountFor(ship) * RingShotsPerCannon * GrapeFor(ship) * (FiresBothSides(ship) ? 2 : 1);
+
+    /// <summary>Balls a Man o' War ring does throw (see <see cref="MaxShotsPerCast"/>).</summary>
+    public static int RingShotsFor(Ship ship) => Math.Min(RingWorthFor(ship), MaxShotsPerCast);
+
+    /// <summary>Seconds between broadsides (each deck's, or the ring's), before any hits give reload back.</summary>
+    public static float ReloadSecondsFor(Ship ship) =>
+        ship.AbilityValue(AbilityId, AbilityStat.Cooldown, BaseCooldownTicks) / MathF.Max(ship.Stats.CooldownSpeed, 0.01f) / SimConstants.TickRate;
 
     /// <summary>This ship's aiming window either side of the beam, in radians.</summary>
     public static float AimArcFor(Ship ship) =>
@@ -79,13 +116,16 @@ public sealed class BroadsideVolley : Ability
     public static int WindupTicks(Ship ship) => ship.Team == Team.Pirates ? PirateWindupTicks : 0;
 
     /// <summary>Per side.</summary>
-    public override int CooldownTicks => (int)(2.5f * SimConstants.TickRate);
+    public static readonly int BaseCooldownTicks = (int)(2.5f * SimConstants.TickRate);
+
+    public override int CooldownTicks => BaseCooldownTicks;
 
     public override bool IsAimed => true;
 
     public override int CooldownChannels => 2;
 
-    public override int ChannelFor(Ship caster, Vector2 target) => ChannelOf(SideToward(caster, target));
+    /// <summary>A ring fires from (and reloads) both decks, counted on the port one.</summary>
+    public override int ChannelFor(Ship caster, Vector2 target) => FiresRing(caster) ? PortChannel : ChannelOf(SideToward(caster, target));
 
     public static int ChannelOf(BroadsideSide side) => side == BroadsideSide.Starboard ? StarboardChannel : PortChannel;
 
@@ -100,6 +140,14 @@ public sealed class BroadsideVolley : Ability
 
     public override bool Cast(World world, Ship caster, Vector2 target)
     {
+        if (FiresRing(caster))
+        {
+            FireRing(world, caster);
+            if (!caster.IsEchoing)
+                caster.FindAbility(Id)?.StartCooldown(StarboardChannel, CooldownTicksFor(caster), caster.Stats.CooldownSpeed);
+            return true;
+        }
+
         var side = SideToward(caster, target);
         var offset = AimOffset(caster, caster.Position, caster.Heading, side, target);
         Fire(world, caster, side, offset);
@@ -117,6 +165,8 @@ public sealed class BroadsideVolley : Ability
     /// <summary>The side that was lit up fires, whichever way the ship has turned since, laid as near the target as its arc allows.</summary>
     public override bool CastWarned(World world, Ship caster, ShotWarning warning)
     {
+        if (FiresRing(caster))
+            return FireRing(world, caster);
         var side = warning.Channel == StarboardChannel ? BroadsideSide.Starboard : BroadsideSide.Port;
         return Fire(world, caster, side, AimOffset(caster, caster.Position, caster.Heading, side, warning.Target));
     }
@@ -128,11 +178,59 @@ public sealed class BroadsideVolley : Ability
         var outward = FiringDirection(caster, side);
         var direction = DirectionAt(caster.Heading, side, offset);
         var halfSpan = HalfSpan(caster);
+        var (speed, lifetimeTicks, damage, effects) = Loading(caster);
+
+        // Grapeshot: each cannon fans its balls out either side of its aim, as many as a cast can throw.
+        var cannons = CannonCountFor(caster);
+        var grape = Math.Clamp(MaxShotsPerCast / cannons, 1, GrapeFor(caster));
+        damage *= GrapeFor(caster) / (float)grape;
+        var spread = GrapeSpreadDegrees * MathF.PI / 180f;
+        for (var i = 0; i < cannons; i++)
+        {
+            var along = cannons == 1 ? 0f : -halfSpan + 2f * halfSpan * i / (cannons - 1);
+            var muzzle = caster.Position + forward * along + outward * (caster.Stats.Beam / 2f);
+            for (var g = 0; g < grape; g++)
+            {
+                var fan = grape == 1 ? 0f : -spread + 2f * spread * g / (grape - 1);
+                // Cannonballs inherit the ship's motion, so firing on the move leads the shot.
+                var velocity = Geometry.Rotate(direction, fan) * speed + forward * caster.Speed;
+                world.SpawnProjectile(caster, muzzle, velocity, damage, lifetimeTicks, effects: effects);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Man o' War: every gun at once, all the way round, evenly (see <see cref="RingShotsFor"/>). An echo's ring is
+    /// turned half a step, so it fills the gaps in the first.
+    /// </summary>
+    private bool FireRing(World world, Ship caster)
+    {
+        var (speed, lifetimeTicks, damage, effects) = Loading(caster);
+        var shots = RingShotsFor(caster);
+        damage *= RingWorthFor(caster) / (float)shots;
+        var turn = caster.IsEchoing ? 0.5f : 0f;
+        for (var i = 0; i < shots; i++)
+        {
+            var angle = caster.Heading + MathF.Tau * (i + turn) / shots;
+            var direction = new Vector2(MathF.Cos(angle), MathF.Sin(angle));
+            var muzzle = caster.Position + direction * (caster.Stats.Beam / 2f);
+            world.SpawnProjectile(caster, muzzle, direction * speed + caster.Forward * caster.Speed, damage, lifetimeTicks, effects: effects);
+        }
+        return true;
+    }
+
+    /// <summary>What every ball this ship fires right now flies and hits with: its speed, flight, damage (each, grape counted) and effects.</summary>
+    private (float Speed, int LifetimeTicks, float Damage, ShotEffects Effects) Loading(Ship caster)
+    {
         var speed = ProjectileSpeedFor(caster);
         var range = RangeFor(caster);
         var damage = DamageFor(caster);
         if (IsRunning(caster))
             damage *= 1f + caster.AbilityValue(Id, AbilityStat.SpeedDamage, 0f);
+        if (GrapeFor(caster) > 1)
+            damage *= GrapeDamageFraction;
         var lifetimeTicks = (int)MathF.Ceiling(range / speed * SimConstants.TickRate);
         var effects = new ShotEffects
         {
@@ -140,20 +238,12 @@ public sealed class BroadsideVolley : Ability
             CloseRange = range * CloseRangeFraction,
             CloseDamageBonus = caster.AbilityValue(Id, AbilityStat.CloseRangeDamage, 0f),
             SlowOnHit = caster.AbilityValue(Id, AbilityStat.SlowOnHit, 0f),
+            Skips = (int)MathF.Round(caster.AbilityValue(Id, AbilityStat.Skips, 0f)),
+            SkipTicks = Math.Max(1, (int)MathF.Round(lifetimeTicks * SkipFlightFraction)),
+            HitRefund = caster.AbilityValue(Id, AbilityStat.HitRefund, 0f),
+            HitFire = FireFor(caster, Id),
         };
-
-        // Cannonballs inherit the ship's motion, so firing on the move leads the shot.
-        var velocity = direction * speed + forward * caster.Speed;
-
-        var cannons = CannonCountFor(caster);
-        for (var i = 0; i < cannons; i++)
-        {
-            var along = cannons == 1 ? 0f : -halfSpan + 2f * halfSpan * i / (cannons - 1);
-            var muzzle = caster.Position + forward * along + outward * (caster.Stats.Beam / 2f);
-            world.SpawnProjectile(caster, muzzle, velocity, damage, lifetimeTicks, effects: effects);
-        }
-
-        return true;
+        return (speed, lifetimeTicks, damage, effects);
     }
 
     /// <summary>Unit vector a side's guns fire along: starboard is the bow rotated +90 degrees (Y-down world).</summary>

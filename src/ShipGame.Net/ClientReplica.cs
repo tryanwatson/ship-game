@@ -623,7 +623,7 @@ public sealed class ClientReplica
             ship.Position = to.Position;
             ship.PreviousHeading = from.Heading;
             ship.Heading = to.Heading;
-            ApplyDiscrete(ship, from);
+            ApplyDiscrete(ship, from, older.Find(ship.Id) is null ? newer.Tick : older.Tick);
         }
     }
 
@@ -645,7 +645,7 @@ public sealed class ClientReplica
         World.SetPlunderedIslands(snapshot.PlunderedIslands);
     }
 
-    private static void ApplyDiscrete(Ship ship, ShipState state)
+    private static void ApplyDiscrete(Ship ship, ShipState state, long stateTick)
     {
         ship.Speed = state.Speed;
         ship.Health = state.Health;
@@ -657,7 +657,10 @@ public sealed class ClientReplica
         ship.PlunderTicks = state.PlunderTicks;
         ship.Stance = state.Stance;
         ship.MoveTarget = state.MoveTarget;
-        ship.IsMarked = state.Marked;
+        ship.ReplaceStatuses(state.Statuses.Select(s => new StatusEffect
+        {
+            Id = s.Id, Stacks = s.Stacks, Power = s.Power, UntilTick = stateTick + s.RemainingTicks,
+        }));
         for (var i = 0; i < Ship.AbilitySlotCount; i++)
         {
             var channels = state.Cooldowns[i];

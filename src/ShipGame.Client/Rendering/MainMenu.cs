@@ -5,6 +5,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using ShipGame.Client.Input;
 using ShipGame.Net;
+using ShipGame.Shared.Progression;
 
 namespace ShipGame.Client.Rendering;
 
@@ -38,6 +39,7 @@ public sealed class MainMenu
         Host,
         Join,
         FriendlyFire,
+        Testing,
         Quit,
         Connect,
         Back,
@@ -72,7 +74,7 @@ public sealed class MainMenu
     private static readonly Color ButtonBorder = new(130, 140, 165);
     private static readonly Color FieldBack = new(8, 10, 16);
 
-    private static readonly Item[] MainItems = { Item.Solo, Item.Host, Item.Join, Item.FriendlyFire, Item.Quit };
+    private static readonly Item[] MainItems = { Item.Solo, Item.Host, Item.Join, Item.FriendlyFire, Item.Testing, Item.Quit };
     private static readonly Item[] JoinItems = { Item.Connect, Item.Back };
 
     private readonly PrimitiveBatch _batch;
@@ -99,6 +101,9 @@ public sealed class MainMenu
 
     /// <summary>Whether a game hosted from here has friendly fire on.</summary>
     public bool FriendlyFire { get; set; } = true;
+
+    /// <summary>Whether a solo or hosted run opens with a late game's worth of cards to choose (for playtesting).</summary>
+    public bool Testing { get; set; }
 
     /// <summary>Shown under the title until the player does something; for why the last attempt failed.</summary>
     public string? Message { get; set; }
@@ -294,6 +299,9 @@ public sealed class MainMenu
             case Item.FriendlyFire:
                 FriendlyFire = !FriendlyFire;
                 return MenuAction.None;
+            case Item.Testing:
+                Testing = !Testing;
+                return MenuAction.None;
             case Item.Quit:
                 return MenuAction.Quit;
             case Item.Connect:
@@ -328,6 +336,7 @@ public sealed class MainMenu
         Item.Host => "HOST GAME",
         Item.Join => "JOIN GAME",
         Item.FriendlyFire => FriendlyFire ? "HOSTING: FRIENDLY FIRE ON" : "HOSTING: CO-OP ONLY",
+        Item.Testing => Testing ? $"TESTING: START WITH {CardRewards.TestingHands} CARDS" : "TESTING: OFF",
         Item.Quit => "QUIT",
         Item.Connect => "JOIN",
         _ => "BACK",

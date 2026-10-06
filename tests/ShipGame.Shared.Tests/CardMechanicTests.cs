@@ -32,6 +32,13 @@ public class CardMechanicTests
         return pirate;
     }
 
+    /// <summary>Under full sail at top speed, so it holds that speed through a step.</summary>
+    private static void FullSail(Ship ship)
+    {
+        ship.Throttle = ShipMovement.ThrottleLevels;
+        ship.Speed = ship.Stats.MaxSpeed;
+    }
+
     private static void RunTicks(World world, int ticks)
     {
         for (var i = 0; i < ticks; i++)
@@ -39,6 +46,19 @@ public class CardMechanicTests
     }
 
     // ---- Perks ----------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void SeaLegs_CompoundAndStopAtTheTightestTurn()
+    {
+        var (_, ship) = CreateWorld();
+        Give(ship, "sea-legs", 6); // 60% tighter
+        Assert.Equal(ShipStats.Sloop.MinTurnRadius * 0.4f, ship.Stats.MinTurnRadius, 4);
+
+        // A second copy would compound to 16%, past the floor (two used to add up to -120%: a radius of zero).
+        Give(ship, "sea-legs", 6);
+        Assert.Equal(ShipStats.Sloop.MinTurnRadius * StatModifiers.TightestTurn, ship.Stats.MinTurnRadius, 4);
+        Assert.Equal(ShipStats.Sloop.TurnRadiusAtMaxSpeed * StatModifiers.TightestTurn, ship.Stats.TurnRadiusAtMaxSpeed, 4);
+    }
 
     [Fact]
     public void Rowers_RowAsternFaster()
@@ -107,7 +127,8 @@ public class CardMechanicTests
     public void Ram_HurtsWhatItHits_OnceASecond()
     {
         var (world, ship) = CreateWorld();
-        Give(ship, "ram", 3); // 40
+        Give(ship, "ram", 3); // 40 at a sloop's top speed
+        FullSail(ship);
         var pirate = Pirate(world, ship.Position + new Vector2(1f, 0f));
         var full = pirate.Health;
         world.DrainEvents();
@@ -121,6 +142,52 @@ public class CardMechanicTests
         world.Step();
         Assert.Equal(full - 40f, pirate.Health, 2); // not again so soon
         Assert.Equal(ship.Stats.MaxHealth, ship.Health); // and the rammer takes nothing
+    }
+
+    [Theory]
+    [InlineData(2f, 80f)] // twice a sloop's top speed, twice the damage
+    [InlineData(0.5f, 20f)]
+    public void Ram_HitsHarder_TheFasterTheRammer(float speedScale, float expected)
+    {
+        var (world, ship) = CreateWorld();
+        Give(ship, "ram", 3); // 40 at a sloop's top speed
+        ship.AddModifier(new StatModifier(StatId.MaxSpeed, ModifierKind.Percent, speedScale - 1f, "test"));
+        FullSail(ship);
+        var pirate = Pirate(world, ship.Position + new Vector2(1f, 0f));
+        var full = pirate.Health;
+
+        world.Step();
+
+        Assert.Equal(full - expected, pirate.Health, 2);
+    }
+
+    [Fact]
+    public void Ram_DoesNothing_AtAStandstill_AndIsStillReadyAfter()
+    {
+        var (world, ship) = CreateWorld();
+        Give(ship, "ram", 3);
+        var pirate = Pirate(world, ship.Position + new Vector2(1f, 0f));
+        var full = pirate.Health;
+        world.DrainEvents();
+
+        world.Step();
+        Assert.Equal(full, pirate.Health);
+        Assert.Empty(world.DrainEvents().OfType<ShipRammed>());
+
+        FullSail(ship);
+        pirate.Position = ship.Position + new Vector2(1f, 0f);
+        world.Step();
+        Assert.Equal(full - 40f, pirate.Health, 2); // the nudge didn't spend the ram
+    }
+
+    [Fact]
+    public void Ram_Card_ShowsWhatItDoesAtTheShipsSpeed()
+    {
+        var (_, ship) = CreateWorld();
+        ship.AddModifier(new StatModifier(StatId.MaxSpeed, ModifierKind.Percent, 1f, "test")); // twice a sloop's top speed
+
+        Assert.Equal("AT YOUR TOP SPEED: 80 DAMAGE.", new CardPick("ram", 3).DescriptionOn(ship));
+        Assert.Null(new CardPick("heavy-shot", 3).DescriptionOn(ship));
     }
 
     [Fact]
@@ -139,7 +206,7 @@ public class CardMechanicTests
 
         world.Step();
         Assert.True(pirate.IsMarked);
-        RunTicks(world, World.MarkTicks + 1);
+        RunTicks(world, Statuses.Get(StatusId.Marked).Ticks + 1);
         Assert.False(pirate.IsMarked);
         world.DealDamage(pirate, 10f, crewmate.Id);
         Assert.Equal(full - 32.5f, pirate.Health, 2);
@@ -191,7 +258,7 @@ public class CardMechanicTests
         RunTicks(world, SimConstants.TickRate / 2);
         Assert.Equal(speed * 0.7f, pirate.Stats.MaxSpeed, 3);
 
-        RunTicks(world, World.SlowTicks + 1);
+        RunTicks(world, Statuses.Get(StatusId.Slowed).Ticks + 1);
         Assert.Equal(speed, pirate.Stats.MaxSpeed, 3);
     }
 
@@ -227,6 +294,326 @@ public class CardMechanicTests
         Assert.True(first.Health < first.Stats.MaxHealth);
         Assert.True(second.Health < second.Stats.MaxHealth, "it should bounce to the nearest other enemy");
         Assert.Equal(third.Stats.MaxHealth, third.Health); // one bounce only
+    }
+
+    // ---- Statuses ------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void HeatedShot_SetsWhatItHitsBurning_AndTheBurnKeepsHurting()
+    {
+        var (world, ship) = CreateWorld(new LongGun());
+        Give(ship, "heated-shot", 1); // 3 a second a stack
+        var pirate = Pirate(world, ship.Position + new Vector2(6f, 0f));
+
+        world.TryCastAbility(ship, AbilitySlot.One, pirate.Position);
+        RunTicks(world, SimConstants.TickRate / 2);
+        var burning = Assert.IsType<StatusEffect>(pirate.FindStatus(StatusId.Burning));
+        Assert.Equal((1, 3f, ship.Id), (burning.Stacks, burning.Power, burning.SourceShipId));
+
+        var afterHit = pirate.Health;
+        RunTicks(world, SimConstants.TickRate * 2);
+        Assert.Equal(afterHit - 6f, pirate.Health, 1);
+        Assert.Equal(ship.Id, pirate.LastHitByShipId); // the burn is the shooter's, kill and all
+    }
+
+    [Fact]
+    public void Burning_StacksToItsMost_ThenBurnsOut()
+    {
+        var (world, ship) = CreateWorld();
+        var pirate = Pirate(world, new Vector2(150, 150));
+        for (var i = 0; i < 30; i++)
+            world.ApplyStatus(pirate, StatusId.Burning, 2f, ship.Id);
+        Assert.Equal(Statuses.Get(StatusId.Burning).MaxStacks, pirate.StacksOf(StatusId.Burning));
+
+        var full = pirate.Health;
+        RunTicks(world, SimConstants.TickRate);
+        Assert.Equal(full - 2f * 20, pirate.Health, 1);
+
+        RunTicks(world, Statuses.Get(StatusId.Burning).Ticks);
+        Assert.Empty(pirate.Statuses);
+    }
+
+    [Fact]
+    public void Frenzy_StacksWithEveryKill_SpeedingTheReload_ThenWearsOff()
+    {
+        var (world, ship) = CreateWorld();
+        Give(ship, "frenzy", 1); // +6% reload speed a stack
+        var reload = ship.Stats.CooldownSpeed;
+        var speed = ship.Stats.MaxSpeed;
+        for (var i = 0; i < 2; i++)
+        {
+            var pirate = Pirate(world, new Vector2(150, 150 - 20 * i), health: 5f);
+            world.DealDamage(pirate, 10f, ship.Id);
+            world.Step();
+        }
+
+        Assert.Equal(2, ship.StacksOf(StatusId.Frenzy));
+        Assert.Equal(reload * 1.12f, ship.Stats.CooldownSpeed, 3);
+        Assert.Equal(speed * 1.06f, ship.Stats.MaxSpeed, 3);
+
+        RunTicks(world, Statuses.Get(StatusId.Frenzy).Ticks + 1);
+        Assert.Equal(0, ship.StacksOf(StatusId.Frenzy));
+        Assert.Equal(reload, ship.Stats.CooldownSpeed, 3);
+    }
+
+    [Fact]
+    public void PiratesAreRoused_WhenOneOfThemSinksNearby()
+    {
+        var (world, ship) = CreateWorld();
+        var victim = Pirate(world, new Vector2(150, 150), health: 5f);
+        var near = Pirate(world, new Vector2(155, 150));
+        var far = Pirate(world, new Vector2(150, 190));
+
+        world.DealDamage(victim, 10f, ship.Id);
+        world.Step();
+
+        Assert.Equal(1, near.StacksOf(StatusId.Frenzy));
+        Assert.Equal(0, far.StacksOf(StatusId.Frenzy));
+        Assert.Equal(0, ship.StacksOf(StatusId.Frenzy)); // no card, no frenzy for the player
+    }
+
+    [Fact]
+    public void APiratesHeatedShot_SetsAPlayerBurning()
+    {
+        var (world, ship) = CreateWorld();
+        var pirate = world.SpawnShip(ship.Position + new Vector2(6f, 0f), MathF.PI, ShipStats.PirateSloop,
+            abilities: new Ability?[] { new LongGun(), null, null, null });
+        pirate.AddCard(new CardPick("heated-shot", 1));
+
+        world.TryCastAbility(pirate, AbilitySlot.One, ship.Position);
+        RunTicks(world, SimConstants.TickRate);
+
+        Assert.Equal(1, ship.StacksOf(StatusId.Burning));
+    }
+
+    [Fact]
+    public void Statuses_DontComeBackWithARespawnedShip()
+    {
+        var (world, ship) = CreateWorld();
+        world.ApplyStatus(ship, StatusId.Slowed, 0.5f, 99);
+        Assert.Contains(ship.Modifiers, m => Statuses.IsStatusSource(m.Source));
+        Assert.DoesNotContain(new[] { "slowed" }, s => ship.Modifiers.Any(m => m.Source == s)); // the old tag is gone
+
+        world.RemoveStatus(ship, StatusId.Slowed);
+        Assert.DoesNotContain(ship.Modifiers, m => Statuses.IsStatusSource(m.Source));
+    }
+
+    // ---- Broadside: the ring and its friends --------------------------------------------------------------------
+
+    [Fact]
+    public void ManOWar_FiresARingAllRound_ByItself_OnceAnEnemyIsInRange()
+    {
+        var (world, ship) = CreateWorld(new BroadsideVolley());
+        Give(ship, "man-o-war", 3);
+
+        world.Step();
+        Assert.Empty(world.Projectiles); // nothing to shoot at
+
+        Pirate(world, ship.Position + new Vector2(5f, 0f)); // dead ahead: no ordinary broadside bears
+        world.Step();
+
+        var ring = world.Projectiles;
+        Assert.Equal(BroadsideVolley.CannonCount * BroadsideVolley.RingShotsPerCannon, ring.Count);
+        Assert.Equal(ring.Count, BroadsideVolley.RingShotsFor(ship));
+        Assert.Contains(ring, p => p.Velocity.X < -1f); // astern too
+        Assert.Contains(ring, p => p.Velocity.Y < -1f);
+        Assert.Contains(ring, p => p.Velocity.Y > 1f);
+        var guns = ship.GetAbility(AbilitySlot.One)!;
+        Assert.False(guns.IsChannelReady(BroadsideVolley.PortChannel));
+        Assert.False(guns.IsChannelReady(BroadsideVolley.StarboardChannel)); // both decks fired
+    }
+
+    [Fact]
+    public void ManOWar_NeverFiresItselfAtACrewmate()
+    {
+        var (world, ship) = CreateWorld(new BroadsideVolley());
+        Give(ship, "man-o-war", 3);
+        world.SpawnShip(ship.Position + new Vector2(4f, 0f), 0f, ShipStats.Sloop, PlayerId + 1);
+
+        world.Step();
+
+        Assert.Empty(world.Projectiles);
+    }
+
+    [Fact]
+    public void ManOWar_Card_ShowsTheShipsRing()
+    {
+        var (_, ship) = CreateWorld(new BroadsideVolley());
+        Assert.Equal("YOUR RING: 12 BALLS, EVERY 2.5 SECONDS.", new CardPick("man-o-war", 3).DescriptionOn(ship));
+    }
+
+    [Fact]
+    public void GunCaptains_FireTheDeckThatBears_ByThemselves()
+    {
+        var (world, ship) = CreateWorld(new BroadsideVolley());
+        Give(ship, "gun-captains", 1);
+        Pirate(world, ship.Position + new Vector2(0f, 4f)); // abeam to starboard (Y-down)
+
+        world.Step();
+
+        Assert.Equal(BroadsideVolley.CannonCount, world.Projectiles.Count);
+        Assert.All(world.Projectiles, p => Assert.True(p.Velocity.Y > 0f));
+        var guns = ship.GetAbility(AbilitySlot.One)!;
+        Assert.True(guns.IsChannelReady(BroadsideVolley.PortChannel));
+        Assert.False(guns.IsChannelReady(BroadsideVolley.StarboardChannel));
+    }
+
+    [Fact]
+    public void Grapeshot_FansMoreBallsFromEveryCannon_AtLessDamageEach()
+    {
+        var (world, ship) = CreateWorld(new BroadsideVolley());
+        var plain = BroadsideVolley.DamageFor(ship);
+        Give(ship, "grapeshot", 1); // 2 more each
+
+        world.TryCastAbility(ship, AbilitySlot.One, ship.Position + new Vector2(0f, 5f));
+
+        Assert.Equal(BroadsideVolley.CannonCount * 3, world.Projectiles.Count);
+        Assert.All(world.Projectiles, p => Assert.Equal(plain * BroadsideVolley.GrapeDamageFraction, p.Damage, 3));
+        Assert.Equal(3, world.Projectiles.Select(p => MathF.Round(MathF.Atan2(p.Velocity.Y, p.Velocity.X), 3)).Distinct().Count());
+    }
+
+    [Fact]
+    public void SkipShot_CarriesBallsOnPastTheirRange()
+    {
+        static bool Reaches(bool skipping)
+        {
+            var (world, ship) = CreateWorld(new BroadsideVolley());
+            if (skipping)
+                Give(ship, "skip-shot", 1);
+            var pirate = Pirate(world, ship.Position + new Vector2(0f, 11f)); // beyond the broadside's 8
+            world.TryCastAbility(ship, AbilitySlot.One, pirate.Position);
+            RunTicks(world, SimConstants.TickRate * 2);
+            return pirate.Health < pirate.Stats.MaxHealth;
+        }
+
+        Assert.False(Reaches(skipping: false));
+        Assert.True(Reaches(skipping: true));
+    }
+
+    [Fact]
+    public void HotGuns_HitsGiveTheReloadBack()
+    {
+        static int Remaining(bool hot)
+        {
+            var (world, ship) = CreateWorld(new BroadsideVolley());
+            if (hot)
+                Give(ship, "hot-guns", 7); // 10% a hit
+            var pirate = Pirate(world, ship.Position + new Vector2(0f, 4f));
+            world.TryCastAbility(ship, AbilitySlot.One, pirate.Position);
+            RunTicks(world, SimConstants.TickRate / 2);
+            return ship.GetAbility(AbilitySlot.One)!.RemainingTicks(BroadsideVolley.StarboardChannel);
+        }
+
+        var cold = Remaining(hot: false);
+        Assert.True(Remaining(hot: true) <= cold - 20, "four hits should take 40% of a 75-tick reload off");
+    }
+
+    [Fact]
+    public void Refund_NeverLetsAWeaponFireSoonerThanTheFloor()
+    {
+        var state = new AbilityState(new BroadsideVolley());
+        state.StartCooldown(0, 75, 1f);
+        for (var i = 0; i < 5; i++)
+            state.TickCooldown();
+
+        state.Refund(1f, minTicks: 15);
+
+        Assert.Equal(10, state.RemainingTicks(0)); // fired 5 ticks ago; 10 more makes 15
+        state.Refund(1f, minTicks: 15);
+        Assert.Equal(10, state.RemainingTicks(0));
+    }
+
+    [Fact]
+    public void IncendiaryShot_SetsTheWaterBurningWhereItHits()
+    {
+        var (world, ship) = CreateWorld(new BroadsideVolley());
+        Give(ship, "incendiary-shot", 1);
+        var pirate = Pirate(world, ship.Position + new Vector2(0f, 4f));
+
+        world.TryCastAbility(ship, AbilitySlot.One, pirate.Position);
+        RunTicks(world, SimConstants.TickRate / 2);
+
+        Assert.NotEmpty(world.Fires);
+        Assert.All(world.Fires, f => Assert.True(Vector2.Distance(f.Position, pirate.Position) < 2f));
+    }
+
+    // ---- Long gun -------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void VolleyGun_FiresAFanOfShots()
+    {
+        var (world, ship) = CreateWorld(new LongGun());
+        Give(ship, "volley-gun", 1); // 2 more
+
+        world.TryCastAbility(ship, AbilitySlot.One, ship.Position + new Vector2(10f, 0f));
+
+        var angles = world.Projectiles.Select(p => MathF.Atan2(p.Velocity.Y, p.Velocity.X) * 180f / MathF.PI).OrderBy(a => a).ToList();
+        Assert.Equal(3, angles.Count);
+        Assert.Equal(-LongGun.VolleySpreadDegrees, angles[0], 2);
+        Assert.Equal(0f, angles[1], 2);
+        Assert.Equal(LongGun.VolleySpreadDegrees, angles[2], 2);
+    }
+
+    [Fact]
+    public void Fork_SplitsAHitOnToTwoMoreEnemies()
+    {
+        var (world, ship) = CreateWorld(new LongGun());
+        Give(ship, "fork", 3); // twice
+        var first = Pirate(world, new Vector2(110, 100));
+        var left = Pirate(world, new Vector2(114, 95));
+        var right = Pirate(world, new Vector2(114, 105));
+
+        world.TryCastAbility(ship, AbilitySlot.One, first.Position);
+        RunTicks(world, SimConstants.TickRate * 2);
+
+        Assert.All(new[] { first, left, right }, p => Assert.True(p.Health < p.Stats.MaxHealth));
+    }
+
+    [Fact]
+    public void Headhunter_ReloadsTheLongGun_OnAKill()
+    {
+        static bool ReadyAfterKill(bool headhunter)
+        {
+            var (world, ship) = CreateWorld(new LongGun());
+            if (headhunter)
+                Give(ship, "headhunter", 3);
+            var pirate = Pirate(world, ship.Position + new Vector2(6f, 0f), health: 5f);
+            world.TryCastAbility(ship, AbilitySlot.One, pirate.Position);
+            RunTicks(world, SimConstants.TickRate / 2);
+            Assert.True(pirate.IsSunk || pirate.Health <= 0f);
+            return ship.GetAbility(AbilitySlot.One)!.IsReady;
+        }
+
+        Assert.False(ReadyAfterKill(headhunter: false));
+        Assert.True(ReadyAfterKill(headhunter: true));
+    }
+
+    [Fact]
+    public void ExplosiveRounds_HurtShipsNearTheHit()
+    {
+        var (world, ship) = CreateWorld(new LongGun());
+        Give(ship, "explosive-rounds", 1);
+        var struck = Pirate(world, new Vector2(110, 100));
+        var beside = Pirate(world, new Vector2(110, 102));
+
+        world.TryCastAbility(ship, AbilitySlot.One, struck.Position);
+        RunTicks(world, SimConstants.TickRate);
+
+        Assert.True(beside.Health < beside.Stats.MaxHealth);
+    }
+
+    [Fact]
+    public void BurningWake_LeavesFireAllAlongTheShot()
+    {
+        var (world, ship) = CreateWorld(new LongGun());
+        Give(ship, "burning-wake", 1);
+
+        world.TryCastAbility(ship, AbilitySlot.One, ship.Position + new Vector2(16f, 0f));
+        RunTicks(world, SimConstants.TickRate);
+
+        // The whole 16-tile reach, a patch every 1.5 tiles.
+        Assert.InRange(world.Fires.Count, 9, 11);
+        Assert.All(world.Fires, f => Assert.Equal(100f, f.Position.Y, 2));
     }
 
     [Fact]

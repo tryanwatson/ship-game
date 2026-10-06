@@ -159,8 +159,9 @@ public static class Wire
                 w.Put((byte)CommandTag.ChooseCard);
                 w.Put(card.CardId);
                 break;
-            case RerollCardsCommand:
+            case RerollCardsCommand reroll:
                 w.Put((byte)CommandTag.RerollCards);
+                w.Put(reroll.Tier is { } tier ? (byte)(tier + 1) : (byte)0); // 0: no tier asked for
                 break;
             case ChooseStartingWeaponCommand weapon:
                 w.Put((byte)CommandTag.ChooseStartingWeapon);
@@ -187,7 +188,7 @@ public static class Wire
         CommandTag.PurchaseSkill => new PurchaseSkillCommand(playerId, r.GetString(64)),
         CommandTag.PurchaseRepair => new PurchaseRepairCommand(playerId),
         CommandTag.ChooseCard => new ChooseCardCommand(playerId, r.GetString(64)),
-        CommandTag.RerollCards => new RerollCardsCommand(playerId),
+        CommandTag.RerollCards => new RerollCardsCommand(playerId, r.GetByte() is > 0 and <= (byte)CardTier.Prismatic + 1 and var tier ? (CardTier)(tier - 1) : null),
         CommandTag.ChooseStartingWeapon => new ChooseStartingWeaponCommand(playerId, r.GetString(64)),
         var tag => throw new InvalidDataException($"Unknown command tag {tag}."),
     };
@@ -230,6 +231,74 @@ public static class Wire
         StartingWeaponChosen = 33,
         ShipRammed = 34,
         FireStarted = 35,
+        ProjectileVolley = 36,
+    }
+
+    /// <summary>
+    /// Writes a message's worth of events, a count first. A run of shots fired together (the same tick, ship, damage,
+    /// flight and size, one id after the next: a broadside, a ring) goes as one record that's little more than each
+    /// ball's position and velocity, so a ring of hundreds stays a few kilobytes.
+    /// </summary>
+    public static void PutEvents(this NetDataWriter w, IReadOnlyList<WorldEvent> events)
+    {
+        var runs = new List<(int Start, int Count)>();
+        for (var i = 0; i < events.Count;)
+        {
+            var end = i + 1;
+            if (events[i] is ProjectileSpawned first)
+            {
+                while (end < events.Count && end - i < ushort.MaxValue && events[end] is ProjectileSpawned next
+                       && next.ProjectileId == first.ProjectileId + (end - i) && next.Tick == first.Tick
+                       && next.OwnerShipId == first.OwnerShipId && next.Team == first.Team && next.Damage == first.Damage
+                       && next.LifetimeTicks == first.LifetimeTicks && next.Radius == first.Radius)
+                    end++;
+            }
+            runs.Add((i, end - i));
+            i = end;
+        }
+
+        w.Put((ushort)runs.Count);
+        foreach (var (start, count) in runs)
+        {
+            if (count == 1)
+            {
+                w.PutEvent(events[start]);
+                continue;
+            }
+            var first = (ProjectileSpawned)events[start];
+            Begin(w, EventTag.ProjectileVolley, first);
+            w.Put(first.ProjectileId); w.Put(first.OwnerShipId); w.Put((byte)first.Team);
+            w.Put(first.Damage); w.Put(first.LifetimeTicks); w.Put(first.Radius);
+            w.Put((ushort)count);
+            for (var i = start; i < start + count; i++)
+            {
+                var shot = (ProjectileSpawned)events[i];
+                w.Put(shot.Position); w.Put(shot.Velocity);
+            }
+        }
+    }
+
+    /// <summary>Reads what <see cref="PutEvents"/> wrote, every shot of a volley its own event again.</summary>
+    public static List<WorldEvent> GetEvents(this NetDataReader r)
+    {
+        var records = r.GetUShort();
+        var events = new List<WorldEvent>(records);
+        for (var i = 0; i < records; i++)
+        {
+            if ((EventTag)r.PeekByte() != EventTag.ProjectileVolley)
+            {
+                events.Add(r.GetEvent());
+                continue;
+            }
+            r.GetByte();
+            var tick = r.GetLong();
+            var (firstId, owner, team) = (r.GetInt(), r.GetInt(), (Team)r.GetByte());
+            var (damage, lifetime, radius) = (r.GetFloat(), r.GetInt(), r.GetFloat());
+            var count = r.GetUShort();
+            for (var n = 0; n < count; n++)
+                events.Add(new ProjectileSpawned(tick, firstId + n, owner, team, r.GetVector2(), r.GetVector2(), damage, lifetime, radius));
+        }
+        return events;
     }
 
     public static void PutEvent(this NetDataWriter w, WorldEvent e)
@@ -442,6 +511,7 @@ public static class Wire
         w.Put(lobby.RunInProgress);
         w.Put(lobby.FriendlyFire);
         w.Put(lobby.StartingGold);
+        w.Put(lobby.Testing);
         w.Put((byte)lobby.Players.Count);
         foreach (var player in lobby.Players)
         {
@@ -456,6 +526,7 @@ public static class Wire
         var running = r.GetBool();
         var friendlyFire = r.GetBool();
         var startingGold = r.GetInt();
+        var testing = r.GetBool();
         var count = r.GetByte();
         var players = new List<LobbyPlayer>(count);
         for (var i = 0; i < count; i++)
@@ -464,7 +535,7 @@ public static class Wire
             var ready = r.GetBool();
             players.Add(new LobbyPlayer(id, ready, r.GetString(64)));
         }
-        return new LobbyState(running, players, friendlyFire, startingGold);
+        return new LobbyState(running, players, friendlyFire, startingGold, testing);
     }
 
     public static void PutRunStart(this NetDataWriter w, RunStart start)
@@ -710,7 +781,12 @@ public static class Wire
             w.Put(target);
         w.Put(s.IsHoldingCourse);
         w.Put(s.WindDrift);
-        w.Put(s.Marked);
+        w.Put((byte)Math.Min(s.Statuses.Length, byte.MaxValue));
+        foreach (var (id, stacks, power, remaining) in s.Statuses.Take(byte.MaxValue))
+        {
+            w.Put((byte)id); w.Put((byte)Math.Clamp(stacks, 0, byte.MaxValue)); w.Put(power);
+            w.Put((ushort)Math.Clamp(remaining, 0, ushort.MaxValue));
+        }
         foreach (var channels in s.Cooldowns)
         {
             var count = channels?.Length ?? 0;
@@ -745,7 +821,9 @@ public static class Wire
             s.MoveTarget = r.GetVector2();
         s.IsHoldingCourse = r.GetBool();
         s.WindDrift = r.GetVector2();
-        s.Marked = r.GetBool();
+        s.Statuses = new (StatusId, int, float, int)[r.GetByte()];
+        for (var i = 0; i < s.Statuses.Length; i++)
+            s.Statuses[i] = ((StatusId)r.GetByte(), r.GetByte(), r.GetFloat(), r.GetUShort());
         for (var i = 0; i < s.Cooldowns.Length; i++)
         {
             var count = r.GetByte();

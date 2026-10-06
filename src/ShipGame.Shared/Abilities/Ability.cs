@@ -61,6 +61,15 @@ public abstract class Ability
     /// abilities that aren't targeted ignore it. Returns false if the cast was rejected (no cooldown is spent).
     /// </summary>
     public abstract bool Cast(World world, Ship caster, Vector2 target);
+
+    /// <summary>The fires <paramref name="ship"/>'s <paramref name="abilityId"/> starts (see <see cref="AbilityStat.FireSeconds"/>), or null.</summary>
+    public static FireEffect? FireFor(Ship ship, string abilityId)
+    {
+        var seconds = ship.AbilityValue(abilityId, AbilityStat.FireSeconds, 0f);
+        return seconds > 0f
+            ? new FireEffect(ship.AbilityValue(abilityId, AbilityStat.FireDps, 0f), (int)MathF.Round(seconds * SimConstants.TickRate))
+            : null;
+    }
 }
 
 /// <summary>
@@ -71,12 +80,14 @@ public sealed class AbilityState
 {
     private readonly int[] _remaining;
     private readonly int[] _duration;
+    private readonly int[] _sinceFired;
 
     public AbilityState(Ability definition)
     {
         Definition = definition;
         _remaining = new int[Math.Max(1, definition.CooldownChannels)];
         _duration = new int[_remaining.Length];
+        _sinceFired = new int[_remaining.Length];
     }
 
     public Ability Definition { get; }
@@ -112,6 +123,7 @@ public sealed class AbilityState
         var duration = baseTicks / MathF.Max(cooldownSpeed, 0.01f);
         _duration[channel] = Math.Max(1, (int)MathF.Round(duration));
         _remaining[channel] = _duration[channel];
+        _sinceFired[channel] = 0;
     }
 
     /// <summary>Sets a channel's cooldown directly, for a client mirroring the server's ship.</summary>
@@ -121,13 +133,20 @@ public sealed class AbilityState
             return;
         _remaining[channel] = Math.Max(0, remainingTicks);
         _duration[channel] = Math.Max(0, durationTicks);
+        _sinceFired[channel] = Math.Max(0, _duration[channel] - _remaining[channel]);
     }
 
-    /// <summary>Takes <paramref name="fraction"/> of each reloading channel's full cooldown off what's left.</summary>
-    public void Refund(float fraction)
+    /// <summary>
+    /// Takes <paramref name="fraction"/> of each reloading channel's full cooldown off what's left, but never so much
+    /// that it fires again sooner than <paramref name="minTicks"/> after it last did.
+    /// </summary>
+    public void Refund(float fraction, int minTicks = 0)
     {
         for (var i = 0; i < _remaining.Length; i++)
-            _remaining[i] = Math.Max(0, _remaining[i] - (int)MathF.Round(_duration[i] * fraction));
+        {
+            var floor = Math.Min(_remaining[i], Math.Max(0, minTicks - _sinceFired[i]));
+            _remaining[i] = Math.Max(floor, _remaining[i] - (int)MathF.Round(_duration[i] * fraction));
+        }
     }
 
     public void TickCooldown()
@@ -136,6 +155,8 @@ public sealed class AbilityState
         {
             if (_remaining[i] > 0)
                 _remaining[i]--;
+            if (_sinceFired[i] < int.MaxValue)
+                _sinceFired[i]++;
         }
     }
 

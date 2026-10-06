@@ -160,6 +160,7 @@ public sealed class GameClient : Game
         _menu.Address = _settings.LastAddress;
         _menu.Password = _settings.LastPassword;
         _menu.FriendlyFire = _settings.HostFriendlyFire;
+        _menu.Testing = _settings.Testing;
 
         if (_hosting)
             StartHosting(_hostFriendlyFire);
@@ -192,7 +193,7 @@ public sealed class GameClient : Game
         LeaveSession();
         try
         {
-            _hostedServer = new HostedServer(_connectPort, friendlyFire);
+            _hostedServer = new HostedServer(_connectPort, friendlyFire, _settings.Testing);
         }
         catch (InvalidOperationException)
         {
@@ -211,11 +212,12 @@ public sealed class GameClient : Game
 
     private static World EmptySea() => Runs.CreateMap();
 
-    /// <summary>A fresh run: the player's ship in the middle of the map carrying <paramref name="weapon"/>, the fortresses all round.</summary>
+    /// <summary>A fresh solo run: the player's ship in the middle of the map, the fortresses all round (and, testing, a late game's cards to choose).</summary>
     private void StartRun()
     {
         var name = _lobbyName.Length > 0 ? _lobbyName : PlayerNames.Default;
-        var world = Runs.Create(Environment.TickCount, new[] { (SoloPlayerId, name) }, startingGold: _settings.SoloStartingGold);
+        var world = Runs.Create(Environment.TickCount, new[] { (SoloPlayerId, name) }, startingGold: _settings.SoloStartingGold,
+            testing: _settings.Testing);
 
         _session = new LocalGameSession(world, SoloPlayerId);
         ResetControls();
@@ -361,8 +363,8 @@ public sealed class GameClient : Game
                 case { CardId: { } card }:
                     _session.Send(new ChooseCardCommand(LocalPlayerId, card));
                     break;
-                case { Reroll: true }:
-                    _session.Send(new RerollCardsCommand(LocalPlayerId));
+                case { Reroll: true } reroll:
+                    _session.Send(new RerollCardsCommand(LocalPlayerId, reroll.Tier));
                     break;
                 case { WeaponId: { } weapon }:
                     _session.Send(new ChooseStartingWeaponCommand(LocalPlayerId, weapon));
@@ -444,6 +446,7 @@ public sealed class GameClient : Game
         switch (_menu.Update(_input, Hud, dt))
         {
             case MenuAction.PlaySolo:
+                SaveSettings();
                 _menu.Close();
                 StartRun();
                 break;
@@ -467,6 +470,7 @@ public sealed class GameClient : Game
         _settings.LastAddress = _menu.Address.Trim();
         _settings.LastPassword = _menu.Password;
         _settings.HostFriendlyFire = _menu.FriendlyFire;
+        _settings.Testing = _menu.Testing;
         _settings.Save();
     }
 
@@ -503,7 +507,7 @@ public sealed class GameClient : Game
             _runForecast.Draw(director.Status, Archipelago.SeaAt(here), Hud);
             if (!_session.World.IsPaused) // the card screen has the stage
                 _seaBanner.Draw(localShip is null ? null : Archipelago.SeaAt(localShip.Position), Hud);
-            _cardHand.Draw(LocalPlayer, _input, Hud);
+            _cardHand.Draw(LocalPlayer, _session.World.GetPlayerShip(LocalPlayerId), _input, Hud);
         }
         // Choosing a contract charts each route beside the panel; otherwise M shows the full map.
         if (_shipyardPanel.CurrentRoutes(_session.World, localShip, _input, Hud) is { } routes)
@@ -756,7 +760,8 @@ public sealed class GameClient : Game
                 var title = _session.World.IsRunOver ? RunOverTitle(_session.World) : "LOBBY";
                 var mode = connection.Lobby?.FriendlyFire == true ? "FRIENDLY FIRE ON" : "CO-OP";
                 var gold = StartingGoldLabel(connection.Lobby?.StartingGold ?? 0);
-                _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {mode}  -  {gold}  -  {prompt}", Hud);
+                var testing = connection.Lobby?.Testing == true ? $"  -  TESTING: {CardRewards.TestingHands} CARDS" : "";
+                _statusBanner.Draw(title, $"{players.Count} SAILORS  {ready} READY  -  {mode}  -  {gold}{testing}  -  {prompt}", Hud);
                 _lobbyPanel.Draw(_lobbyName, players, online.LocalPlayerId, Hud);
                 return true;
             }

@@ -7,6 +7,13 @@ public static class Geometry
 {
     public static float Cross(Vector2 a, Vector2 b) => a.X * b.Y - a.Y * b.X;
 
+    /// <summary><paramref name="v"/> turned <paramref name="radians"/> (clockwise in the Y-down world).</summary>
+    public static Vector2 Rotate(Vector2 v, float radians)
+    {
+        var (sin, cos) = MathF.SinCos(radians);
+        return new Vector2(v.X * cos - v.Y * sin, v.X * sin + v.Y * cos);
+    }
+
     /// <summary>True if <paramref name="point"/> is inside (or on) a convex polygon of either winding.</summary>
     public static bool ConvexContains(ReadOnlySpan<Vector2> convex, Vector2 point)
     {

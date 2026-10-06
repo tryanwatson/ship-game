@@ -64,9 +64,12 @@ public sealed class GameServer : IDisposable
     private int _runSeed = Environment.TickCount;
 
     /// <param name="password">Required to join; null or empty for an open server.</param>
-    public GameServer(int port = Protocol.DefaultPort, Action<string>? log = null, bool friendlyFire = true, string? password = null)
+    /// <param name="testing">Runs open with a late game's worth of cards to choose (see <see cref="Testing"/>).</param>
+    public GameServer(int port = Protocol.DefaultPort, Action<string>? log = null, bool friendlyFire = true, string? password = null,
+        bool testing = false)
     {
         FriendlyFire = friendlyFire;
+        Testing = testing;
         _password = string.IsNullOrEmpty(password) ? null : Encoding.UTF8.GetBytes(password);
         _log = log ?? (_ => { });
         _net = new NetManager(_listener) { DisconnectTimeout = 10_000 };
@@ -86,6 +89,12 @@ public sealed class GameServer : IDisposable
 
     /// <summary>Gold every player starts a run with. Set from the lobby by any player, for playtesting.</summary>
     public int StartingGold { get; private set; }
+
+    /// <summary>
+    /// Playtesting: each run opens with a late game's worth of hands to choose from, rerolled freely (see
+    /// <see cref="CardRewards.OfferTesting"/>). Set by whoever runs the server (the host), not from the lobby.
+    /// </summary>
+    public bool Testing { get; }
 
     /// <summary>The run in progress, or null in the lobby.</summary>
     public World? World { get; private set; }
@@ -196,7 +205,7 @@ public sealed class GameServer : IDisposable
     {
         var lobby = new LobbyState(World is not null,
             _byPeerId.Values.OrderBy(p => p.PlayerId).Select(p => new LobbyPlayer(p.PlayerId, p.Ready, p.Name)).ToList(),
-            FriendlyFire, StartingGold);
+            FriendlyFire, StartingGold, Testing);
         _writer.Reset();
         _writer.Put((byte)MessageType.Lobby);
         _writer.PutLobby(lobby);
@@ -213,7 +222,7 @@ public sealed class GameServer : IDisposable
         var crew = players
             .Select(p => (p.PlayerId, p.Name)) // everyone ready means everyone's named
             .ToList();
-        var world = Runs.Create(seed, crew, FriendlyFire, StartingGold);
+        var world = Runs.Create(seed, crew, FriendlyFire, StartingGold, Testing);
         foreach (var player in players)
         {
             player.Ready = false;
@@ -222,7 +231,7 @@ public sealed class GameServer : IDisposable
         World = world;
         _sentStatsVersions.Clear();
         _relevance.Clear();
-        _log($"Run started with {players.Count} player(s), friendly fire {(FriendlyFire ? "on" : "off")}, starting gold {StartingGold}");
+        _log($"Run started with {players.Count} player(s), friendly fire {(FriendlyFire ? "on" : "off")}, starting gold {StartingGold}{(Testing ? ", testing (late-game cards)" : "")}");
 
         _writer.Reset();
         _writer.Put((byte)MessageType.RunStarted);
@@ -305,9 +314,7 @@ public sealed class GameServer : IDisposable
         // Batches stay small; reliable delivery fragments any that don't fit one packet.
         _writer.Reset();
         _writer.Put((byte)MessageType.Events);
-        _writer.Put((ushort)events.Count);
-        foreach (var e in events)
-            _writer.PutEvent(e);
+        _writer.PutEvents(events);
         if (onlyTo is null)
             SendToAll(_writer, DeliveryMethod.ReliableOrdered);
         else

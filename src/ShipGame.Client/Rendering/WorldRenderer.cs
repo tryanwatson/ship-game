@@ -51,6 +51,12 @@ public sealed class WorldRenderer
     private static readonly Color FireEdge = new Color(255, 170, 60) * 0.7f;
     private static readonly Color FireFlame = new(255, 190, 80);
     private static readonly Color MarkColor = new(255, 90, 70);
+
+    // Status pips under a health bar, one per status: a colored square, draining as it wears off, with its stacks.
+    private const float PipSize = 9f;
+    private const float PipGap = 2f;
+    private static readonly Color PipBack = new Color(10, 12, 18) * 0.8f;
+    private static readonly Color PipText = new(250, 250, 250);
     private static readonly Color StrikeFill = new Color(235, 80, 60) * 0.3f;
     private static readonly Color StrikeEdge = new Color(240, 110, 80) * 0.8f;
     private static readonly Color Shell = new(25, 25, 30);
@@ -212,6 +218,8 @@ public sealed class WorldRenderer
                 DrawBroadsideRing(ship, pos, heading);
             _batch.Flush();
             _ships.Draw(ship, pos, heading, ship == localShip, targeted, time, _combat.HitFlash(ship.Id));
+            if (ship.StacksOf(StatusId.Burning) is > 0 and var burning)
+                DrawShipAflame(ship, pos, heading, burning, time);
             _batch.Flush(); // Flush per ship so nearer hulls overlap farther ones.
         }
 
@@ -227,7 +235,7 @@ public sealed class WorldRenderer
         // Health bars float above everything, League-style. Levels are judged against the waters we're in.
         var localLevel = localShip is null ? 0 : Archipelago.LevelAt(localShip.Position);
         foreach (var ship in world.Ships)
-            DrawHealthBar(ship, NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), ship == localShip, localLevel,
+            DrawHealthBar(ship, NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), ship == localShip, localLevel, renderTick,
                 ship.OwnerPlayerId is { } owner && world.Players.TryGetValue(owner, out var player) ? player.Name : null);
 
         _batch.Flush();
@@ -546,6 +554,11 @@ public sealed class WorldRenderer
         var ready = ability is not null && ability.IsChannelReady(ability.Definition.ChannelFor(ship, aim.Cursor));
         switch (ability?.Definition)
         {
+            case BroadsideVolley when BroadsideVolley.FiresRing(ship):
+                // A Man o' War's ring goes all the way round: its reach.
+                FillGroundCircle(pos, BroadsideVolley.RangeFor(ship), ready ? AimFill * 0.6f : AimCooling * 0.5f);
+                DrawGroundCircle(pos, BroadsideVolley.RangeFor(ship), ready ? AimEdge : AimCooling);
+                break;
             case BroadsideVolley:
             {
                 // The deck that will fire: how far round it can be laid, faint, and its lane laid toward the cursor,
@@ -650,7 +663,7 @@ public sealed class WorldRenderer
     }
 
     /// <param name="playerName">A player ship's captain, named over the bar.</param>
-    private void DrawHealthBar(Ship ship, NVector2 pos, bool isLocal, int localLevel, string? playerName = null)
+    private void DrawHealthBar(Ship ship, NVector2 pos, bool isLocal, int localLevel, double renderTick, string? playerName = null)
     {
         var width = ship.IsBoss ? HealthBarWidth * FlagshipBarScale : HealthBarWidth;
         var anchor = IsoProjection.WorldToIso(pos) - new Vector2(width / 2f, ship.IsFort ? FortVisuals.HealthHeight : ShipVisuals.HealthHeight);
@@ -664,6 +677,8 @@ public sealed class WorldRenderer
             DrawAnchorMark(anchor + new Vector2(-9f, HealthBarHeight / 2f));
         if (ship.IsMarked)
             DrawTargetMark(anchor + new Vector2(width / 2f, -16f));
+        if (ship.Statuses.Count > 0)
+            DrawStatusPips(ship, anchor + new Vector2(0f, HealthBarHeight + 3f), renderTick);
         if (ship.Level > 0)
             DrawLevelBadge(ship.Level, anchor + new Vector2(width + 3f, HealthBarHeight / 2f), localLevel);
         if (ship.IsBoss)
@@ -674,6 +689,54 @@ public sealed class WorldRenderer
             DrawLabel(playerName, anchor, width, LevelScale, isLocal ? HealthOwn : HealthCrew);
         else if (PirateRoles.Of(ship) is { } role)
             DrawLabel(PirateRoles.Name(role).ToUpperInvariant(), anchor, width, NameScale, NameLabel);
+    }
+
+    /// <summary>
+    /// A ship's statuses in a row from <paramref name="topLeft"/>, buffs first: each a square in its color that drains
+    /// from the top as it wears off, with its stacks on it when there's more than one.
+    /// </summary>
+    private void DrawStatusPips(Ship ship, Vector2 topLeft, double renderTick)
+    {
+        var x = topLeft.X;
+        foreach (var status in ship.Statuses.OrderByDescending(s => s.Definition.IsBuff).ThenBy(s => s.Id))
+        {
+            var color = StatusColor(status.Id);
+            var left = (float)Math.Clamp((status.UntilTick - renderTick) / status.Definition.Ticks, 0, 1);
+            FillRect(new Vector2(x, topLeft.Y), new Vector2(PipSize, PipSize), PipBack);
+            FillRect(new Vector2(x + 1f, topLeft.Y + 1f + (PipSize - 2f) * (1f - left)), new Vector2(PipSize - 2f, (PipSize - 2f) * left), color);
+            if (status.Stacks > 1)
+            {
+                var text = status.Stacks.ToString();
+                PixelFont.Draw(_batch, text, new Vector2(x + PipSize + 1f, topLeft.Y + 1f), 1f, color);
+                x += PixelFont.Measure(text, 1f) + 2f;
+            }
+            x += PipSize + PipGap;
+        }
+    }
+
+    private static Color StatusColor(StatusId id) => id switch
+    {
+        StatusId.Burning => new Color(255, 140, 40),
+        StatusId.Frenzy => new Color(235, 60, 70),
+        StatusId.Marked => MarkColor,
+        StatusId.Slowed => new Color(100, 160, 240),
+        _ => PipText,
+    };
+
+    /// <summary>Flames licking up off a burning hull: more of them, and taller, the more stacks it has.</summary>
+    private void DrawShipAflame(Ship ship, NVector2 pos, float heading, int stacks, float time)
+    {
+        var forward = new NVector2(MathF.Cos(heading), MathF.Sin(heading));
+        var flames = Math.Min(3 + stacks / 2, 12);
+        var height = 8f + Math.Min(stacks, 20) * 0.6f;
+        for (var i = 0; i < flames; i++)
+        {
+            // Spread along the deck, each flickering on its own beat.
+            var along = ((i * 0.618f + ship.Id * 0.37f) % 1f - 0.5f) * ship.Stats.Length * 0.8f;
+            var foot = IsoProjection.WorldToIso(pos + forward * along) - new Vector2(0f, 6f);
+            var flicker = 0.6f + 0.4f * MathF.Sin(time * 11f + i * 2.3f + ship.Id);
+            _batch.Stroke(foot, foot - new Vector2(0f, height * flicker), 3f, FireFlame * (0.6f + 0.4f * flicker));
+        }
     }
 
     /// <summary>Text centered over a health bar of <paramref name="width"/> whose top left is <paramref name="anchor"/>.</summary>
@@ -748,8 +811,11 @@ public sealed class WorldRenderer
         _batch.FillConvex(points, color);
     }
 
+    /// <summary>Whether the broadside bears on <paramref name="target"/>: in a deck's lane, or anywhere in a Man o' War's ring.</summary>
     private static bool IsInFiringLane(Ship? attacker, Ship target) =>
         attacker is not null
         && attacker.Abilities.Any(a => a?.Definition is BroadsideVolley)
-        && BroadsideVolley.SideCovering(attacker, target.Position, target.Stats.Radius) != BroadsideSide.None;
+        && (BroadsideVolley.FiresRing(attacker)
+            ? NVector2.Distance(attacker.Position, target.Position) <= BroadsideVolley.RangeFor(attacker) + target.Stats.Length / 2f
+            : BroadsideVolley.SideCovering(attacker, target.Position, target.Stats.Radius) != BroadsideSide.None);
 }

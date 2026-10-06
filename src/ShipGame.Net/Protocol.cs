@@ -8,7 +8,7 @@ public static class Protocol
     public const string Key = "ShipGame";
 
     /// <summary>Bump whenever the wire format changes.</summary>
-    public const int Version = 23;
+    public const int Version = 24;
 
     public const int DefaultPort = 7777;
 

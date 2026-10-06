@@ -187,6 +187,7 @@ public sealed class RunDirector
         var boss = world.SpawnShip(position, MathF.Atan2(toPrey.Y, toPrey.X), BossHull(round), abilities: BossLoadout(round));
         boss.IsBoss = true;
         PirateLevels.Apply(boss, BossLevel(round));
+        boss.AddCard(new CardPick("heated-shot", round)); // its hits set you burning, worse each round
         var players = Math.Max(1, world.Players.Count);
         if (players > 1)
             boss.AddModifier(new StatModifier(StatId.MaxHealth, ModifierKind.Multiplier, 1f + BossHealthPerExtraPlayer * (players - 1),

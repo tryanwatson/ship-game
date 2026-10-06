@@ -13,6 +13,12 @@ public enum OfferSource
 
     /// <summary>A boss sunk (one that didn't end the run).</summary>
     Boss,
+
+    /// <summary>
+    /// A testing run's opening hands: a late game's worth of cards, chosen before setting sail. Each is all one tier,
+    /// at its strongest, and rerolls are free and unlimited (see <see cref="CardRewards.OfferTesting"/>).
+    /// </summary>
+    Testing,
 }
 
 /// <summary>
@@ -52,6 +58,19 @@ public static class CardRewards
     /// <summary>What a player who has already rerolled <paramref name="rerolls"/> times pays for the next: 50, 100, 200, 400...</summary>
     public static int RerollCost(int rerolls) => RerollBaseCost * (1 << Math.Clamp(rerolls, 0, 20));
 
+    /// <summary>
+    /// Cards a player holds by the last boss of a full run: the starting card, one per fortress (every boss but the
+    /// first comes after another <see cref="RunDirector.FortressesPerBoss"/>), and one per boss sunk before the last.
+    /// A testing run deals this many hands up front.
+    /// </summary>
+    public const int TestingHands = 1 + RunDirector.FortressesPerBoss * RunDirector.BossCount + (RunDirector.BossCount - 1);
+
+    /// <summary>A testing hand's level: the top, so every card comes at the strongest its tier goes.</summary>
+    public const int TestingLevel = 8;
+
+    /// <summary>The tier a testing hand is dealt in until the player asks for another.</summary>
+    public const CardTier DefaultTestingTier = CardTier.Prismatic;
+
     /// <summary>The level a boss's hand is dealt at: round 1 at 6, round 2 at 8.</summary>
     public static int BossDropLevel(int round) => Math.Min(8, 4 + 2 * Math.Max(1, round));
 
@@ -60,6 +79,7 @@ public static class CardRewards
     {
         OfferSource.Start => (0.70f, 0.30f, 0f),
         OfferSource.Boss => (0f, 0f, 1f),
+        OfferSource.Testing => Only(DefaultTestingTier),
         _ => level switch
         {
             <= 2 => (0.60f, 0.40f, 0f),
@@ -70,7 +90,15 @@ public static class CardRewards
         },
     };
 
-    public static int CardsFor(OfferSource source, int level) => source == OfferSource.Fortress && level >= 8 ? TopOfferSize : OfferSize;
+    private static (float Silver, float Gold, float Prismatic) Only(CardTier tier) => tier switch
+    {
+        CardTier.Silver => (1f, 0f, 0f),
+        CardTier.Gold => (0f, 1f, 0f),
+        _ => (0f, 0f, 1f),
+    };
+
+    public static int CardsFor(OfferSource source, int level) =>
+        source == OfferSource.Testing || (source == OfferSource.Fortress && level >= 8) ? TopOfferSize : OfferSize;
 
     public static int FreeRerollsFor(OfferSource source, int level) => source == OfferSource.Fortress && level >= 7 ? 1 : 0;
 
@@ -92,6 +120,19 @@ public static class CardRewards
     }
 
     /// <summary>
+    /// A testing run's opening: <see cref="TestingHands"/> hands for each player, queued up, in place of the starting
+    /// card. They choose them all, then their weapon, so they set sail with a late game's cards.
+    /// </summary>
+    public static void OfferTesting(World world, Random rng)
+    {
+        foreach (var player in world.Players.Values.OrderBy(p => p.PlayerId).ToList())
+        {
+            for (var i = 0; i < TestingHands; i++)
+                Offer(world, player.PlayerId, Deal(rng, Eligible(world, player), OfferSource.Testing, TestingLevel));
+        }
+    }
+
+    /// <summary>
     /// Cards that suit the player's ship (its weapons; the ship they lost, while they wait to respawn). Before they've
     /// a weapon at all (the starting card), every card: a good weapon card can decide which weapon to start with.
     /// </summary>
@@ -107,9 +148,11 @@ public static class CardRewards
     /// <paramref name="level"/> (or the top of its tier, if that's lower). A tier with nothing left to deal gives way to
     /// the next tier down, then up. Cards in <paramref name="avoid"/> are dealt only if there's nothing else.
     /// </summary>
-    public static CardOffer Deal(Random rng, IReadOnlyList<CardDefinition> pool, OfferSource source, int level, IReadOnlyCollection<string>? avoid = null)
+    /// <param name="only">Every card of this tier (as far as the pool allows), whatever the odds.</param>
+    public static CardOffer Deal(Random rng, IReadOnlyList<CardDefinition> pool, OfferSource source, int level, IReadOnlyCollection<string>? avoid = null,
+        CardTier? only = null)
     {
-        var odds = TierOdds(source, level);
+        var odds = only is { } forced ? Only(forced) : TierOdds(source, level);
         var dealt = new List<CardPick>();
         var size = CardsFor(source, level);
         for (var i = 0; i < size; i++)
@@ -172,19 +215,29 @@ public static class CardRewards
     /// <summary>
     /// Swaps the player's oldest offer for a fresh hand of the same kind and level, of other cards where there are
     /// enough to go round. A free reroll the offer came with is used first; after that it costs
-    /// <see cref="RerollCost"/>, which doubles each time. Null on success.
+    /// <see cref="RerollCost"/>, which doubles each time. A testing hand rerolls for nothing, as often as the player
+    /// likes, into a hand of <paramref name="tier"/> (prismatic if not given), without raising the price of later
+    /// rerolls; <paramref name="tier"/> is ignored for any other hand. Null on success.
     /// </summary>
-    public static RejectionReason? TryReroll(World world, int playerId)
+    public static RejectionReason? TryReroll(World world, int playerId, CardTier? tier = null)
     {
         if (!world.Players.TryGetValue(playerId, out var player) || player.CardOffers.Count == 0)
             return RejectionReason.NoCardOffer;
         var current = player.CardOffers[0];
+        var rng = world.Director?.Rng ?? new Random((int)world.Tick * 31 + playerId * 7 + player.Rerolls);
+        if (current.Source == OfferSource.Testing)
+        {
+            var hand = Deal(rng, Eligible(world, player), OfferSource.Testing, current.Level, current.Cards.Select(c => c.Id).ToList(),
+                tier ?? DefaultTestingTier);
+            player.CardOffers[0] = hand;
+            world.Emit(new CardsRerolled(world.Tick, playerId, hand, player.Rerolls));
+            return null;
+        }
         var free = current.FreeRerolls > 0;
         var cost = RerollCost(player.Rerolls);
         if (!free && player.Gold < cost)
             return RejectionReason.NotEnoughGold;
 
-        var rng = world.Director?.Rng ?? new Random((int)world.Tick * 31 + playerId * 7 + player.Rerolls);
         var dealt = Deal(rng, Eligible(world, player), current.Source, current.Level, current.Cards.Select(c => c.Id).ToList());
         var rerolled = dealt with { FreeRerolls = free ? current.FreeRerolls - 1 : current.FreeRerolls };
         if (!free)

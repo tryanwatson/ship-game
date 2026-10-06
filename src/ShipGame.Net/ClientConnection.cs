@@ -229,14 +229,8 @@ public sealed class ClientConnection : IDisposable
                 Replica.EnqueueShipInfo(reader.GetShipInfo());
                 break;
             case MessageType.Events:
-            {
-                var count = reader.GetUShort();
-                var events = new List<WorldEvent>(count);
-                for (var i = 0; i < count; i++)
-                    events.Add(reader.GetEvent());
-                Replica.EnqueueEvents(events);
+                Replica.EnqueueEvents(reader.GetEvents());
                 break;
-            }
             case MessageType.SnapshotChunk:
                 OnSnapshotChunk(reader.GetSnapshotChunk());
                 break;

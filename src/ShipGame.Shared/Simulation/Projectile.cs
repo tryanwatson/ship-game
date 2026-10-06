@@ -38,6 +38,34 @@ public sealed record ShotEffects
     /// <summary>Times a hit bounces on to the next enemy nearby (Ricochet).</summary>
     public int Ricochets { get; init; }
 
+    /// <summary>Times a hit splits in two, each half bouncing on to another enemy nearby (Fork).</summary>
+    public int Forks { get; init; }
+
+    /// <summary>Times the ball skips on, off the water or a ship it strikes, for <see cref="SkipTicks"/> more each time (Skip Shot).</summary>
+    public int Skips { get; init; }
+
+    public int SkipTicks { get; init; }
+
+    /// <summary>Fraction of the firing ability's reload every hit gives back (Hot Guns).</summary>
+    public float HitRefund { get; init; }
+
+    /// <summary>Fraction of the firing ability's reload a hit that sinks its target gives back (Headhunter).</summary>
+    public float KillRefund { get; init; }
+
+    /// <summary>Sets the water burning where it strikes a ship (Incendiary).</summary>
+    public FireEffect? HitFire { get; init; }
+
+    /// <summary>Sets the water burning all along its path (Burning Wake).</summary>
+    public FireEffect? Wake { get; init; }
+
+    /// <summary>Every hit bursts this wide (0: it doesn't), at <see cref="ExplosionDamage"/> of the shot's damage (Explosive Rounds).</summary>
+    public float ExplosionRadius { get; init; }
+
+    public float ExplosionDamage { get; init; }
+
+    /// <summary>Whether a hit sends it, or splits of it, on to other enemies.</summary>
+    public bool Bounces => Ricochets > 0 || Forks > 0;
+
     public bool IsLongRange(float distance) => distance >= LongRange;
 
     /// <summary>Damage multiplier for a hit <paramref name="distance"/> from the muzzle.</summary>
@@ -96,6 +124,18 @@ public sealed class Projectile
 
     /// <summary>Ships it can still pass through; starts at <see cref="ShotEffects.Pierce"/>.</summary>
     public int PierceRemaining { get; set; }
+
+    /// <summary>Whether it's already sent bounces on (Ricochet, Fork): only its first hit does, even if it flies on.</summary>
+    public bool HasBounced { get; set; }
+
+    /// <summary>
+    /// The ships struck by the shot this one bounced from, its bounces, theirs, and so on, shared between them all, so
+    /// they spread through a fleet rather than back to the same ships. Null until it bounces.
+    /// </summary>
+    public HashSet<int>? Lineage { get; set; }
+
+    /// <summary>Distance flown since it last left a patch of burning water behind (Burning Wake).</summary>
+    public float WakeTravelled { get; set; }
 
     private List<int>? _shipsHit;
 

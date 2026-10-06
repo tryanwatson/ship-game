@@ -121,10 +121,7 @@ public sealed class Mortar : Ability
             ? new ClusterEffect(bomblets, radius * ClusterSpreadFraction, radius * ClusterRadiusFraction, ClusterDamageFraction, ClusterDelayTicks)
             : null;
 
-        var burns = caster.AbilityValue(Id, AbilityStat.FireSeconds, 0f);
-        var fire = burns > 0f
-            ? new FireEffect(caster.AbilityValue(Id, AbilityStat.FireDps, 0f), (int)MathF.Round(burns * SimConstants.TickRate))
-            : null;
+        var fire = FireFor(caster, Id);
 
         // A salvo: the first shell on the aim point, the rest round it, one after another. A carpet: shells walking out
         // from the ship to the aim point, each landing a little after the one before.

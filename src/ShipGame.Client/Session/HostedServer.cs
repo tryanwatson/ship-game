@@ -15,9 +15,11 @@ public sealed class HostedServer : IDisposable
     private readonly Thread _thread;
 
     /// <exception cref="InvalidOperationException">The port couldn't be opened (usually: already in use).</exception>
-    public HostedServer(int port, bool friendlyFire = true)
+    /// <param name="testing">Runs open with a late game's worth of cards to choose (a playtesting option).</param>
+    public HostedServer(int port, bool friendlyFire = true, bool testing = false)
     {
-        _server = new GameServer(port, message => Console.WriteLine($"[server {DateTime.Now:HH:mm:ss}] {message}"), friendlyFire);
+        _server = new GameServer(port, message => Console.WriteLine($"[server {DateTime.Now:HH:mm:ss}] {message}"), friendlyFire,
+            testing: testing);
         Port = _server.Port;
         _thread = ServerRunner.StartInBackground(_server, _stop.Token);
         Console.WriteLine($"Hosting on UDP {Port}. Friends join with: --connect <your address>:{Port}");

@@ -60,14 +60,44 @@ public enum AbilityStat
     /// <summary>Shells in a line walked from the ship to the aim point, in place of a salvo (base 0: none).</summary>
     CarpetShells,
 
-    /// <summary>Seconds a shell's landing spot burns (base 0: it doesn't).</summary>
+    /// <summary>
+    /// Seconds the fires a weapon starts burn (base 0: it starts none): where a mortar shell lands, where a broadside
+    /// ball strikes a ship, and all along a long gun shot's path.
+    /// </summary>
     FireSeconds,
 
-    /// <summary>Damage a second to anything in a burning landing spot.</summary>
+    /// <summary>Damage a second to anything in one of those fires.</summary>
     FireDps,
 
     /// <summary>Degrees fore or aft of the beam a broadside can be laid (base <see cref="BroadsideVolley.AimArcDegrees"/>).</summary>
     AimArc,
+
+    /// <summary>At 1 or more, the broadside fires a ring all round the ship, by itself, whenever an enemy's in range (base 0).</summary>
+    Ring,
+
+    /// <summary>At 1 or more, each broadside deck fires by itself whenever it's loaded and an enemy's in its lane (base 0).</summary>
+    AutoFire,
+
+    /// <summary>Extra balls of grape each cannon fires, fanned out, each at <see cref="BroadsideVolley.GrapeDamageFraction"/> (base 0).</summary>
+    Grapeshot,
+
+    /// <summary>Times a ball skips on, off the water at the end of its flight or off a ship it strikes (base 0).</summary>
+    Skips,
+
+    /// <summary>Fraction of the reload every hit gives back to the weapon that fired it (base 0).</summary>
+    HitRefund,
+
+    /// <summary>Fraction of the reload a hit that sinks its target gives back (base 0).</summary>
+    KillRefund,
+
+    /// <summary>Times a hit splits in two, each half flying on to another enemy nearby (base 0).</summary>
+    Forks,
+
+    /// <summary>Radius of the burst every hit sets off (base 0: none).</summary>
+    ExplosionRadius,
+
+    /// <summary>A hit's burst, as a fraction of the shot's damage.</summary>
+    ExplosionDamage,
 }
 
 /// <summary>

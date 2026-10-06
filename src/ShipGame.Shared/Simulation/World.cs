@@ -112,24 +112,43 @@ public sealed class World
     /// <summary>Drops fires that have burned out by now, for a client mirroring the server's (which never steps).</summary>
     public void PutOutFires() => _fires.RemoveAll(f => f.EndTick <= Tick);
 
-    /// <summary>A Hunter's Mark lasts this long after each hit.</summary>
-    public const float MarkSeconds = 5f;
-    public static readonly int MarkTicks = (int)(MarkSeconds * SimConstants.TickRate);
 
-    /// <summary>A Chain Shot slow lasts this long after each hit.</summary>
-    public const float SlowSeconds = 3f;
-    public static readonly int SlowTicks = (int)(SlowSeconds * SimConstants.TickRate);
-    public const string SlowSource = "slowed";
+    /// <summary>
+    /// When a pirate ship sinks, the pirates within this range are roused: a stack of <see cref="StatusId.Frenzy"/>,
+    /// this strong, each.
+    /// </summary>
+    public const float RallyRange = 12f;
+    public const float RallyPower = 0.06f;
 
     /// <summary>A ram does its damage at most this often.</summary>
     public static readonly int RamCooldownTicks = SimConstants.TickRate;
+
+    /// <summary>A Ram card's damage is quoted at a stock sloop's top speed, and scales with the rammer's speed from there.</summary>
+    public static readonly float RamReferenceSpeed = ShipStats.Sloop.MaxSpeed;
+
+    /// <summary>What a ram quoted at <paramref name="quoted"/> damage does at <paramref name="speed"/>: twice as fast, twice the damage.</summary>
+    public static float RamDamageAt(float quoted, float speed) => quoted * MathF.Abs(speed) / RamReferenceSpeed;
 
     /// <summary>An echo fires this long after the shot it echoes.</summary>
     public const float EchoSeconds = 0.5f;
     public static readonly int EchoTicks = (int)(EchoSeconds * SimConstants.TickRate);
 
-    /// <summary>A ricochet looks this far for its next target.</summary>
+    /// <summary>A ricochet (or a fork) looks this far for its next target.</summary>
     public const float RicochetRange = 10f;
+
+    /// <summary>
+    /// However many hits give back its reload (Hot Guns), a weapon fires at most this often: it keeps a deck from
+    /// going off every tick, for the players and the network both.
+    /// </summary>
+    public const float HitRefundFloorSeconds = 0.5f;
+    public static readonly int HitRefundFloorTicks = (int)(HitRefundFloorSeconds * SimConstants.TickRate);
+
+    /// <summary>The burning water a broadside hit leaves (Incendiary).</summary>
+    public const float HitFireRadius = 1.2f;
+
+    /// <summary>A burning wake is patches of fire this far apart, each this wide (Burning Wake).</summary>
+    public const float WakeSpacing = 1.5f;
+    public const float WakeRadius = 1f;
 
     /// <summary>
     /// The furthest back a lagging player's shots look for what they hit (see <see cref="Ship.ShotRewindTicks"/>): half
@@ -143,26 +162,105 @@ public sealed class World
     /// </summary>
     public void DealDamage(Ship target, float amount, int attackerShipId)
     {
-        if (target.MarkedUntilTick >= Tick)
-            amount *= 1f + target.MarkBonus;
+        if (target.FindStatus(StatusId.Marked) is { } mark)
+            amount *= 1f + mark.Power;
         target.Health = MathF.Max(0f, target.Health - amount);
         RecordHit(target, attackerShipId);
-        if (FindShip(attackerShipId)?.PerkValue(Perk.HuntersMark) is > 0f and var mark)
+        if (FindShip(attackerShipId)?.PerkValue(Perk.HuntersMark) is > 0f and var marking)
+            ApplyStatus(target, StatusId.Marked, marking, attackerShipId);
+    }
+
+    /// <summary>
+    /// A weapon of <paramref name="attackerShipId"/>'s struck <paramref name="target"/> (a shot, a shell's blast, a
+    /// ram; not a fire or a burn ticking on): what its cards make a hit do besides damage.
+    /// </summary>
+    private void OnWeaponHit(int attackerShipId, Ship target)
+    {
+        if (FindShip(attackerShipId)?.PerkValue(Perk.BurnOnHit) is > 0f and var burn)
+            ApplyStatus(target, StatusId.Burning, burn, attackerShipId);
+    }
+
+    /// <summary>
+    /// Puts a status on <paramref name="ship"/>, or adds to the one it has: <paramref name="stacks"/> more (up to its
+    /// most), at the stronger of the two powers, lasting its full time again from now. Credited to
+    /// <paramref name="sourceShipId"/>. Any ship can carry any status, player's or pirate's.
+    /// </summary>
+    public void ApplyStatus(Ship ship, StatusId id, float power, int sourceShipId, int stacks = 1)
+    {
+        if (ship.IsSunk || power <= 0f || stacks <= 0)
+            return;
+        var definition = Statuses.Get(id);
+        var status = ship.FindStatus(id);
+        if (status is null)
         {
-            target.MarkBonus = target.MarkedUntilTick >= Tick ? MathF.Max(target.MarkBonus, mark) : mark;
-            target.MarkedUntilTick = Tick + MarkTicks;
+            status = new StatusEffect { Id = id };
+            ship.AddStatus(status);
+        }
+        var before = (status.Stacks, status.Power);
+        status.Stacks = Math.Min(definition.MaxStacks, status.Stacks + stacks);
+        status.Power = MathF.Max(status.Power, power);
+        status.UntilTick = Tick + definition.Ticks;
+        status.SourceShipId = sourceShipId;
+        if (before != (status.Stacks, status.Power))
+            RefreshStatusModifiers(ship, status);
+    }
+
+    /// <summary>Takes a status off <paramref name="ship"/>, and whatever it was doing to its stats.</summary>
+    public void RemoveStatus(Ship ship, StatusId id)
+    {
+        if (ship.FindStatus(id) is not { } status)
+            return;
+        ship.RemoveStatus(status);
+        ship.RemoveModifiers(Statuses.ModifierSource(id));
+    }
+
+    private static void RefreshStatusModifiers(Ship ship, StatusEffect status)
+    {
+        var modifiers = Statuses.ModifiersFor(status.Id, status.Stacks, status.Power).ToList();
+        if (modifiers.Count == 0)
+            return;
+        ship.RemoveModifiers(Statuses.ModifierSource(status.Id));
+        foreach (var modifier in modifiers)
+            ship.AddModifier(modifier);
+    }
+
+    /// <summary>Statuses do their work for this tick (burns burn), and the ones whose time is up come off.</summary>
+    private void StepStatuses(float dt)
+    {
+        foreach (var ship in _ships)
+        {
+            if (ship.IsSunk || ship.Statuses.Count == 0)
+                continue;
+            for (var i = ship.Statuses.Count - 1; i >= 0; i--)
+            {
+                var status = ship.Statuses[i];
+                if (Tick >= status.UntilTick)
+                {
+                    RemoveStatus(ship, status.Id);
+                    continue;
+                }
+                if (status.Id == StatusId.Burning)
+                    DealDamage(ship, status.Power * status.Stacks * dt, status.SourceShipId);
+            }
         }
     }
 
-    /// <summary>Slows <paramref name="ship"/> by <paramref name="fraction"/> for <see cref="SlowSeconds"/> (the stronger slow wins).</summary>
-    public void Slow(Ship ship, float fraction)
+    /// <summary>
+    /// <paramref name="killer"/> sank <paramref name="victim"/>: a Frenzy for a killer that has it, and every pirate
+    /// near a sunk pirate is roused (see <see cref="RallyRange"/>).
+    /// </summary>
+    private void OnKill(Ship killer, Ship victim)
     {
-        var current = ship.SlowedUntilTick >= Tick
-            ? ship.Modifiers.Where(m => m.Source == SlowSource).Select(m => 1f - m.Value).DefaultIfEmpty(0f).Max()
-            : 0f;
-        ship.RemoveModifiers(SlowSource);
-        ship.AddModifier(new StatModifier(StatId.MaxSpeed, ModifierKind.Multiplier, 1f - MathF.Max(current, fraction), SlowSource));
-        ship.SlowedUntilTick = Tick + SlowTicks;
+        if (killer.PerkValue(Perk.Frenzy) is > 0f and var frenzy)
+            ApplyStatus(killer, StatusId.Frenzy, frenzy, killer.Id);
+        if (victim.Team != Team.Pirates)
+            return;
+        foreach (var ship in _ships)
+        {
+            if (ship != victim && ship.Team == Team.Pirates && !ship.IsSunk
+                && Vector2.DistanceSquared(ship.Position, victim.Position) <= RallyRange * RallyRange)
+                ApplyStatus(ship, StatusId.Frenzy, RallyPower, victim.Id);
+        }
     }
 
     /// <summary>Shots laid but not yet fired.</summary>
@@ -415,6 +513,7 @@ public sealed class World
         foreach (var ship in _ships)
             ship.Behavior?.Update(this, ship);
 
+        FireBroadsidesByThemselves();
         FireWarnedShots();
         FireEchoes();
 
@@ -447,7 +546,7 @@ public sealed class World
         StepProjectiles(dt);
         StepStrikes();
         StepFires(dt);
-        WearOff();
+        StepStatuses(dt);
         Regenerate(dt);
 
         Plundering.Step(this);
@@ -513,7 +612,10 @@ public sealed class World
             // Credit the kill even if the killer went down in the same exchange.
             var killer = _ships.Find(s => s.Id == killerId);
             if (killer is not null && CanDamage(killer.Id, killer.Team, victim))
+            {
                 KillRewards.Grant(this, killer, victim);
+                OnKill(killer, victim);
+            }
         }
 
         foreach (var victim in _ships)
@@ -575,13 +677,20 @@ public sealed class World
         }
     }
 
-    /// <summary>A ship with a ram ran into <paramref name="target"/>: damage, at most once a second.</summary>
+    /// <summary>
+    /// A ship with a ram ran into <paramref name="target"/>: damage by how fast it was going, at most once a second. A
+    /// nudge too slow to do a point of damage doesn't count, so it doesn't spend the ram.
+    /// </summary>
     private void Ram(Ship rammer, Ship target)
     {
-        if (rammer.PerkValue(Perk.RamDamage) is not (> 0f and var damage) || Tick < rammer.RamReadyTick
+        if (rammer.PerkValue(Perk.RamDamage) is not (> 0f and var quoted) || Tick < rammer.RamReadyTick
             || rammer.IsSunk || !CanDamage(rammer.Id, rammer.Team, target))
             return;
+        var damage = RamDamageAt(quoted, rammer.Speed);
+        if (damage < 1f)
+            return;
         DealDamage(target, damage, rammer.Id);
+        OnWeaponHit(rammer.Id, target);
         rammer.RamReadyTick = Tick + RamCooldownTicks;
         Emit(new ShipRammed(Tick, rammer.Id, target.Id));
     }
@@ -611,6 +720,31 @@ public sealed class World
         _echoes.RemoveAll(e => e.DueTick <= Tick);
     }
 
+    /// <summary>
+    /// Sets the water burning at <paramref name="position"/>, hurting <paramref name="ownerShipId"/>'s enemies in it.
+    /// With <paramref name="unlessBurning"/>, not where that ship's fire already burns, with half its time or more
+    /// left: hits and wakes would otherwise pile hundreds of fires on the same few tiles.
+    /// </summary>
+    private void StartFire(int ownerShipId, Team team, Vector2 position, float radius, FireEffect burn, bool unlessBurning = false)
+    {
+        if (unlessBurning)
+        {
+            foreach (var burning in _fires)
+            {
+                if (burning.OwnerShipId == ownerShipId && burning.EndTick - Tick >= burn.Ticks / 2
+                    && Vector2.DistanceSquared(burning.Position, position) <= burning.Radius * burning.Radius * 0.25f)
+                    return;
+            }
+        }
+        var fire = new FireZone
+        {
+            Id = _nextEntityId++, OwnerShipId = ownerShipId, Team = team, Position = position,
+            Radius = radius, Dps = burn.Dps, StartTick = Tick, EndTick = Tick + burn.Ticks,
+        };
+        _fires.Add(fire);
+        Emit(new FireStarted(Tick, fire.Id, fire.OwnerShipId, fire.Team, fire.Position, fire.Radius, fire.Dps, fire.EndTick));
+    }
+
     /// <summary>Burns every ship in a fire for this tick, and puts out the fires that are done.</summary>
     private void StepFires(float dt)
     {
@@ -621,7 +755,9 @@ public sealed class World
         {
             foreach (var ship in _ships)
             {
-                if (ship.IsSunk || !CanDamage(fire.OwnerShipId, fire.Team, ship))
+                // Cheap reject first: there can be hundreds of fires burning at once.
+                if (ship.IsSunk || Vector2.Distance(ship.Position, fire.Position) > fire.Radius + ship.Stats.Length / 2f
+                    || !CanDamage(fire.OwnerShipId, fire.Team, ship))
                     continue;
                 HullShape.GetWorldOutline(ship.Position, ship.Heading, ship.Stats, hull);
                 if (Geometry.DistanceToConvex(hull, fire.Position) <= fire.Radius)
@@ -629,20 +765,6 @@ public sealed class World
             }
         }
         _fires.RemoveAll(f => f.EndTick <= Tick);
-    }
-
-    /// <summary>Marks and slows run out.</summary>
-    private void WearOff()
-    {
-        foreach (var ship in _ships)
-        {
-            ship.IsMarked = ship.MarkedUntilTick >= Tick;
-            if (ship.SlowedUntilTick >= 0 && Tick >= ship.SlowedUntilTick)
-            {
-                ship.RemoveModifiers(SlowSource);
-                ship.SlowedUntilTick = -1;
-            }
-        }
     }
 
     /// <summary>Fires every laid shot that's due, from wherever its ship is now; a sunk ship's shots are lost.</summary>
@@ -678,19 +800,12 @@ public sealed class World
                 if (Geometry.DistanceToConvex(hull, strike.Target) > strike.Radius)
                     continue;
                 DealDamage(ship, strike.Damage, strike.OwnerShipId);
+                OnWeaponHit(strike.OwnerShipId, ship);
             }
             Emit(new AreaStrikeImpact(Tick, strike.Id, strike.Target, strike.Radius));
 
             if (strike.Fire is { } burn)
-            {
-                var fire = new FireZone
-                {
-                    Id = _nextEntityId++, OwnerShipId = strike.OwnerShipId, Team = strike.Team, Position = strike.Target,
-                    Radius = strike.Radius, Dps = burn.Dps, StartTick = Tick, EndTick = Tick + burn.Ticks,
-                };
-                _fires.Add(fire);
-                Emit(new FireStarted(Tick, fire.Id, fire.OwnerShipId, fire.Team, fire.Position, fire.Radius, fire.Dps, fire.EndTick));
-            }
+                StartFire(strike.OwnerShipId, strike.Team, strike.Target, strike.Radius, burn);
 
             if (strike.Cluster is { Count: > 0 } cluster)
             {
@@ -711,6 +826,7 @@ public sealed class World
     private void StepProjectiles(float dt)
     {
         List<(Projectile Shot, Ship Struck)>? bounces = null;
+        List<(Projectile Shot, Ship? Struck)>? skips = null;
         // Every ship has moved for this tick: remember where, for shots that look back (see Projectile.RewindTicks).
         foreach (var ship in _ships)
             ship.RecordPose(Tick + 1);
@@ -720,12 +836,16 @@ public sealed class World
             var from = projectile.Position;
             projectile.Position += projectile.Velocity * dt;
             projectile.RemainingTicks--;
+            var effects = projectile.Effects;
+            if (effects.Wake is { } wake)
+                LeaveWake(projectile, from, wake);
 
             // A shot that reaches land stops there, though it can still strike a fort standing on the shore, and the
             // shore round a fort doesn't stop it: it flies on over the beach to the walls.
-            var hitsLand = !projectile.Effects.IgnoresLand
+            var hitsLand = !effects.IgnoresLand
                            && LineHitsLand(from, projectile.Position, projectile.Radius, projectile.IgnoredIslandId, clearForts: true);
 
+            var stopped = false;
             foreach (var ship in _ships)
             {
                 if ((hitsLand && !ship.IsFort) || ship.IsSunk || projectile.HasHit(ship.Id)
@@ -737,15 +857,17 @@ public sealed class World
                 if (!HullShape.SegmentHits(ship, hullAt, hullHeading, from, projectile.Position, projectile.Radius))
                     continue;
 
-                var effects = projectile.Effects;
                 var distance = Vector2.Distance(projectile.Origin, projectile.Position);
                 DealDamage(ship, projectile.Damage * effects.DamageMultiplier(distance), projectile.OwnerShipId);
                 projectile.RecordHit(ship.Id);
-                if (effects.SlowOnHit > 0f)
-                    Slow(ship, effects.SlowOnHit);
+                OnShotHit(projectile, ship, distance);
 
-                if (effects.LongRangeRefund > 0f && effects.IsLongRange(distance) && effects.AbilityId is { } abilityId)
-                    FindShip(projectile.OwnerShipId)?.FindAbility(abilityId)?.Refund(effects.LongRangeRefund);
+                // Its first hit sends bounces on, even if it flies on through.
+                if (effects.Bounces && !projectile.HasBounced)
+                {
+                    projectile.HasBounced = true;
+                    (bounces ??= new()).Add((projectile, ship));
+                }
 
                 var passesThrough = projectile.PierceRemaining > 0;
                 Emit(new ProjectileImpact(Tick, projectile.Id, ship.Id, passesThrough));
@@ -755,8 +877,9 @@ public sealed class World
                     continue;
                 }
                 projectile.RemainingTicks = 0;
-                if (effects.Ricochets > 0)
-                    (bounces ??= new()).Add((projectile, ship));
+                stopped = true;
+                if (effects.Skips > 0)
+                    (skips ??= new()).Add((projectile, ship));
                 break;
             }
 
@@ -765,39 +888,154 @@ public sealed class World
                 projectile.RemainingTicks = 0;
                 Emit(new ProjectileImpact(Tick, projectile.Id, null));
             }
+            else if (!stopped && !hitsLand && projectile.RemainingTicks <= 0 && effects.Skips > 0)
+                (skips ??= new()).Add((projectile, null)); // off the water at the end of its flight
         }
 
         _projectiles.RemoveAll(p => p.RemainingTicks <= 0);
         foreach (var (shot, struck) in bounces ?? Enumerable.Empty<(Projectile, Ship)>())
-            Ricochet(shot, struck);
+            Bounce(shot, struck);
+        foreach (var (shot, struck) in skips ?? Enumerable.Empty<(Projectile, Ship?)>())
+            Skip(shot, struck);
     }
 
-    /// <summary>A ricocheting shot bounces from <paramref name="struck"/> on toward the nearest other enemy in reach, if any.</summary>
-    private void Ricochet(Projectile shot, Ship struck)
+    /// <summary>What a shot does to <paramref name="struck"/> besides its damage: slows, reloads, fires and bursts.</summary>
+    private void OnShotHit(Projectile shot, Ship struck, float distance)
+    {
+        var effects = shot.Effects;
+        OnWeaponHit(shot.OwnerShipId, struck);
+        if (effects.SlowOnHit > 0f)
+            ApplyStatus(struck, StatusId.Slowed, effects.SlowOnHit, shot.OwnerShipId);
+
+        if (effects.AbilityId is { } abilityId && FindShip(shot.OwnerShipId)?.FindAbility(abilityId) is { } weapon)
+        {
+            if (effects.LongRangeRefund > 0f && effects.IsLongRange(distance))
+                weapon.Refund(effects.LongRangeRefund);
+            if (effects.KillRefund > 0f && struck.Health <= 0f)
+                weapon.Refund(effects.KillRefund);
+            if (effects.HitRefund > 0f)
+                weapon.Refund(effects.HitRefund, HitRefundFloorTicks);
+        }
+
+        if (effects.HitFire is { } fire)
+            StartFire(shot.OwnerShipId, shot.Team, shot.Position, HitFireRadius, fire, unlessBurning: true);
+        if (effects.ExplosionRadius > 0f)
+            LaunchStrike(shot.OwnerShipId, shot.Team, shot.Position, shot.Position, effects.ExplosionRadius,
+                shot.Damage * effects.ExplosionDamage, 1, cluster: null);
+    }
+
+    /// <summary>Drops patches of burning water every <see cref="WakeSpacing"/> along the shot's path this tick (not on land).</summary>
+    private void LeaveWake(Projectile shot, Vector2 from, FireEffect wake)
+    {
+        var step = shot.Position - from;
+        var length = step.Length();
+        if (length <= 0f)
+            return;
+        var along = WakeSpacing - shot.WakeTravelled; // from here to the next patch
+        for (; along <= length; along += WakeSpacing)
+        {
+            var point = from + step * (along / length);
+            if (DistanceToLand(point) > 0f)
+                StartFire(shot.OwnerShipId, shot.Team, point, WakeRadius, wake, unlessBurning: true);
+        }
+        shot.WakeTravelled = length - (along - WakeSpacing);
+    }
+
+    /// <summary>
+    /// A shot that struck <paramref name="struck"/> bounces on toward the nearest enemy in reach it hasn't already been
+    /// at (Ricochet), or splits in two toward the two nearest (Fork). Bounces never pierce.
+    /// </summary>
+    private void Bounce(Projectile shot, Ship struck)
     {
         if (FindShip(shot.OwnerShipId) is not { } owner)
             return;
-        Ship? next = null;
-        var nearest = RicochetRange * RicochetRange;
+        var effects = shot.Effects;
+        var splits = effects.Forks > 0;
+        var lineage = shot.Lineage ??= new HashSet<int>();
+        lineage.Add(struck.Id);
+        var targets = _ships
+            .Where(s => !s.IsSunk && !lineage.Contains(s.Id) && CanDamage(shot.OwnerShipId, shot.Team, s)
+                        && Vector2.DistanceSquared(s.Position, shot.Position) <= RicochetRange * RicochetRange)
+            .OrderBy(s => Vector2.DistanceSquared(s.Position, shot.Position))
+            .Take(splits ? 2 : 1)
+            .ToList();
+        var next = splits ? effects with { Forks = effects.Forks - 1, Pierce = 0 } : effects with { Ricochets = effects.Ricochets - 1, Pierce = 0 };
+        var speed = shot.Velocity.Length();
+        var lifetime = (int)MathF.Ceiling((RicochetRange + 2f) / MathF.Max(speed, 1f) * SimConstants.TickRate);
+        foreach (var target in targets)
+        {
+            lineage.Add(target.Id); // so its sister and cousins look elsewhere
+            var direction = Vector2.Normalize(target.Position - shot.Position);
+            var bounce = SpawnProjectile(owner, shot.Position, direction * speed, shot.Damage, lifetime, shot.Radius, next);
+            bounce.RecordHit(struck.Id);
+            bounce.Lineage = lineage;
+        }
+    }
+
+    /// <summary>A ball skips on in the same direction, off the water or off <paramref name="struck"/> (Skip Shot).</summary>
+    private void Skip(Projectile shot, Ship? struck)
+    {
+        if (FindShip(shot.OwnerShipId) is not { } owner)
+            return;
+        var skip = SpawnProjectile(owner, shot.Position, shot.Velocity, shot.Damage, shot.Effects.SkipTicks, shot.Radius,
+            shot.Effects with { Skips = shot.Effects.Skips - 1 });
+        if (struck is not null)
+            skip.RecordHit(struck.Id);
+        skip.HasBounced = shot.HasBounced;
+        skip.Lineage = shot.Lineage;
+    }
+
+    /// <summary>
+    /// Broadsides that fire themselves: a Man o' War's ring goes off whenever it's loaded and an enemy is in range,
+    /// and with gun captains, each deck fires whenever it's loaded and an enemy is in its lane (the nearest, if several).
+    /// </summary>
+    private void FireBroadsidesByThemselves()
+    {
         foreach (var ship in _ships)
         {
-            if (ship == struck || ship.IsSunk || !CanDamage(shot.OwnerShipId, shot.Team, ship))
+            if (ship.IsSunk)
                 continue;
-            var d = Vector2.DistanceSquared(ship.Position, shot.Position);
-            if (d <= nearest)
+            for (var slot = AbilitySlot.One; slot <= AbilitySlot.Four; slot++)
             {
-                next = ship;
-                nearest = d;
+                if (ship.GetAbility(slot) is not { Definition: BroadsideVolley } guns)
+                    continue;
+                if (BroadsideVolley.FiresRing(ship))
+                {
+                    var range = BroadsideVolley.RangeFor(ship);
+                    if (guns.IsChannelReady(BroadsideVolley.PortChannel)
+                        && NearestEnemy(ship, other => Vector2.Distance(ship.Position, other.Position) <= range + other.Stats.Length / 2f) is { } enemy)
+                        CastAbility(ship, slot, enemy.Position);
+                }
+                else if (BroadsideVolley.FiresItself(ship))
+                {
+                    foreach (var side in new[] { BroadsideSide.Port, BroadsideSide.Starboard })
+                    {
+                        if (guns.IsChannelReady(BroadsideVolley.ChannelOf(side))
+                            && NearestEnemy(ship, other => BroadsideVolley.Covers(ship, side, other.Position, other.Stats.Radius)) is { } enemy)
+                            CastAbility(ship, slot, enemy.Position);
+                    }
+                }
             }
         }
-        if (next is null)
-            return;
-        var speed = shot.Velocity.Length();
-        var direction = Vector2.Normalize(next.Position - shot.Position);
-        var lifetime = (int)MathF.Ceiling((RicochetRange + 2f) / MathF.Max(speed, 1f) * SimConstants.TickRate);
-        var bounce = SpawnProjectile(owner, shot.Position, direction * speed, shot.Damage, lifetime, shot.Radius,
-            shot.Effects with { Ricochets = shot.Effects.Ricochets - 1 });
-        bounce.RecordHit(struck.Id);
+    }
+
+    /// <summary>The nearest ship on another team that's afloat and <paramref name="within"/>, if any. Never a crewmate.</summary>
+    private Ship? NearestEnemy(Ship ship, Func<Ship, bool> within)
+    {
+        Ship? nearest = null;
+        var best = float.PositiveInfinity;
+        foreach (var other in _ships)
+        {
+            if (other.IsSunk || other.Team == ship.Team)
+                continue;
+            var d = Vector2.DistanceSquared(ship.Position, other.Position);
+            if (d < best && within(other))
+            {
+                nearest = other;
+                best = d;
+            }
+        }
+        return nearest;
     }
 
     /// <summary>
@@ -852,8 +1090,8 @@ public sealed class World
         // Cards belong to the player, not the ship: they can be chosen (or rerolled) while waiting to respawn.
         if (command is ChooseCardCommand choose)
             return CardRewards.TryChoose(this, command.PlayerId, choose.CardId);
-        if (command is RerollCardsCommand)
-            return CardRewards.TryReroll(this, command.PlayerId);
+        if (command is RerollCardsCommand reroll)
+            return CardRewards.TryReroll(this, command.PlayerId, reroll.Tier);
         if (command is ChooseStartingWeaponCommand weapon)
             return Runs.TryChooseStartingWeapon(this, command.PlayerId, weapon.AbilityId);
 
