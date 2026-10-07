@@ -787,6 +787,11 @@ public static class Wire
             w.Put((byte)id); w.Put((byte)Math.Clamp(stacks, 0, byte.MaxValue)); w.Put(power);
             w.Put((ushort)Math.Clamp(remaining, 0, ushort.MaxValue));
         }
+        w.Put((byte)Math.Min(s.Tallies.Length, byte.MaxValue));
+        foreach (var (tally, value) in s.Tallies.Take(byte.MaxValue))
+        {
+            w.Put((byte)tally); w.Put(value);
+        }
         foreach (var channels in s.Cooldowns)
         {
             var count = channels?.Length ?? 0;
@@ -824,6 +829,9 @@ public static class Wire
         s.Statuses = new (StatusId, int, float, int)[r.GetByte()];
         for (var i = 0; i < s.Statuses.Length; i++)
             s.Statuses[i] = ((StatusId)r.GetByte(), r.GetByte(), r.GetFloat(), r.GetUShort());
+        s.Tallies = new (Tally, float)[r.GetByte()];
+        for (var i = 0; i < s.Tallies.Length; i++)
+            s.Tallies[i] = ((Tally)r.GetByte(), r.GetFloat());
         for (var i = 0; i < s.Cooldowns.Length; i++)
         {
             var count = r.GetByte();

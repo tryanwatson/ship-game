@@ -720,6 +720,7 @@ public sealed class WorldRenderer
         StatusId.Frenzy => new Color(235, 60, 70),
         StatusId.Marked => MarkColor,
         StatusId.Slowed => new Color(100, 160, 240),
+        StatusId.Entrenched => new Color(220, 190, 110),
         _ => PipText,
     };
 

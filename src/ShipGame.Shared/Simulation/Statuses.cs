@@ -16,6 +16,9 @@ public enum StatusId : byte
 
     /// <summary>Sails <see cref="StatusEffect.Power"/> slower (Chain Shot).</summary>
     Slowed,
+
+    /// <summary>Does <see cref="StatusEffect.Power"/> more damage with every weapon for each stack (Dug In: a stack a second at anchor).</summary>
+    Entrenched,
 }
 
 /// <summary>How a status behaves: whether it's good for the ship, how many stacks it takes, how long each lasts.</summary>
@@ -52,6 +55,7 @@ public static class Statuses
         new(StatusId.Frenzy, "FRENZY", IsBuff: true, MaxStacks: 10, Seconds: 5f),
         new(StatusId.Marked, "MARKED", IsBuff: false, MaxStacks: 1, Seconds: 5f),
         new(StatusId.Slowed, "SLOWED", IsBuff: false, MaxStacks: 1, Seconds: 3f),
+        new(StatusId.Entrenched, "ENTRENCHED", IsBuff: true, MaxStacks: 10, Seconds: 3f),
     };
 
     private static readonly Dictionary<StatusId, StatusDefinition> ById = All.ToDictionary(s => s.Id);
@@ -75,6 +79,9 @@ public static class Statuses
             case StatusId.Frenzy:
                 yield return new StatModifier(StatId.CooldownSpeed, ModifierKind.Percent, power * stacks, source);
                 yield return new StatModifier(StatId.MaxSpeed, ModifierKind.Percent, power * stacks / 2f, source);
+                break;
+            case StatusId.Entrenched:
+                yield return new StatModifier(StatId.WeaponDamage, ModifierKind.Percent, power * stacks, source);
                 break;
             case StatusId.Slowed:
                 yield return new StatModifier(StatId.MaxSpeed, ModifierKind.Multiplier, 1f - Math.Clamp(power, 0f, 0.95f), source);

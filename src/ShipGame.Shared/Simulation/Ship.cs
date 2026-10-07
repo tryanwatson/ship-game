@@ -89,9 +89,10 @@ public sealed class Ship
     {
         StatsVersion++;
         var oldMaxHealth = Stats.MaxHealth;
-        Stats = _cardStats.Count == 0
+        var cardStats = IsAnchored ? _cardStats.Concat(_anchoredCardStats).ToList() : _cardStats;
+        Stats = cardStats.Count == 0
             ? _modifiers.Apply(BaseStats)
-            : StatModifiers.Apply(BaseStats, _modifiers.All.Concat(_cardStats).ToList());
+            : StatModifiers.Apply(BaseStats, _modifiers.All.Concat(cardStats).ToList());
 
         // Raising max health adds the same to current health, so an upgrade never shows as damage;
         // lowering it only clamps.
@@ -203,7 +204,20 @@ public sealed class Ship
     public NpcStance Stance { get; set; }
 
     /// <summary>Anchor state; change it through <see cref="Anchoring"/>. Anchored ships can't move, turn, or drift.</summary>
-    public AnchorState Anchor { get; set; }
+    /// <summary>Its anchor. Coming up or going down changes its stats, if it holds cards that only work at anchor.</summary>
+    public AnchorState Anchor
+    {
+        get => _anchor;
+        set
+        {
+            var wasAnchored = IsAnchored;
+            _anchor = value;
+            if (wasAnchored != IsAnchored && _anchoredCardStats.Count > 0)
+                RecalculateStats();
+        }
+    }
+
+    private AnchorState _anchor;
 
     public int AnchorRaiseTicksRemaining { get; set; }
 
@@ -328,6 +342,7 @@ public sealed class Ship
 
     private readonly List<CardPick> _cards = new();
     private readonly List<StatModifier> _cardStats = new();
+    private readonly List<StatModifier> _anchoredCardStats = new();
     private readonly Dictionary<Perk, float> _perks = new();
 
     /// <summary>
@@ -357,12 +372,18 @@ public sealed class Ship
     private void OnCardsChanged()
     {
         _cardStats.Clear();
+        _anchoredCardStats.Clear();
         _perks.Clear();
+        _growing.Clear();
         foreach (var card in _cards)
         {
             var definition = card.Definition;
-            _cardStats.AddRange(definition.StatModifiersFor(card));
-            foreach (var (perk, value) in definition.PerksFor(card))
+            if (definition.Growth is { } growth)
+                _growing.Add(growth.Tally);
+            var steps = GrowthSteps(definition);
+            _cardStats.AddRange(definition.StatModifiersFor(card, steps));
+            _anchoredCardStats.AddRange(definition.StatModifiersFor(card, steps, atAnchor: true));
+            foreach (var (perk, value) in definition.PerksFor(card, steps))
                 _perks[perk] = _perks.GetValueOrDefault(perk) + value;
         }
         RebuildAbilityModifiers();
@@ -375,8 +396,52 @@ public sealed class Ship
         foreach (var skill in _skills)
             _abilityModifiers.AddRange(skill.Modifiers);
         foreach (var card in _cards)
-            _abilityModifiers.AddRange(card.Definition.AbilityModifiersFor(card));
+            _abilityModifiers.AddRange(card.Definition.AbilityModifiersFor(card, GrowthSteps(card.Definition)));
     }
+
+    // ---- Tallies, and the cards that grow with them ------------------------------------------------------------
+
+    private readonly Dictionary<Tally, float> _tallies = new();
+    private readonly HashSet<Tally> _growing = new();
+
+    /// <summary>Its running counts (see <see cref="Tally"/>): what growing cards grow with.</summary>
+    public IReadOnlyDictionary<Tally, float> Tallies => _tallies;
+
+    /// <summary>The tallies its cards grow with: the ones clients need to be told.</summary>
+    public IReadOnlyCollection<Tally> GrowingTallies => _growing;
+
+    public float TallyOf(Tally tally) => _tallies.GetValueOrDefault(tally);
+
+    /// <summary>How many times a growing card has grown on this ship (1 for a card that doesn't grow).</summary>
+    public int GrowthSteps(CardDefinition card) =>
+        card.Growth is { } growth ? (int)MathF.Floor(TallyOf(growth.Tally) / growth.Every) : 1;
+
+    /// <summary>Adds to a tally; a card growing with it that's due to grow does, at once.</summary>
+    public void AddToTally(Tally tally, float amount)
+    {
+        if (amount <= 0f || !float.IsFinite(amount))
+            return;
+        var before = TallyOf(tally);
+        _tallies[tally] = before + amount;
+        if (_growing.Contains(tally) && Grew(tally, before))
+            OnCardsChanged();
+    }
+
+    /// <summary>Replaces every tally at once, for a client mirroring the server's ship (and its growing cards with them).</summary>
+    public void ReplaceTallies(IEnumerable<(Tally Tally, float Value)> tallies)
+    {
+        var before = new Dictionary<Tally, float>(_tallies);
+        _tallies.Clear();
+        foreach (var (tally, value) in tallies)
+            _tallies[tally] = value;
+        if (_growing.Any(t => Grew(t, before.GetValueOrDefault(t))))
+            OnCardsChanged();
+    }
+
+    /// <summary>Whether a card growing with <paramref name="tally"/> grows differently now than it did at <paramref name="before"/>.</summary>
+    private bool Grew(Tally tally, float before) =>
+        _cards.Any(c => c.Definition.Growth is { } growth && growth.Tally == tally
+                        && (int)MathF.Floor(before / growth.Every) != (int)MathF.Floor(TallyOf(tally) / growth.Every));
 
     // ---- What cards do in a fight. Server-side, except statuses, which snapshots carry. --------------------------
 
@@ -441,7 +506,7 @@ public sealed class Ship
                     break;
             }
         }
-        return MathF.Max(0f, (baseValue + flat) * (1f + percent) * multiplier);
+        return MathF.Max(0f, (baseValue + flat) * MathF.Max(StatModifiers.LeastPercentFactor, 1f + percent) * multiplier);
     }
 
     // State at the start of the most recent tick, used to interpolate between ticks when rendering.

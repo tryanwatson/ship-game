@@ -102,7 +102,9 @@ public sealed class GameClient : Game
 
     /// <summary>0..1 while X is being held to drop anchor; 0 otherwise.</summary>
     private float AnchorDropProgress =>
-        _lettingGo ? (float)Math.Clamp(_anchorHeldSeconds / Anchoring.DropSeconds, 0, 1) : 0f;
+        _lettingGo && _session.World.GetPlayerShip(LocalPlayerId) is { } ship
+            ? (float)Math.Clamp(_anchorHeldSeconds / Anchoring.DropSecondsFor(ship), 0, 1)
+            : 0f;
 
     // A right-click that cancelled targeting doesn't turn into drag-to-move while the button stays down.
     private bool _ignoreRightDrag;

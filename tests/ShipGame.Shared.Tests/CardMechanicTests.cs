@@ -398,6 +398,191 @@ public class CardMechanicTests
         Assert.DoesNotContain(ship.Modifiers, m => Statuses.IsStatusSource(m.Source));
     }
 
+    // ---- Cards that grow ------------------------------------------------------------------------------------
+
+    [Fact]
+    public void GunneryDrill_GrowsWithEveryFiftyBroadsideHits()
+    {
+        var (world, ship) = CreateWorld(new BroadsideVolley());
+        var plain = BroadsideVolley.DamageFor(ship);
+        Give(ship, "gunnery-drill", 1); // +2% a step
+        Assert.Equal(plain, BroadsideVolley.DamageFor(ship), 3); // it starts at nothing
+
+        ship.AddToTally(Tally.BroadsideHits, 49f);
+        Assert.Equal(plain, BroadsideVolley.DamageFor(ship), 3);
+        ship.AddToTally(Tally.BroadsideHits, 1f);
+        Assert.Equal(plain * 1.02f, BroadsideVolley.DamageFor(ship), 3);
+        ship.AddToTally(Tally.BroadsideHits, 70f);
+        Assert.Equal(plain * 1.04f, BroadsideVolley.DamageFor(ship), 3);
+
+        Assert.Equal("NOW +4% BROADSIDE DAMAGE. NEXT IN 30 BROADSIDE HITS.", new CardPick("gunnery-drill", 1).DescriptionOn(ship));
+        Assert.Equal("EVERY 50 BROADSIDE HITS: +2% BROADSIDE DAMAGE.", new CardPick("gunnery-drill", 1).Description);
+    }
+
+    [Fact]
+    public void AGrowingCard_SaysSo_BeforeItsGrown()
+    {
+        var (_, ship) = CreateWorld();
+        Assert.Equal("NOW NOTHING YET. NEXT IN 5 KILLS.", new CardPick("bounty-hunter", 1).DescriptionOn(ship));
+    }
+
+    [Fact]
+    public void ShipsTally_TheirHits_Kills_Damage_Gold_Sailing_AndTimeAtAnchor()
+    {
+        var (world, ship) = CreateWorld(new LongGun());
+        var pirate = Pirate(world, ship.Position + new Vector2(6f, 0f), health: 10f);
+
+        world.TryCastAbility(ship, AbilitySlot.One, pirate.Position);
+        RunTicks(world, SimConstants.TickRate / 2);
+        Assert.Equal(1f, ship.TallyOf(Tally.LongGunHits));
+        Assert.Equal(1f, ship.TallyOf(Tally.Kills));
+        Assert.Equal(10f, ship.TallyOf(Tally.DamageDealt), 2); // what it took, not the overkill
+        Assert.Equal(0f, ship.TallyOf(Tally.MortarHits));
+
+        world.DealDamage(ship, 7f, pirate.Id);
+        Assert.Equal(7f, ship.TallyOf(Tally.DamageTaken), 2);
+
+        var earned = ship.TallyOf(Tally.GoldEarned); // the kill paid some already
+        Assert.True(earned > 0f);
+        world.AddGold(PlayerId, 30);
+        world.AddGold(PlayerId, -10); // spending earns nothing
+        Assert.Equal(earned + 30f, ship.TallyOf(Tally.GoldEarned));
+
+        ship.Throttle = ShipMovement.ThrottleLevels;
+        ship.Speed = ship.Stats.MaxSpeed;
+        var sailed = ship.TallyOf(Tally.TilesSailed);
+        RunTicks(world, SimConstants.TickRate);
+        Assert.Equal(sailed + ship.Stats.MaxSpeed, ship.TallyOf(Tally.TilesSailed), 1);
+
+        ship.Speed = 0f;
+        ship.Throttle = 0;
+        ship.IsAnchored = true;
+        RunTicks(world, SimConstants.TickRate * 2);
+        Assert.Equal(2f, ship.TallyOf(Tally.SecondsAnchored), 1);
+    }
+
+    [Fact]
+    public void AClientMirroringTallies_GrowsTheCardsToo()
+    {
+        var (_, ship) = CreateWorld();
+        Give(ship, "sea-miles", 1); // +1% speed every 250 tiles
+        var speed = ship.Stats.MaxSpeed;
+        Assert.Equal(new[] { Tally.TilesSailed }, ship.GrowingTallies);
+
+        ship.ReplaceTallies(new[] { (Tally.TilesSailed, 760f) });
+
+        Assert.Equal(speed * 1.03f, ship.Stats.MaxSpeed, 3);
+    }
+
+    // ---- Anchoring ----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void BatteryStation_WorksOnlyAtAnchor()
+    {
+        var (_, ship) = CreateWorld();
+        var (reload, range) = (ship.Stats.CooldownSpeed, ship.Stats.WeaponRange);
+        Give(ship, "battery-station", 1); // +30% reload, +15% range
+        Assert.Equal((reload, range), (ship.Stats.CooldownSpeed, ship.Stats.WeaponRange));
+
+        ship.Anchor = AnchorState.Down; // as a client mirroring the server sets it, too
+        Assert.Equal(reload * 1.3f, ship.Stats.CooldownSpeed, 3);
+        Assert.Equal(range * 1.15f, ship.Stats.WeaponRange, 3);
+
+        ship.Anchor = AnchorState.Raising; // still held fast
+        Assert.Equal(reload * 1.3f, ship.Stats.CooldownSpeed, 3);
+        ship.Anchor = AnchorState.Weighed;
+        Assert.Equal(reload, ship.Stats.CooldownSpeed, 3);
+    }
+
+    [Fact]
+    public void DugIn_StacksEverySecondAtAnchor_AndFadesOnceItsComingUp()
+    {
+        var (world, ship) = CreateWorld();
+        Give(ship, "dug-in", 1); // +4% damage a stack
+        var damage = ship.Stats.WeaponDamage;
+        ship.IsAnchored = true;
+
+        RunTicks(world, SimConstants.TickRate * 3 + 5);
+        Assert.Equal(3, ship.StacksOf(StatusId.Entrenched));
+        Assert.Equal(damage * 1.12f, ship.Stats.WeaponDamage, 3);
+
+        Anchoring.PressKey(ship); // start weighing: no more stacks
+        RunTicks(world, SimConstants.TickRate * 2);
+        Assert.Equal(3, ship.StacksOf(StatusId.Entrenched));
+        RunTicks(world, SimConstants.TickRate * 2);
+        Assert.Equal(0, ship.StacksOf(StatusId.Entrenched));
+        Assert.Equal(damage, ship.Stats.WeaponDamage, 3);
+    }
+
+    [Fact]
+    public void Braced_TurnsDamageAside_OnlyAtAnchor()
+    {
+        var (world, ship) = CreateWorld();
+        Give(ship, "braced", 1); // 20% less
+        var full = ship.Health;
+
+        world.DealDamage(ship, 10f, 99);
+        Assert.Equal(full - 10f, ship.Health, 2);
+
+        ship.IsAnchored = true;
+        world.DealDamage(ship, 10f, 99);
+        Assert.Equal(full - 18f, ship.Health, 2);
+    }
+
+    [Fact]
+    public void SpringLine_SwingsAnAnchoredShipRound()
+    {
+        static float Swung(bool spring)
+        {
+            var (world, ship) = CreateWorld();
+            if (spring)
+                Give(ship, "spring-line", 1); // 1.5x rowing
+            ship.IsAnchored = true;
+            ship.Rudder = 1;
+            RunTicks(world, SimConstants.TickRate);
+            return ship.Heading;
+        }
+
+        Assert.Equal(0f, Swung(spring: false));
+        Assert.Equal(ShipMovement.RowingTurnRate * 1.5f, Swung(spring: true), 3);
+    }
+
+    [Fact]
+    public void QuickAnchor_LetsGoAndWeighsFaster()
+    {
+        var (world, ship) = CreateWorld();
+        Give(ship, "quick-anchor", 1); // twice as fast
+
+        Anchoring.PressKey(ship);
+        RunTicks(world, Anchoring.DropTicks / 2 + 1);
+        Assert.Equal(AnchorState.Down, ship.Anchor);
+
+        Anchoring.PressKey(ship);
+        RunTicks(world, Anchoring.RaiseTicks / 2 + 1);
+        Assert.Equal(AnchorState.Weighed, ship.Anchor);
+    }
+
+    [Fact]
+    public void FloatingFortress_FiresEveryGunByItself_AtAnchor_LeadingAMovingTarget()
+    {
+        var (world, ship) = CreateWorld(new LongGun(), new Mortar());
+        Give(ship, "floating-fortress", 3);
+        var pirate = world.SpawnShip(ship.Position + new Vector2(10f, 0f), MathF.PI / 2f, ShipStats.PirateSloop); // heading +Y
+        pirate.Speed = 3f;
+        pirate.Throttle = ShipMovement.ThrottleLevels;
+
+        world.Step();
+        Assert.Empty(world.Projectiles); // under way: nothing
+        Assert.Empty(world.Strikes);
+
+        ship.IsAnchored = true;
+        world.Step();
+        var shot = Assert.Single(world.Projectiles);
+        var shell = Assert.Single(world.Strikes);
+        Assert.True(shot.Velocity.Y > 0f, "the long gun leads it");
+        Assert.True(shell.Target.Y > pirate.Position.Y + 1f, "so does the mortar");
+    }
+
     // ---- Broadside: the ring and its friends --------------------------------------------------------------------
 
     [Fact]

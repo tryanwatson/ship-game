@@ -44,7 +44,8 @@ public class CardTests
         foreach (var card in CardCatalog.All)
         {
             var pick = new CardPick(card.Id, card.LevelRange.Max, 0.5f);
-            var effects = card.StatModifiersFor(pick).Count() + card.AbilityModifiersFor(pick).Count() + card.PerksFor(pick).Count();
+            var effects = card.StatModifiersFor(pick).Count() + card.StatModifiersFor(pick, atAnchor: true).Count()
+                          + card.AbilityModifiersFor(pick).Count() + card.PerksFor(pick).Count();
             Assert.True(effects > 0 || card.OneShot, $"{card.Name} does nothing");
             Assert.Equal(card.WeaponEffects is not null, card.AbilityId is not null);
             if (card.AbilityId is { } weapon)

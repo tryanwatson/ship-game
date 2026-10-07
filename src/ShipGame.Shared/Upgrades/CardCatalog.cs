@@ -52,14 +52,32 @@ public enum Perk
 
     /// <summary>Every kill adds a stack of <see cref="StatusId.Frenzy"/>: reload speed per stack (and half that in speed).</summary>
     Frenzy,
+
+    /// <summary>Share of damage turned aside while anchored (Braced).</summary>
+    Braced,
+
+    /// <summary>At anchor, the helm swings the ship round on her cable, this many times the rowing rate (Spring Line).</summary>
+    SpringLine,
+
+    /// <summary>Every second with the anchor down adds a stack of <see cref="StatusId.Entrenched"/> this strong (Dug In).</summary>
+    DugIn,
+
+    /// <summary>At 1 or more, every weapon fires itself at the nearest enemy in reach while anchored (Floating Fortress).</summary>
+    FortressGuns,
+
+    /// <summary>Extra speed handling the anchor: 1 lets go and weighs twice as fast (Quick Anchor).</summary>
+    AnchorHandling,
 }
 
-/// <summary>One change a card makes to the ship's own stats.</summary>
-public readonly record struct CardStat(StatId Stat, ModifierKind Kind, float Value)
+/// <summary>One change a card makes to the ship's own stats: always, or with <see cref="AtAnchor"/>, only while it's anchored.</summary>
+public readonly record struct CardStat(StatId Stat, ModifierKind Kind, float Value, bool AtAnchor = false)
 {
     public static CardStat Percent(StatId stat, float value) => new(stat, ModifierKind.Percent, value);
 
     public static CardStat Flat(StatId stat, float value) => new(stat, ModifierKind.Flat, value);
+
+    /// <summary>The same change, made only while the ship is anchored.</summary>
+    public CardStat Anchored => this with { AtAnchor = true };
 }
 
 /// <summary>
@@ -81,6 +99,12 @@ public readonly record struct CardValue(float Low, float High, float? LowMax = n
         return min + (max - min) * roll;
     }
 }
+
+/// <summary>
+/// A card that grows: every <see cref="Every"/> of a ship's <see cref="Tally"/>, it applies once more. It starts at
+/// nothing, so its numbers are what each step adds.
+/// </summary>
+public sealed record CardGrowth(Tally Tally, float Every);
 
 /// <summary>A card in a hand or on offer: which card, the level its numbers were dealt at, and its roll (0..1) for rolled values.</summary>
 public readonly record struct CardPick(string Id, int Level, float Roll = 0f)
@@ -129,6 +153,9 @@ public sealed class CardDefinition
 
     public Func<float[], IEnumerable<CardStat>>? Stats { get; init; }
 
+    /// <summary>For a card that grows: what with, and how often. Its stats, weapon changes and perks apply once a step.</summary>
+    public CardGrowth? Growth { get; init; }
+
     public Func<float[], IEnumerable<SkillEffect>>? WeaponEffects { get; init; }
 
     public Func<float[], IEnumerable<(Perk Perk, float Value)>>? Perks { get; init; }
@@ -164,16 +191,24 @@ public sealed class CardDefinition
         return Values.Select(v => v.At(t, pick.Roll)).ToArray();
     }
 
-    public IEnumerable<StatModifier> StatModifiersFor(CardPick pick) =>
-        Stats is null ? Enumerable.Empty<StatModifier>() : Stats(ValuesFor(pick)).Select(s => new StatModifier(s.Stat, s.Kind, s.Value, Source));
+    /// <param name="steps">Times it applies: 1, or for a growing card, how far it's grown (see <see cref="Growth"/>).</param>
+    /// <param name="atAnchor">Which: the changes it always makes, or those it makes only while anchored.</param>
+    public IEnumerable<StatModifier> StatModifiersFor(CardPick pick, int steps = 1, bool atAnchor = false) =>
+        Stats is null || steps <= 0 ? Enumerable.Empty<StatModifier>()
+            : Stats(ValuesFor(pick)).Where(s => s.AtAnchor == atAnchor)
+                .Select(s => new StatModifier(s.Stat, s.Kind, Repeated(s.Kind, s.Value, steps), Source));
 
-    public IEnumerable<AbilityModifier> AbilityModifiersFor(CardPick pick) =>
-        AbilityId is { } abilityId && WeaponEffects is not null
-            ? WeaponEffects(ValuesFor(pick)).Select(e => new AbilityModifier(abilityId, e.Stat, e.Kind, e.Value, Source))
+    public IEnumerable<AbilityModifier> AbilityModifiersFor(CardPick pick, int steps = 1) =>
+        AbilityId is { } abilityId && WeaponEffects is not null && steps > 0
+            ? WeaponEffects(ValuesFor(pick)).Select(e => new AbilityModifier(abilityId, e.Stat, e.Kind, Repeated(e.Kind, e.Value, steps), Source))
             : Enumerable.Empty<AbilityModifier>();
 
-    public IEnumerable<(Perk Perk, float Value)> PerksFor(CardPick pick) =>
-        Perks is null ? Enumerable.Empty<(Perk, float)>() : Perks(ValuesFor(pick));
+    public IEnumerable<(Perk Perk, float Value)> PerksFor(CardPick pick, int steps = 1) =>
+        Perks is null || steps <= 0 ? Enumerable.Empty<(Perk, float)>() : Perks(ValuesFor(pick)).Select(p => (p.Perk, p.Value * steps));
+
+    /// <summary>A change applied <paramref name="steps"/> times over: added that many times, or for a multiplier, multiplied.</summary>
+    private static float Repeated(ModifierKind kind, float value, int steps) =>
+        steps == 1 ? value : kind == ModifierKind.Multiplier ? MathF.Pow(value, steps) : value * steps;
 }
 
 /// <summary>Adding a card to a hand (a player's, a ship's): silver and gold stack, a prismatic taken again improves.</summary>
@@ -216,6 +251,33 @@ public static class CardCatalog
     private static CardValue V(float low, float high) => new(low, high);
 
     private static CardValue Roll(float lowMin, float lowMax, float highMin, float highMax) => new(lowMin, highMin, lowMax, highMax);
+
+    /// <summary>
+    /// A card that grows (see <see cref="CardGrowth"/>): every <paramref name="every"/> of <paramref name="tally"/>,
+    /// <paramref name="what"/> once more, by its one value. It says so ("EVERY 50 BROADSIDE HITS: +3% BROADSIDE
+    /// DAMAGE."), and on a ship, how far it's grown and how far to the next step.
+    /// </summary>
+    private static CardDefinition Growing(string id, string name, Tally tally, float every, CardValue value, Func<float, string> what,
+        string? abilityId = null, Func<float, CardStat>? stat = null, Func<float, SkillEffect>? weapon = null)
+    {
+        var growth = new CardGrowth(tally, every);
+        return new CardDefinition(id, name, CardTier.Gold)
+        {
+            AbilityId = abilityId,
+            Growth = growth,
+            Values = new[] { value },
+            Describe = v => $"EVERY {N(every)} {Tallies.Noun(tally)}: {what(v[0])}.",
+            DescribeOn = (v, ship) =>
+            {
+                var count = ship.TallyOf(tally);
+                var steps = (int)MathF.Floor(count / every);
+                var next = MathF.Max(1f, MathF.Ceiling((steps + 1) * every - count));
+                return $"NOW {(steps == 0 ? "NOTHING YET" : what(v[0] * steps))}. NEXT IN {N(next)} {Tallies.Noun(tally)}.";
+            },
+            Stats = stat is null ? null : v => new[] { stat(v[0]) },
+            WeaponEffects = weapon is null ? null : v => new[] { weapon(v[0]) },
+        };
+    }
 
     public static readonly IReadOnlyList<CardDefinition> All = new CardDefinition[]
     {
@@ -268,6 +330,18 @@ public static class CardCatalog
             Values = new[] { V(0.25f, 0.75f) },
             Describe = v => $"+{P(v[0])} GOLD FROM KILLS AND PLUNDER.",
             Perks = v => new[] { (Perk.GoldBonus, v[0]) },
+        },
+        new("spring-line", "SPRING LINE", CardTier.Silver)
+        {
+            Values = new[] { V(1.5f, 3f) },
+            Describe = v => $"AT ANCHOR, THE HELM SWINGS THE SHIP ROUND ON HER CABLE, {D(v[0])}X AS FAST AS ROWING.",
+            Perks = v => new[] { (Perk.SpringLine, v[0]) },
+        },
+        new("quick-anchor", "QUICK ANCHOR", CardTier.Silver)
+        {
+            Values = new[] { V(1f, 3f) },
+            Describe = v => $"LET GO AND WEIGH THE ANCHOR {D(1f + v[0])}X AS FAST.",
+            Perks = v => new[] { (Perk.AnchorHandling, v[0]) },
         },
         new("close-quarters", "CLOSE QUARTERS", CardTier.Silver)
         {
@@ -369,6 +443,28 @@ public static class CardCatalog
             Values = new[] { V(0.01f, 0.05f) },
             Describe = v => $"REGENERATE {P1(v[0])} OF MAX HEALTH EVERY SECOND.",
             Stats = v => new[] { CardStat.Flat(StatId.HealthRegenFraction, v[0]) },
+        },
+        new("battery-station", "BATTERY STATION", CardTier.Gold)
+        {
+            Values = new[] { V(0.3f, 0.6f), V(0.15f, 0.3f) },
+            Describe = v => $"AT ANCHOR, EVERY WEAPON RELOADS {P(v[0])} FASTER AND REACHES {P(v[1])} FURTHER.",
+            Stats = v => new[]
+            {
+                CardStat.Percent(StatId.CooldownSpeed, v[0]).Anchored, CardStat.Percent(StatId.WeaponRange, v[1]).Anchored,
+            },
+        },
+        new("dug-in", "DUG IN", CardTier.Gold)
+        {
+            Values = new[] { V(0.04f, 0.08f) },
+            Describe = v => $"EVERY SECOND WITH THE ANCHOR DOWN ADDS A STACK OF ENTRENCHED, UP TO {Statuses.Get(StatusId.Entrenched).MaxStacks}: "
+                            + $"+{P(v[0])} DAMAGE WITH EVERY WEAPON EACH. IT FADES {N(Statuses.Get(StatusId.Entrenched).Seconds)} SECONDS AFTER YOU START WEIGHING.",
+            Perks = v => new[] { (Perk.DugIn, v[0]) },
+        },
+        new("braced", "BRACED", CardTier.Gold)
+        {
+            Values = new[] { V(0.2f, 0.4f) },
+            Describe = v => $"AT ANCHOR, TAKE {P(v[0])} LESS DAMAGE.",
+            Perks = v => new[] { (Perk.Braced, v[0]) },
         },
         new("treasure-map", "TREASURE MAP", CardTier.Gold)
         {
@@ -512,6 +608,26 @@ public static class CardCatalog
             WeaponEffects = v => new[] { Flat(ClusterCount, Whole(v[0])) },
         },
 
+        // ---- Gold that grows: every so many of something, a little more --------------------------------------
+        Growing("gunnery-drill", "GUNNERY DRILL", Tally.BroadsideHits, 50f, V(0.02f, 0.05f), x => $"+{P1(x)} BROADSIDE DAMAGE",
+            abilityId: BroadsideVolley.AbilityId, weapon: x => Percent(Damage, x)),
+        Growing("sharpshooter", "SHARPSHOOTER", Tally.LongGunHits, 10f, V(0.03f, 0.06f), x => $"+{P1(x)} LONG GUN DAMAGE",
+            abilityId: LongGun.AbilityId, weapon: x => Percent(Damage, x)),
+        Growing("bombardier", "BOMBARDIER", Tally.MortarHits, 40f, V(0.02f, 0.05f), x => $"+{P1(x)} MORTAR DAMAGE",
+            abilityId: Mortar.AbilityId, weapon: x => Percent(Damage, x)),
+        Growing("sea-miles", "SEA MILES", Tally.TilesSailed, 250f, V(0.01f, 0.025f), x => $"+{P1(x)} SPEED",
+            stat: x => CardStat.Percent(StatId.MaxSpeed, x)),
+        Growing("battle-hardened", "BATTLE-HARDENED", Tally.DamageTaken, 250f, V(0.02f, 0.05f), x => $"+{P1(x)} MAX HEALTH",
+            stat: x => CardStat.Percent(StatId.MaxHealth, x)),
+        Growing("bounty-hunter", "BOUNTY HUNTER", Tally.Kills, 5f, V(0.02f, 0.05f), x => $"+{P1(x)} DAMAGE WITH EVERY WEAPON",
+            stat: x => CardStat.Percent(StatId.WeaponDamage, x)),
+        Growing("war-chest", "WAR CHEST", Tally.GoldEarned, 100f, V(0.01f, 0.03f), x => $"+{P1(x)} RELOAD SPEED",
+            stat: x => CardStat.Percent(StatId.CooldownSpeed, x)),
+        Growing("siege-engineer", "SIEGE ENGINEER", Tally.SecondsAnchored, 30f, V(0.02f, 0.04f), x => $"+{P1(x)} RANGE WITH EVERY WEAPON",
+            stat: x => CardStat.Percent(StatId.WeaponRange, x)),
+        Growing("sawbones", "SAWBONES", Tally.DamageDealt, 500f, V(0.3f, 0.8f), x => $"+{D(x)} HEALTH A SECOND",
+            stat: x => CardStat.Flat(StatId.HealthRegen, x)),
+
         // ---- Prismatic: breaks a rule ----------------------------------------------------------------------
         new("second-wind", "SECOND WIND", CardTier.Prismatic)
         {
@@ -544,6 +660,13 @@ public static class CardCatalog
             Describe = v => $"EVERY WEAPON FIRES AGAIN HALF A SECOND LATER, AT {P(v[0])} DAMAGE.",
             Perks = v => new[] { (Perk.Echo, v[0]) },
         },
+        new("floating-fortress", "FLOATING FORTRESS", CardTier.Prismatic)
+        {
+            Values = new[] { V(0.2f, 0.5f) },
+            Describe = v => $"AT ANCHOR, EVERY WEAPON FIRES BY ITSELF AT THE NEAREST ENEMY IN REACH, LEADING ITS AIM. +{P(v[0])} RANGE AT ANCHOR.",
+            Stats = v => new[] { CardStat.Percent(StatId.WeaponRange, v[0]).Anchored },
+            Perks = v => new[] { (Perk.FortressGuns, 1f) },
+        },
         new("free-armory", "FREE ARMORY", CardTier.Prismatic)
         {
             Describe = _ => "A RANDOM WEAPON YOU DON'T HAVE, FREE. HAVE THEM ALL? A RANDOM SKILL INSTEAD.",
@@ -568,7 +691,7 @@ public static class CardCatalog
         {
             AbilityId = BroadsideVolley.AbilityId,
             Values = new[] { V(0f, 0.5f) },
-            Describe = v => "THE BROADSIDE BECOMES A RING OF SHOT ALL ROUND THE SHIP, AND FIRES BY ITSELF WHENEVER IT'S LOADED AND AN ENEMY IS IN RANGE."
+            Describe = v => "THE BROADSIDE FIRES A RING OF SHOT ALL ROUND THE SHIP, BY ITSELF, WHENEVER AN ENEMY IS IN RANGE."
                             + (v[0] < 0.005f ? "" : $" +{P(v[0])} DAMAGE."),
             DescribeOn = (_, ship) =>
                 $"YOUR RING: {BroadsideVolley.RingShotsFor(ship)} BALLS, EVERY {BroadsideVolley.ReloadSecondsFor(ship):0.0} SECONDS.",

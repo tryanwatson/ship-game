@@ -43,8 +43,9 @@ public sealed class BroadsideVolley : Ability
     public const float GrapeSpreadDegrees = 6f;
     public const float GrapeDamageFraction = 0.6f;
 
-    /// <summary>Skip Shot: every skip carries a ball on for this share of its flight again.</summary>
+    /// <summary>Skip Shot: every skip carries a ball on for this share of its flight again, at most this many times.</summary>
     public const float SkipFlightFraction = 0.6f;
+    public const int MaxSkips = 5;
 
     /// <summary>Man o' War: the broadside is a ring all round the ship, and fires by itself.</summary>
     public static bool FiresRing(Ship ship) => ship.AbilityValue(AbilityId, AbilityStat.Ring, 0f) >= 0.5f;
@@ -238,7 +239,7 @@ public sealed class BroadsideVolley : Ability
             CloseRange = range * CloseRangeFraction,
             CloseDamageBonus = caster.AbilityValue(Id, AbilityStat.CloseRangeDamage, 0f),
             SlowOnHit = caster.AbilityValue(Id, AbilityStat.SlowOnHit, 0f),
-            Skips = (int)MathF.Round(caster.AbilityValue(Id, AbilityStat.Skips, 0f)),
+            Skips = Math.Clamp((int)MathF.Round(caster.AbilityValue(Id, AbilityStat.Skips, 0f)), 0, MaxSkips),
             SkipTicks = Math.Max(1, (int)MathF.Round(lifetimeTicks * SkipFlightFraction)),
             HitRefund = caster.AbilityValue(Id, AbilityStat.HitRefund, 0f),
             HitFire = FireFor(caster, Id),

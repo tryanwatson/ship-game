@@ -64,6 +64,12 @@ public sealed class Mortar : Ability
     public const float CarpetStart = 4f;
     public const int CarpetGapTicks = 2;
 
+    /// <summary>
+    /// The most blasts one cast sets off, shells and their bomblets together: past it, bomblets are fewer and hit
+    /// harder, so the sim and the network carry hundreds of blasts a cast, not thousands.
+    /// </summary>
+    public const int MaxStrikesPerCast = 400;
+
     public static int ShellCountFor(Ship ship) => CarpetShellsFor(ship) is > 1 and var carpet ? carpet : SalvoShellsFor(ship);
 
     private static int SalvoShellsFor(Ship ship) =>
@@ -116,16 +122,19 @@ public sealed class Mortar : Ability
         var radius = BlastRadiusFor(caster);
         var damage = DamageFor(caster);
 
-        var bomblets = (int)MathF.Round(caster.AbilityValue(Id, AbilityStat.ClusterCount, 0f));
+        // As many bomblets a shell as the cast can throw (see MaxStrikesPerCast); any more go into those it does.
+        var shells = ShellCountFor(caster);
+        var wanted = (int)MathF.Round(caster.AbilityValue(Id, AbilityStat.ClusterCount, 0f));
+        var bomblets = Math.Clamp(MaxStrikesPerCast / shells - 1, 0, wanted);
         var cluster = bomblets > 0
-            ? new ClusterEffect(bomblets, radius * ClusterSpreadFraction, radius * ClusterRadiusFraction, ClusterDamageFraction, ClusterDelayTicks)
+            ? new ClusterEffect(bomblets, radius * ClusterSpreadFraction, radius * ClusterRadiusFraction,
+                ClusterDamageFraction * wanted / bomblets, ClusterDelayTicks)
             : null;
 
         var fire = FireFor(caster, Id);
 
         // A salvo: the first shell on the aim point, the rest round it, one after another. A carpet: shells walking out
         // from the ship to the aim point, each landing a little after the one before.
-        var shells = ShellCountFor(caster);
         var carpet = CarpetShellsFor(caster) > 1;
         for (var i = 0; i < shells; i++)
         {

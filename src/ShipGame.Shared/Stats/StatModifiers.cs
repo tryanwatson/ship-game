@@ -19,7 +19,14 @@ public sealed class StatModifiers
     public float Apply(StatId stat, float baseValue) => Combine(_modifiers, stat, baseValue);
 
     /// <summary>
-    /// One stat through any set of modifiers: (base + flat) * (1 + percent) * every multiplier, never below 0.
+    /// However many percentage cuts stack up (three Glass Cannons, five Juggernauts), they leave this share of a stat:
+    /// a ship with no health would sink the moment it spawned, again and again, and one with no speed couldn't move.
+    /// </summary>
+    public const float LeastPercentFactor = 0.1f;
+
+    /// <summary>
+    /// One stat through any set of modifiers: (base + flat) * (1 + percent) * every multiplier, never below 0, and the
+    /// percentages never taking it below <see cref="LeastPercentFactor"/>.
     /// </summary>
     public static float Combine(IEnumerable<StatModifier> modifiers, StatId stat, float baseValue)
     {
@@ -44,7 +51,7 @@ public sealed class StatModifiers
             }
         }
 
-        return MathF.Max(0f, (baseValue + flat) * (1f + percent) * multiplier);
+        return MathF.Max(0f, (baseValue + flat) * MathF.Max(LeastPercentFactor, 1f + percent) * multiplier);
     }
 
     /// <summary>

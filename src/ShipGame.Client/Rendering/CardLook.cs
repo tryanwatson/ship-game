@@ -83,6 +83,12 @@ public static class CardLook
                 return CardIcon.Pierce;
             case "hot-guns" or "headhunter" or "frenzy":
                 return CardIcon.Reload;
+            case "battery-station" or "floating-fortress" or "quick-anchor" or "siege-engineer" or "dug-in":
+                return CardIcon.Anchor;
+            case "braced":
+                return CardIcon.Shield;
+            case "spring-line":
+                return CardIcon.Helm;
             case "echo":
                 return CardIcon.Echo;
         }

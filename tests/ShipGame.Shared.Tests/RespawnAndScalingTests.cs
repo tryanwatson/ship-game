@@ -74,6 +74,25 @@ public class RespawnAndScalingTests
     }
 
     [Fact]
+    public void Respawn_KeepsTheTallies_SoGrowingCardsKeepWhatTheyGrew()
+    {
+        var world = CoopWorld(players: 2);
+        var player = world.Players[1];
+        player.Cards.Add(new CardPick("bounty-hunter", 1)); // +2% damage every 5 kills
+        var ship = world.GetPlayerShip(1)!;
+        ship.ReplaceCards(player.Cards);
+        ship.AddToTally(Tally.Kills, 12f);
+        var damage = ship.Stats.WeaponDamage;
+
+        Sink(world, 1);
+        RunTicks(world, Respawning.DelayTicks);
+
+        var reborn = world.GetPlayerShip(1)!;
+        Assert.Equal(12f, reborn.TallyOf(Tally.Kills));
+        Assert.Equal(damage, reborn.Stats.WeaponDamage, 3);
+    }
+
+    [Fact]
     public void Respawn_AvoidsLandAndPirates()
     {
         var world = new World(Archipelago.Size) { Wind = Vector2.Zero };

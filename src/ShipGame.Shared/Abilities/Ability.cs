@@ -115,13 +115,19 @@ public sealed class AbilityState
     /// <summary>Starts a channel's cooldown, shortened by <paramref name="cooldownSpeed"/> (1 = normal).</summary>
     public void StartCooldown(int channel, float cooldownSpeed) => StartCooldown(channel, Definition.CooldownTicks, cooldownSpeed);
 
+    /// <summary>
+    /// However fast cards and skills make it reload, a weapon fires at most this often (0.2 s): a broadside of hundreds
+    /// of balls every tick would swamp the server and every client.
+    /// </summary>
+    public static readonly int MinCooldownTicks = (int)MathF.Round(0.2f * SimConstants.TickRate);
+
     /// <summary>Starts a channel's cooldown of <paramref name="baseTicks"/>, shortened by <paramref name="cooldownSpeed"/>.</summary>
     public void StartCooldown(int channel, float baseTicks, float cooldownSpeed)
     {
         if (!InRange(channel))
             return;
         var duration = baseTicks / MathF.Max(cooldownSpeed, 0.01f);
-        _duration[channel] = Math.Max(1, (int)MathF.Round(duration));
+        _duration[channel] = Math.Max(MinCooldownTicks, (int)MathF.Round(duration));
         _remaining[channel] = _duration[channel];
         _sinceFired[channel] = 0;
     }
@@ -138,10 +144,11 @@ public sealed class AbilityState
 
     /// <summary>
     /// Takes <paramref name="fraction"/> of each reloading channel's full cooldown off what's left, but never so much
-    /// that it fires again sooner than <paramref name="minTicks"/> after it last did.
+    /// that it fires again sooner than <paramref name="minTicks"/> (and never <see cref="MinCooldownTicks"/>) after it last did.
     /// </summary>
     public void Refund(float fraction, int minTicks = 0)
     {
+        minTicks = Math.Max(minTicks, MinCooldownTicks);
         for (var i = 0; i < _remaining.Length; i++)
         {
             var floor = Math.Min(_remaining[i], Math.Max(0, minTicks - _sinceFired[i]));

@@ -19,6 +19,7 @@ public sealed class World
     private readonly List<AreaStrike> _strikes = new();
     private readonly List<ShotWarning> _warnings = new();
     private readonly List<FireZone> _fires = new();
+    private readonly Dictionary<int, int> _hitFiresByOwner = new();
     private readonly List<PendingEcho> _echoes = new();
     private readonly List<(Ship A, Ship B)> _contacts = new();
 
@@ -79,10 +80,10 @@ public sealed class World
     /// <summary>Lobs a shell from <paramref name="owner"/> that lands on <paramref name="target"/> after <paramref name="flightTicks"/>.</summary>
     public AreaStrike LaunchStrike(Ship owner, Vector2 target, float radius, float damage, int flightTicks, ClusterEffect? cluster = null,
         FireEffect? fire = null) =>
-        LaunchStrike(owner.Id, owner.Team, owner.Position, target, radius, damage, flightTicks, cluster, fire);
+        LaunchStrike(owner.Id, owner.Team, owner.Position, target, radius, damage, flightTicks, cluster, fire, Abilities.Mortar.AbilityId);
 
     private AreaStrike LaunchStrike(int ownerShipId, Team team, Vector2 origin, Vector2 target, float radius, float damage, int flightTicks,
-        ClusterEffect? cluster, FireEffect? fire = null)
+        ClusterEffect? cluster, FireEffect? fire = null, string? abilityId = null)
     {
         var strike = new AreaStrike
         {
@@ -97,6 +98,7 @@ public sealed class World
             ImpactTick = Tick + Math.Max(1, flightTicks),
             Cluster = cluster,
             Fire = fire,
+            AbilityId = abilityId,
         };
         _strikes.Add(strike);
         Emit(new AreaStrikeLaunched(Tick, strike.Id, strike.OwnerShipId, strike.Team, strike.Origin, strike.Target, radius, damage, strike.ImpactTick));
@@ -112,6 +114,9 @@ public sealed class World
     /// <summary>Drops fires that have burned out by now, for a client mirroring the server's (which never steps).</summary>
     public void PutOutFires() => _fires.RemoveAll(f => f.EndTick <= Tick);
 
+
+    /// <summary>However many Braced cards a ship holds, at anchor it still takes this share of its damage.</summary>
+    public const float MaxBraced = 0.75f;
 
     /// <summary>
     /// When a pirate ship sinks, the pirates within this range are roused: a stack of <see cref="StatusId.Frenzy"/>,
@@ -146,6 +151,12 @@ public sealed class World
     /// <summary>The burning water a broadside hit leaves (Incendiary).</summary>
     public const float HitFireRadius = 1.2f;
 
+    /// <summary>
+    /// The most fires one ship's hits and wakes keep burning at once (shells' fires aside): past it, new ones don't
+    /// start until old ones burn out, so a hail of incendiary hits can't set the whole sea alight and stall the server.
+    /// </summary>
+    public const int MaxHitFiresPerShip = 300;
+
     /// <summary>A burning wake is patches of fire this far apart, each this wide (Burning Wake).</summary>
     public const float WakeSpacing = 1.5f;
     public const float WakeRadius = 1f;
@@ -164,9 +175,16 @@ public sealed class World
     {
         if (target.FindStatus(StatusId.Marked) is { } mark)
             amount *= 1f + mark.Power;
+        if (target.IsAnchored && target.PerkValue(Perk.Braced) is > 0f and var braced)
+            amount *= 1f - MathF.Min(braced, MaxBraced);
+        var dealt = MathF.Min(amount, target.Health);
         target.Health = MathF.Max(0f, target.Health - amount);
         RecordHit(target, attackerShipId);
-        if (FindShip(attackerShipId)?.PerkValue(Perk.HuntersMark) is > 0f and var marking)
+        target.AddToTally(Tally.DamageTaken, dealt);
+        if (FindShip(attackerShipId) is not { } attacker)
+            return;
+        attacker.AddToTally(Tally.DamageDealt, dealt);
+        if (attacker.PerkValue(Perk.HuntersMark) is > 0f and var marking)
             ApplyStatus(target, StatusId.Marked, marking, attackerShipId);
     }
 
@@ -174,9 +192,14 @@ public sealed class World
     /// A weapon of <paramref name="attackerShipId"/>'s struck <paramref name="target"/> (a shot, a shell's blast, a
     /// ram; not a fire or a burn ticking on): what its cards make a hit do besides damage.
     /// </summary>
-    private void OnWeaponHit(int attackerShipId, Ship target)
+    /// <param name="abilityId">The weapon, whose hits it counts toward; null for a ram.</param>
+    private void OnWeaponHit(int attackerShipId, Ship target, string? abilityId)
     {
-        if (FindShip(attackerShipId)?.PerkValue(Perk.BurnOnHit) is > 0f and var burn)
+        if (FindShip(attackerShipId) is not { } attacker)
+            return;
+        if (Tallies.HitsWith(abilityId) is { } hits)
+            attacker.AddToTally(hits, 1f);
+        if (attacker.PerkValue(Perk.BurnOnHit) is > 0f and var burn)
             ApplyStatus(target, StatusId.Burning, burn, attackerShipId);
     }
 
@@ -251,6 +274,7 @@ public sealed class World
     /// </summary>
     private void OnKill(Ship killer, Ship victim)
     {
+        killer.AddToTally(Tally.Kills, 1f);
         if (killer.PerkValue(Perk.Frenzy) is > 0f and var frenzy)
             ApplyStatus(killer, StatusId.Frenzy, frenzy, killer.Id);
         if (victim.Team != Team.Pirates)
@@ -355,6 +379,8 @@ public sealed class World
     {
         var player = GetOrAddPlayer(playerId);
         player.Gold += delta;
+        if (delta > 0)
+            GetPlayerShip(playerId)?.AddToTally(Tally.GoldEarned, delta);
         Emit(new GoldChanged(Tick, playerId, player.Gold, delta));
     }
 
@@ -513,7 +539,7 @@ public sealed class World
         foreach (var ship in _ships)
             ship.Behavior?.Update(this, ship);
 
-        FireBroadsidesByThemselves();
+        FireWeaponsByThemselves();
         FireWarnedShots();
         FireEchoes();
 
@@ -541,7 +567,20 @@ public sealed class World
         RevealMap();
 
         foreach (var ship in _ships)
+        {
             ShipMovement.ClampToBounds(ship, new Vector2(-OutOfBoundsMargin), WorldSize + new Vector2(OutOfBoundsMargin));
+            if (ship.IsFort)
+                continue;
+            ship.AddToTally(Tally.TilesSailed, Vector2.Distance(ship.PreviousPosition, ship.Position));
+            if (!ship.IsAnchored)
+                continue;
+            var anchored = ship.TallyOf(Tally.SecondsAnchored);
+            ship.AddToTally(Tally.SecondsAnchored, dt);
+            // Dug In: a stack every second the anchor's down (not while it's coming up).
+            if (ship.Anchor == AnchorState.Down && ship.PerkValue(Perk.DugIn) is > 0f and var dugIn
+                && (int)anchored != (int)ship.TallyOf(Tally.SecondsAnchored))
+                ApplyStatus(ship, StatusId.Entrenched, dugIn, ship.Id);
+        }
 
         StepProjectiles(dt);
         StepStrikes();
@@ -690,7 +729,7 @@ public sealed class World
         if (damage < 1f)
             return;
         DealDamage(target, damage, rammer.Id);
-        OnWeaponHit(rammer.Id, target);
+        OnWeaponHit(rammer.Id, target, abilityId: null);
         rammer.RamReadyTick = Tick + RamCooldownTicks;
         Emit(new ShipRammed(Tick, rammer.Id, target.Id));
     }
@@ -729,6 +768,8 @@ public sealed class World
     {
         if (unlessBurning)
         {
+            if (_hitFiresByOwner.GetValueOrDefault(ownerShipId) >= MaxHitFiresPerShip)
+                return;
             foreach (var burning in _fires)
             {
                 if (burning.OwnerShipId == ownerShipId && burning.EndTick - Tick >= burn.Ticks / 2
@@ -739,9 +780,11 @@ public sealed class World
         var fire = new FireZone
         {
             Id = _nextEntityId++, OwnerShipId = ownerShipId, Team = team, Position = position,
-            Radius = radius, Dps = burn.Dps, StartTick = Tick, EndTick = Tick + burn.Ticks,
+            Radius = radius, Dps = burn.Dps, StartTick = Tick, EndTick = Tick + burn.Ticks, FromHits = unlessBurning,
         };
         _fires.Add(fire);
+        if (unlessBurning)
+            _hitFiresByOwner[ownerShipId] = _hitFiresByOwner.GetValueOrDefault(ownerShipId) + 1;
         Emit(new FireStarted(Tick, fire.Id, fire.OwnerShipId, fire.Team, fire.Position, fire.Radius, fire.Dps, fire.EndTick));
     }
 
@@ -764,7 +807,14 @@ public sealed class World
                     DealDamage(ship, fire.Dps * dt, fire.OwnerShipId);
             }
         }
-        _fires.RemoveAll(f => f.EndTick <= Tick);
+        _fires.RemoveAll(f =>
+        {
+            if (f.EndTick > Tick)
+                return false;
+            if (f.FromHits && --_hitFiresByOwner[f.OwnerShipId] == 0)
+                _hitFiresByOwner.Remove(f.OwnerShipId);
+            return true;
+        });
     }
 
     /// <summary>Fires every laid shot that's due, from wherever its ship is now; a sunk ship's shots are lost.</summary>
@@ -800,7 +850,7 @@ public sealed class World
                 if (Geometry.DistanceToConvex(hull, strike.Target) > strike.Radius)
                     continue;
                 DealDamage(ship, strike.Damage, strike.OwnerShipId);
-                OnWeaponHit(strike.OwnerShipId, ship);
+                OnWeaponHit(strike.OwnerShipId, ship, strike.AbilityId);
             }
             Emit(new AreaStrikeImpact(Tick, strike.Id, strike.Target, strike.Radius));
 
@@ -816,7 +866,7 @@ public sealed class World
                     var angle = turn + MathF.Tau * i / cluster.Count;
                     var point = strike.Target + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * cluster.Spread;
                     LaunchStrike(strike.OwnerShipId, strike.Team, strike.Target, point, cluster.Radius,
-                        strike.Damage * cluster.DamageFraction, cluster.DelayTicks, cluster: null);
+                        strike.Damage * cluster.DamageFraction, cluster.DelayTicks, cluster: null, abilityId: strike.AbilityId);
                 }
             }
         }
@@ -903,7 +953,7 @@ public sealed class World
     private void OnShotHit(Projectile shot, Ship struck, float distance)
     {
         var effects = shot.Effects;
-        OnWeaponHit(shot.OwnerShipId, struck);
+        OnWeaponHit(shot.OwnerShipId, struck, effects.AbilityId);
         if (effects.SlowOnHit > 0f)
             ApplyStatus(struck, StatusId.Slowed, effects.SlowOnHit, shot.OwnerShipId);
 
@@ -965,7 +1015,10 @@ public sealed class World
         foreach (var target in targets)
         {
             lineage.Add(target.Id); // so its sister and cousins look elsewhere
-            var direction = Vector2.Normalize(target.Position - shot.Position);
+            var toTarget = target.Position - shot.Position;
+            if (toTarget.LengthSquared() < 1e-6f)
+                continue; // right on top of it: no way to point
+            var direction = Vector2.Normalize(toTarget);
             var bounce = SpawnProjectile(owner, shot.Position, direction * speed, shot.Damage, lifetime, shot.Radius, next);
             bounce.RecordHit(struck.Id);
             bounce.Lineage = lineage;
@@ -986,38 +1039,62 @@ public sealed class World
     }
 
     /// <summary>
-    /// Broadsides that fire themselves: a Man o' War's ring goes off whenever it's loaded and an enemy is in range,
-    /// and with gun captains, each deck fires whenever it's loaded and an enemy is in its lane (the nearest, if several).
+    /// Weapons that fire themselves. A Man o' War's ring goes off whenever it's loaded and an enemy is in range; with
+    /// gun captains, each broadside deck fires whenever it's loaded and an enemy is in its lane; and a Floating
+    /// Fortress at anchor fires all its guns that way, its long gun and mortar at the nearest enemy in reach, laid
+    /// where it's headed. Each takes the nearest enemy, if several.
     /// </summary>
-    private void FireBroadsidesByThemselves()
+    private void FireWeaponsByThemselves()
     {
         foreach (var ship in _ships)
         {
             if (ship.IsSunk)
                 continue;
+            var fortress = ship.IsAnchored && ship.PerkValue(Perk.FortressGuns) > 0f;
             for (var slot = AbilitySlot.One; slot <= AbilitySlot.Four; slot++)
             {
-                if (ship.GetAbility(slot) is not { Definition: BroadsideVolley } guns)
-                    continue;
-                if (BroadsideVolley.FiresRing(ship))
+                switch (ship.GetAbility(slot))
                 {
-                    var range = BroadsideVolley.RangeFor(ship);
-                    if (guns.IsChannelReady(BroadsideVolley.PortChannel)
-                        && NearestEnemy(ship, other => Vector2.Distance(ship.Position, other.Position) <= range + other.Stats.Length / 2f) is { } enemy)
-                        CastAbility(ship, slot, enemy.Position);
-                }
-                else if (BroadsideVolley.FiresItself(ship))
-                {
-                    foreach (var side in new[] { BroadsideSide.Port, BroadsideSide.Starboard })
+                    case { Definition: BroadsideVolley } guns when BroadsideVolley.FiresRing(ship):
                     {
-                        if (guns.IsChannelReady(BroadsideVolley.ChannelOf(side))
-                            && NearestEnemy(ship, other => BroadsideVolley.Covers(ship, side, other.Position, other.Stats.Radius)) is { } enemy)
+                        var range = BroadsideVolley.RangeFor(ship);
+                        if (guns.IsChannelReady(BroadsideVolley.PortChannel)
+                            && NearestEnemy(ship, other => Vector2.Distance(ship.Position, other.Position) <= range + other.Stats.Length / 2f) is { } enemy)
                             CastAbility(ship, slot, enemy.Position);
+                        break;
+                    }
+                    case { Definition: BroadsideVolley } guns when fortress || BroadsideVolley.FiresItself(ship):
+                        foreach (var side in new[] { BroadsideSide.Port, BroadsideSide.Starboard })
+                        {
+                            if (guns.IsChannelReady(BroadsideVolley.ChannelOf(side))
+                                && NearestEnemy(ship, other => BroadsideVolley.Covers(ship, side, other.Position, other.Stats.Radius)) is { } enemy)
+                                CastAbility(ship, slot, enemy.Position);
+                        }
+                        break;
+                    case { Definition: LongGun, IsReady: true } when fortress:
+                    {
+                        var range = LongGun.RangeFor(ship);
+                        if (NearestEnemy(ship, other => Vector2.Distance(ship.Position, other.Position) <= range + other.Stats.Length / 2f) is { } enemy)
+                            CastAbility(ship, slot, Lead(enemy, Vector2.Distance(ship.Position, enemy.Position) / LongGun.SpeedFor(ship)));
+                        break;
+                    }
+                    case { Definition: Mortar, IsReady: true } when fortress:
+                    {
+                        var range = Mortar.RangeFor(ship);
+                        if (NearestEnemy(ship, other => Vector2.Distance(ship.Position, other.Position) <= range) is { } enemy)
+                        {
+                            var flight = Mortar.FlightTicks(ship, Vector2.Distance(ship.Position, enemy.Position)) / (float)SimConstants.TickRate;
+                            CastAbility(ship, slot, Lead(enemy, flight));
+                        }
+                        break;
                     }
                 }
             }
         }
     }
+
+    /// <summary>Where <paramref name="ship"/> will be in <paramref name="seconds"/>, sailing on as it is: where to lay a gun.</summary>
+    private static Vector2 Lead(Ship ship, float seconds) => ship.Position + (ship.Forward * ship.Speed + ship.WindDrift) * seconds;
 
     /// <summary>The nearest ship on another team that's afloat and <paramref name="within"/>, if any. Never a crewmate.</summary>
     private Ship? NearestEnemy(Ship ship, Func<Ship, bool> within)

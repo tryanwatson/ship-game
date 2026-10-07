@@ -71,6 +71,11 @@ public sealed class ShipState
     public Vector2 WindDrift;
     /// <summary>Its buffs and debuffs: which, how many stacks, how strong each, and ticks left (from the snapshot's tick).</summary>
     public (StatusId Id, int Stacks, float Power, int RemainingTicks)[] Statuses = Array.Empty<(StatusId, int, float, int)>();
+    /// <summary>
+    /// Its tallies, so a client grows its cards alike: every one for a player's ship (a growing card on offer comes
+    /// already grown by what's been done this run), just those its cards grow with for any other.
+    /// </summary>
+    public (Tally Tally, float Value)[] Tallies = Array.Empty<(Tally, float)>();
     /// <summary>Per ability slot, per cooldown channel: (remaining, duration) ticks. Empty for an empty slot.</summary>
     public (int Remaining, int Duration)[][] Cooldowns = new (int, int)[Ship.AbilitySlotCount][];
 }
@@ -157,6 +162,7 @@ public sealed class Snapshot
             IsHoldingCourse = ship.IsHoldingCourse,
             WindDrift = ship.WindDrift,
             Statuses = ship.Statuses.Select(s => (s.Id, s.Stacks, s.Power, (int)Math.Max(0, s.UntilTick - tick))).ToArray(),
+            Tallies = (ship.OwnerPlayerId is null ? ship.GrowingTallies : ship.Tallies.Keys).Select(t => (t, ship.TallyOf(t))).ToArray(),
         };
         for (var i = 0; i < Ship.AbilitySlotCount; i++)
         {

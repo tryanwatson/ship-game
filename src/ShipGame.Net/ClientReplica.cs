@@ -661,6 +661,8 @@ public sealed class ClientReplica
         {
             Id = s.Id, Stacks = s.Stacks, Power = s.Power, UntilTick = stateTick + s.RemainingTicks,
         }));
+        if (state.Tallies.Length > 0 || ship.Tallies.Count > 0)
+            ship.ReplaceTallies(state.Tallies);
         for (var i = 0; i < Ship.AbilitySlotCount; i++)
         {
             var channels = state.Cooldowns[i];

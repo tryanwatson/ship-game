@@ -21,6 +21,7 @@ public enum CardIcon
     Coin,
     Fire,
     Echo,
+    Anchor,
 }
 
 /// <summary>Simple line-and-shape icons for card emblems, drawn to fit a circle of the given radius.</summary>
@@ -97,6 +98,30 @@ public static class CardIcons
                 batch.Stroke(c + new Vector2(0f, -0.75f) * r, c + new Vector2(0f, 0.75f) * r, w * 3f, color);
                 batch.Stroke(c + new Vector2(-0.75f, 0f) * r, c + new Vector2(0.75f, 0f) * r, w * 3f, color);
                 break;
+            case CardIcon.Anchor:
+            {
+                // Ring, stock, shank, and the arms curving up to the flukes.
+                Circle(batch, c + new Vector2(0f, -0.78f) * r, 0.16f * r, w, color);
+                batch.Stroke(c + new Vector2(0f, -0.62f) * r, c + new Vector2(0f, 0.8f) * r, w, color);
+                batch.Stroke(c + new Vector2(-0.4f, -0.4f) * r, c + new Vector2(0.4f, -0.4f) * r, w, color);
+                var previous = c + new Vector2(-0.75f, 0.25f) * r;
+                for (var i = 1; i <= 8; i++)
+                {
+                    var angle = MathF.PI * i / 8f; // a half circle under the shank
+                    var next = c + new Vector2(-MathF.Cos(angle) * 0.75f, 0.25f + MathF.Sin(angle) * 0.55f) * r;
+                    batch.Stroke(previous, next, w, color);
+                    previous = next;
+                }
+                Span<Vector2> fluke = stackalloc Vector2[3];
+                foreach (var side in new[] { -1f, 1f })
+                {
+                    fluke[0] = c + new Vector2(side * 0.75f, 0.05f) * r;
+                    fluke[1] = c + new Vector2(side * 0.95f, 0.35f) * r;
+                    fluke[2] = c + new Vector2(side * 0.6f, 0.3f) * r;
+                    batch.FillConvex(fluke, color);
+                }
+                break;
+            }
             case CardIcon.Helm:
                 // A ship's wheel.
                 Circle(batch, c, 0.6f * r, w, color);

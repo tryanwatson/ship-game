@@ -230,6 +230,12 @@ public class WireTests
             world.SpawnShip(new Vector2(20 + i, 40), 0f, ShipStats.Sloop);
         world.AddGold(1, 25);
         world.ApplyStatus(player, StatusId.Burning, 4.5f, sourceShipId: 7, stacks: 3);
+        player.AddCard(new CardPick("sea-miles", 1));
+        player.AddToTally(Tally.TilesSailed, 612.5f);
+        player.AddToTally(Tally.Kills, 3f);
+        world.Ships.Last().AddCard(new CardPick("bounty-hunter", 1));
+        world.Ships.Last().AddToTally(Tally.Kills, 2f);
+        world.Ships.Last().AddToTally(Tally.TilesSailed, 9f); // a pirate's: only what its cards grow with is sent
         var snapshot = Snapshot.Capture(world);
         snapshot.CommandAcks.Add((1, 4_000_000_000u));
         snapshot.Run = new ShipGame.Shared.Progression.RunStatus(FortressesTaken: 5, BossesSunk: 2, BossCountdownTicks: 287, BossAfloat: true);
@@ -252,6 +258,8 @@ public class WireTests
         Assert.Equal(-1, ships[0].Throttle); // rowing astern
         Assert.Equal(new[] { (StatusId.Burning, 3, 4.5f, Statuses.Get(StatusId.Burning).Ticks) }, ships[0].Statuses);
         Assert.Empty(ships[1].Statuses);
+        Assert.Equal(new[] { (Tally.Kills, 3f), (Tally.TilesSailed, 612.5f), (Tally.GoldEarned, 25f) }, ships[0].Tallies.OrderBy(t => t.Tally));
+        Assert.Equal(new[] { (Tally.Kills, 2f) }, ships[^1].Tallies);
         Assert.Equal(4_000_000_000u, header.AckFor(1));
         Assert.Equal(0u, header.AckFor(2));
         Assert.Equal(snapshot.Run, header.Run); // the HUD's fortress and boss forecast

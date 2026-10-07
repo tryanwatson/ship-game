@@ -65,6 +65,8 @@ public static class Respawning
                 ship.AddModifier(modifier);
             foreach (var skill in lost.Skills)
                 ship.AddSkill(skill);
+            foreach (var (tally, value) in lost.Tallies)
+                ship.AddToTally(tally, value); // what its cards have grown with
         }
         ship.ReplaceCards(player.Cards);
 

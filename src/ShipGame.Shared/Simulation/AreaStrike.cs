@@ -21,6 +21,9 @@ public sealed class FireZone
     public required float Dps { get; init; }
     public required long StartTick { get; init; }
     public required long EndTick { get; init; }
+
+    /// <summary>Started by a hit or a wake (not a shell), so it counts toward its ship's <see cref="World.MaxHitFiresPerShip"/>. Server-side only.</summary>
+    public bool FromHits { get; init; }
 }
 
 /// <summary>A shell in the air: lands on <see cref="Target"/> at <see cref="ImpactTick"/> and hurts every hostile ship in <see cref="Radius"/>.</summary>
@@ -41,6 +44,9 @@ public sealed class AreaStrike
 
     /// <summary>Fire to leave where it lands. Server-side only: clients hear of the fire when it starts.</summary>
     public FireEffect? Fire { get; init; }
+
+    /// <summary>The weapon that fired it, whose hits it counts toward (a long gun's burst counts toward none). Server-side only.</summary>
+    public string? AbilityId { get; init; }
 
     /// <summary>0 at launch, 1 at impact.</summary>
     public float Progress(double tick) =>

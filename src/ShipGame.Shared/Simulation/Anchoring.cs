@@ -25,17 +25,27 @@ public static class Anchoring
     public const float RaiseSeconds = 3f;
     public static readonly int RaiseTicks = (int)(RaiseSeconds * SimConstants.TickRate);
 
+    /// <summary>How much faster than usual this ship's crew handle the anchor (Quick Anchor): 1 normally.</summary>
+    private static float Handling(Ship ship) => 1f + MathF.Max(0f, ship.PerkValue(Upgrades.Perk.AnchorHandling));
+
+    /// <summary>This ship's hold to let go, in seconds.</summary>
+    public static float DropSecondsFor(Ship ship) => DropSeconds / Handling(ship);
+
+    public static int DropTicksFor(Ship ship) => Math.Max(1, (int)MathF.Round(DropTicks / Handling(ship)));
+
+    public static int RaiseTicksFor(Ship ship) => Math.Max(1, (int)MathF.Round(RaiseTicks / Handling(ship)));
+
     /// <summary>The anchor key went down: start letting go if the anchor's up, start hauling it in if it's down.</summary>
     public static void PressKey(Ship ship)
     {
         switch (ship.Anchor)
         {
             case AnchorState.Weighed when ship.AnchorDropTicksRemaining == 0:
-                ship.AnchorDropTicksRemaining = DropTicks;
+                ship.AnchorDropTicksRemaining = DropTicksFor(ship);
                 break;
             case AnchorState.Down:
                 ship.Anchor = AnchorState.Raising;
-                ship.AnchorRaiseTicksRemaining = RaiseTicks;
+                ship.AnchorRaiseTicksRemaining = RaiseTicksFor(ship);
                 break;
         }
     }
@@ -74,9 +84,9 @@ public static class Anchoring
 
     /// <summary>0..1 while the key is held to let go; 0 otherwise.</summary>
     public static float DropProgress(Ship ship) =>
-        ship.AnchorDropTicksRemaining > 0 ? 1f - (float)ship.AnchorDropTicksRemaining / DropTicks : 0f;
+        ship.AnchorDropTicksRemaining > 0 ? 1f - (float)ship.AnchorDropTicksRemaining / DropTicksFor(ship) : 0f;
 
     /// <summary>0 when the haul starts, 1 when the anchor is up.</summary>
     public static float RaiseProgress(Ship ship) =>
-        ship.Anchor == AnchorState.Raising ? 1f - (float)ship.AnchorRaiseTicksRemaining / RaiseTicks : 0f;
+        ship.Anchor == AnchorState.Raising ? Math.Clamp(1f - (float)ship.AnchorRaiseTicksRemaining / RaiseTicksFor(ship), 0f, 1f) : 0f;
 }

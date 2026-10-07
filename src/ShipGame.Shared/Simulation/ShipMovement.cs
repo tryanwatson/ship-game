@@ -56,9 +56,11 @@ public static class ShipMovement
     {
         if (ship.IsAnchored)
         {
-            // Held fast: no way, no turning, no drift.
+            // Held fast: no way, no drift, and no turning, unless a spring on the cable lets the helm swing her round.
             ship.Speed = 0f;
             ship.WindDrift = Vector2.Zero;
+            if (ship.Rudder != 0 && ship.PerkValue(Upgrades.Perk.SpringLine) is > 0f and var spring)
+                ship.Heading = Angles.Wrap(ship.Heading + ship.Rudder * RowingTurnRate * spring * dt);
             return;
         }
 
