@@ -384,7 +384,7 @@ public sealed class LoopbackTests : IDisposable
     }
 
     [Fact]
-    public void OwnShots_LeaveTheDrawnHull_TheMomentTheyreFired_AndKeepPaceWithIt()
+    public void OwnShots_LeaveTheDrawnHull_TheMomentTheyreFired_AndHoldTheirLine()
     {
         var client = Connect(new NetworkConditions(LagMs: 300));
         PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
@@ -402,21 +402,61 @@ public sealed class LoopbackTests : IDisposable
         // Fired here and now, from the hull as drawn: no waiting a round trip for the server.
         var volley = client.Replica.World.Projectiles.Where(p => p.OwnerShipId == drawn.Id).ToArray();
         Assert.Equal(BroadsideVolley.CannonCount, volley.Length);
-        var along = volley.ToDictionary(p => p.Id, p => Vector2.Dot(p.Position - drawn.Position, drawn.Forward));
+        var fired = volley.ToDictionary(p => p.Id, p => p.Position);
+        var forward = drawn.Forward;
         Assert.All(volley, p => Assert.True(Vector2.Distance(p.Position, drawn.Position) < drawn.Stats.Length,
             $"shot fired {Vector2.Distance(p.Position, drawn.Position)} tiles from the drawn ship"));
 
-        // After the server's answered, the same balls (not a second volley) are still abeam of the ship as drawn,
-        // where they'd be had there been no lag at all.
+        // After the server's answered, the same balls (not a second volley) are still on the line they were fired
+        // along, straight off the beam (a player's balls don't carry the ship's way): where they'd be had there been
+        // no lag at all, not where the server's ship, well astern of ours, fired them.
         PumpFor(0.45); // a 300 ms round trip, and short of the balls' ~0.57 s flight
         var flying = client.Replica.World.Projectiles.Where(p => p.OwnerShipId == drawn.Id).ToArray();
         Assert.Equal(volley.Select(p => p.Id).Order(), flying.Select(p => p.Id).Order());
-        drawn = client.Replica.World.GetPlayerShip(client.LocalPlayerId)!;
         foreach (var ball in flying)
         {
-            var drift = Vector2.Dot(ball.Position - drawn.Position, drawn.Forward) - along[ball.Id];
-            Assert.True(MathF.Abs(drift) < 0.4f, $"ball fell {drift} tiles fore/aft of its gun");
+            var drift = Vector2.Dot(ball.Position - fired[ball.Id], forward);
+            Assert.True(MathF.Abs(drift) < 0.4f, $"ball drifted {drift} tiles fore/aft of where it was fired");
         }
+    }
+
+    [Fact]
+    public void OwnShotsLaidOnAMark_AreTheServersShots_NotASecondVolley()
+    {
+        var client = Connect(new NetworkConditions(LagMs: 300));
+        PumpUntil(() => client.Status == ConnectionStatus.Lobby, "the lobby");
+        client.ReadyUp();
+        PumpUntil(() => client.Replica.World.GetPlayerShip(client.LocalPlayerId) is not null, "our ship");
+        PumpUntil(() => client.SetSail(), "the run to get under way");
+        client.Send(new AdjustThrottleCommand(0, 5));
+        PumpFor(2.0);
+
+        // A pirate sailing alongside, off the starboard beam, for the guns to find and lead.
+        var ours = _server.World.GetPlayerShip(client.LocalPlayerId)!;
+        var right = new Vector2(-ours.Forward.Y, ours.Forward.X);
+        var pirate = _server.World.SpawnShip(ours.Position + right * 5f, ours.Heading, ShipStats.PirateSloop);
+        pirate.Speed = ours.Speed;
+        pirate.Throttle = ShipMovement.ThrottleLevels;
+        PumpUntil(() => client.Replica.World.FindShip(pirate.Id) is not null, "the pirate to show");
+        PumpFor(0.5);
+        client.TakeEvents();
+
+        var drawn = client.Replica.World.GetPlayerShip(client.LocalPlayerId)!;
+        var seen = client.Replica.World.FindShip(pirate.Id)!;
+        Assert.NotNull(BroadsideVolley.FindMark(client.Replica.World, drawn, BroadsideSide.Starboard, seen.Position));
+        client.Send(new CastAbilityCommand(0, AbilitySlot.One, seen.Position));
+        Assert.Equal(BroadsideVolley.CannonCount, client.Replica.World.Projectiles.Count(p => p.OwnerShipId == drawn.Id));
+
+        // Once the server has fired the same volley, laid on the same mark, ours become its: never a second volley.
+        var most = 0;
+        var until = _clock.Elapsed.TotalSeconds + 0.45;
+        PumpUntil(() =>
+        {
+            most = Math.Max(most, client.Replica.World.Projectiles.Count(p => p.OwnerShipId == drawn.Id));
+            return _clock.Elapsed.TotalSeconds >= until;
+        }, "the server's volley to come back");
+        Assert.Equal(BroadsideVolley.CannonCount, most);
+        Assert.True(pirate.Health < pirate.Stats.MaxHealth, "the volley should hit the pirate it was laid on");
     }
 
     [Fact]

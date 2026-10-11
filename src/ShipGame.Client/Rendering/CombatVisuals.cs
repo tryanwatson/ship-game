@@ -93,10 +93,11 @@ public sealed class CombatVisuals
                     else if (TryPose(world, shot.OwnerShipId, out var gunner))
                     {
                         // A broadside ball, from its own muzzle along the hull (moved to where the ship's drawn, and on
-                        // with it if it's arrived late), pointing where it was laid: its velocity less the way the ship gave it.
-                        var carried = gunner.Ship.Forward * gunner.Ship.Speed;
+                        // with it if it's arrived late), pointing where it was laid: its velocity less any way the ship gave it.
+                        var way = gunner.Ship.Forward * gunner.Ship.Speed;
                         var late = MathF.Max(0f, world.Tick - shot.Tick) * SimConstants.TickDelta;
-                        Fire(shot.Position + carried * late + (gunner.Position - gunner.Ship.Position), SafeDirection(shot.Velocity - carried), 1f);
+                        Fire(shot.Position + way * late + (gunner.Position - gunner.Ship.Position),
+                            SafeDirection(shot.Velocity - BroadsideVolley.CarriedVelocity(gunner.Ship)), 1f);
                     }
                     break;
                 case AreaStrikeLaunched launch:

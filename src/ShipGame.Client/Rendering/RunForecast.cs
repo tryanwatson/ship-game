@@ -73,9 +73,15 @@ public sealed class RunForecast
     {
         if (director.Cleared)
         {
-            var voted = $"{world.Players.Values.Count(p => p.CourseVote is not null)}/{world.Players.Count} VOTED";
+            var votes = world.Players.Values.Count(p => p.CourseVote is not null);
+            var voted = $"{votes}/{world.Players.Count} VOTED";
+            if (votes == world.Players.Count && Plundering.UnderWay(world))
+                return ("SETTING SAIL ONCE THE PLUNDERING'S DONE", ChartText);
             if (node.Kind == NodeKind.Port && world.Islands.FirstOrDefault(i => i.HasShipyard) is { } yard)
                 return ($"ANCHOR AT {yard.Name} TO SHOP - TAB: SAIL ON ({voted})", ChartText);
+            var loot = Plundering.LeftToPlunder(world).Count();
+            if (loot > 0)
+                return ($"{Count(loot, "ISLAND", "ISLANDS")} TO PLUNDER - TAB: SAIL ON ({voted})", ChartText);
             return ($"TAB: CHART YOUR COURSE - {voted}", ChartText);
         }
         if (node.Kind == NodeKind.Fortress)

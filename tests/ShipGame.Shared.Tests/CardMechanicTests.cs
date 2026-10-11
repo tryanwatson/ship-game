@@ -644,6 +644,22 @@ public class CardMechanicTests
     }
 
     [Fact]
+    public void GunCaptains_LeadASailingShip_AndHitIt()
+    {
+        var (world, ship) = CreateWorld(new BroadsideVolley());
+        Give(ship, "gun-captains", 1);
+        var pirate = Pirate(world, ship.Position + new Vector2(-1f, 5f));
+        pirate.IsAnchored = false;
+        pirate.Speed = pirate.Stats.MaxSpeed;
+        pirate.Throttle = ShipMovement.ThrottleLevels;
+        var health = pirate.Health;
+
+        RunTicks(world, SimConstants.TickRate);
+
+        Assert.True(pirate.Health < health);
+    }
+
+    [Fact]
     public void Grapeshot_FansMoreBallsFromEveryCannon_AtLessDamageEach()
     {
         var (world, ship) = CreateWorld(new BroadsideVolley());

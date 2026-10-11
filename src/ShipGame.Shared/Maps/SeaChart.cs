@@ -29,8 +29,9 @@ public enum Difficulty : byte
 
 /// <summary>One stop on the <see cref="SeaChart"/>.</summary>
 /// <param name="Act">From 1. The start is in act 1.</param>
-/// <param name="Row">Within its act, from 0; <see cref="SeaChart.RowsPerAct"/> is the boss's. The start's is -1.</param>
-/// <param name="Lane">Across the chart, from 0 (left); the start and bosses sit in the middle.</param>
+/// <param name="Row">Within its act, from 0; <see cref="SeaChart.HarborRow"/> is the port before the boss, and
+/// <see cref="SeaChart.BossRow"/> the boss's. The start's is -1.</param>
+/// <param name="Lane">Across the chart, from 0 (left); the start, the ports before bosses and the bosses sit in the middle.</param>
 /// <param name="Level">Sets its pirates, its fortress's guns, the cards it deals, and a port's stock.</param>
 /// <param name="Next">The stops the crew can sail on to from here; none after the last boss.</param>
 /// <param name="Name">A fortress's or port's island, named on the chart before the crew gets there; empty otherwise.</param>
@@ -47,11 +48,12 @@ public sealed record ChartNode(int Id, int Act, int Row, int Lane, NodeKind Kind
 
 /// <summary>
 /// The run's chart, drawn when it starts: <see cref="Acts"/> acts, each <see cref="RowsPerAct"/> rows of
-/// <see cref="Lanes"/> stops and then a boss. The crew sails it one stop at a time, voting for the next. Every stop
-/// leads on to the ones in its own lane and the lanes beside it in the next row, so each step is a choice between two
-/// or three; the last row of an act all leads to its boss, and a boss to the whole first row of the next act. Every
-/// row is fortresses of mixed difficulty (each one level above the last), with a port among the later rows: a fight
-/// for cards, or a repair and a shop. The deeper in, the higher every level.
+/// <see cref="Lanes"/> stops, then a port, then a boss. The crew sails it one stop at a time, voting for the next. Every
+/// stop leads on to the ones in its own lane and the lanes beside it in the next row, so each step is a choice between
+/// two or three; the last row of an act all leads to its harbor (so every boss is met fresh from a repair and a shop),
+/// the harbor to the boss, and a boss to the whole first row of the next act. Every row is fortresses of mixed
+/// difficulty (each one level above the last), with a port in the middle row: a fight for cards, or a repair and a
+/// shop. The deeper in, the higher every level.
 /// </summary>
 public sealed class SeaChart
 {
@@ -59,11 +61,20 @@ public sealed class SeaChart
     public const int RowsPerAct = 3;
     public const int Lanes = 3;
 
-    /// <summary>The lane in the middle, where the start and the bosses sit.</summary>
+    /// <summary>The lane in the middle, where the start, the harbors and the bosses sit.</summary>
     public const int MiddleLane = Lanes / 2;
 
-    /// <summary>Rows of an act (from 0) that have a port in one lane.</summary>
-    public static bool HasPort(int row) => row >= 1;
+    /// <summary>The row of an act's harbor: the lone port every route through the act comes to before its boss.</summary>
+    public const int HarborRow = RowsPerAct;
+
+    /// <summary>The row of an act's boss, just past its harbor.</summary>
+    public const int BossRow = HarborRow + 1;
+
+    /// <summary>
+    /// Rows of an act (from 0) with a port in one lane besides its fortresses: just the middle one, since the last row
+    /// already leads into the harbor.
+    /// </summary>
+    public static bool HasPort(int row) => row == 1;
 
     /// <summary>Act <paramref name="act"/>'s calmest level: 1, 3, 5.</summary>
     public static int BaseLevel(int act) => 1 + 2 * (Math.Clamp(act, 1, Acts) - 1);
@@ -87,8 +98,8 @@ public sealed class SeaChart
     public static int ExtraGuards(int act, int row, Difficulty difficulty) =>
         GuardsPerStep * ((int)difficulty - LevelSteps(act, row, difficulty));
 
-    /// <summary>A port's level, which sets its stock: its act's, and one more for each row in.</summary>
-    public static int PortLevel(int act, int row) => BaseLevel(act) + row;
+    /// <summary>A port's level, which sets its stock: its act's, and one more for each row in (the harbor's no more than the last row's).</summary>
+    public static int PortLevel(int act, int row) => BaseLevel(act) + Math.Min(row, RowsPerAct - 1);
 
     /// <summary>Boss <paramref name="act"/>'s level: 3, 5, 7.</summary>
     public static int BossLevel(int act) => 1 + 2 * Math.Clamp(act, 1, Acts);
@@ -146,13 +157,16 @@ public sealed class SeaChart
                 }
                 rows.Add(ids);
             }
+            var harbor = nextId++;
+            drafts.Add((harbor, act, HarborRow, MiddleLane, NodeKind.Port, PortLevel(act, HarborRow), Difficulty.Calm));
+            rows.Add(new[] { harbor });
             var boss = nextId++;
-            drafts.Add((boss, act, RowsPerAct, MiddleLane, NodeKind.Boss, BossLevel(act), Difficulty.Dire));
+            drafts.Add((boss, act, BossRow, MiddleLane, NodeKind.Boss, BossLevel(act), Difficulty.Dire));
             rows.Add(new[] { boss });
         }
 
         // Where each row leads: a full row to the one after by lane (its own and those beside it); to or from a single
-        // stop (the start, a boss), all of it.
+        // stop (the start, a harbor, a boss), all of it.
         var next = new Dictionary<int, IReadOnlyList<int>>();
         var all = new List<int[]> { previous };
         all.AddRange(rows);

@@ -67,7 +67,7 @@ public class VoyageFuzzTests
 
         Assert.Equal(visited, director.Route);
         Assert.True(world.IsVictory, $"the voyage stalled at {director.CurrentNode} after {visited.Count} stops");
-        // Start, three rows and a boss an act: never more, never fewer.
-        Assert.Equal(1 + SeaChart.Acts * (SeaChart.RowsPerAct + 1), visited.Count);
+        // Start, then three rows, a harbor and a boss an act: never more, never fewer.
+        Assert.Equal(1 + SeaChart.Acts * (SeaChart.RowsPerAct + 2), visited.Count);
     }
 }

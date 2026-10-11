@@ -75,9 +75,10 @@ public sealed class GameClient : Game
     private ChartScreen _chartScreen = null!;
     private GameAudio? _audio;
     private MusicPlayer? _music;
+    private SettingsPanel _settingsPanel = null!;
 
-    // The chart opens by itself once per stop, when there's a course to choose; and closes when the crew sails on.
-    private int _chartOpenedFor = -1;
+    // The chart closes when the crew sails on; the stop whose taking (or sinking) we've announced, once the cards are chosen.
+    private int _clearedAnnouncedFor = -1;
     private int _chartShownAt = -1;
 
     // The fortress whose fall the card screen is for (the latest taken).
@@ -166,12 +167,12 @@ public sealed class GameClient : Game
         base.Initialize(); // loads content, including the menu
 
         _settings = ClientSettings.Load();
-        _gameMenu.SoundPercent = (int)MathF.Round(Math.Clamp(_settings.Volume, 0f, 1f) * 100f);
-        _gameMenu.MusicPercent = (int)MathF.Round(Math.Clamp(_settings.MusicVolume, 0f, 1f) * 100f);
+        // One set of levels, shared: the sliders write it, the sound and music read it.
+        _settingsPanel.Levels = _settings.Audio;
         if (_audio is not null)
-            _audio.Volume = _settings.Volume;
+            _audio.Levels = _settings.Audio;
         if (_music is not null)
-            _music.Volume = _settings.MusicVolume;
+            _music.Levels = _settings.Audio;
         _lobbyName = PlayerNames.Clean(_settings.PlayerName);
         _menu.Address = _settings.LastAddress;
         _menu.Password = _settings.LastPassword;
@@ -192,6 +193,7 @@ public sealed class GameClient : Game
         LeaveSession();
         _session = new LocalGameSession(EmptySea(), SoloPlayerId);
         _camera.Position = IsoProjection.WorldToIso(Archipelago.Start);
+        _settingsPanel?.Close();
         _menu.Open(message, onJoinPage);
     }
 
@@ -252,7 +254,7 @@ public sealed class GameClient : Game
         _ignoreRightDrag = false;
         _gameMenu?.Close();
         _chartScreen?.Close();
-        _chartOpenedFor = -1;
+        _clearedAnnouncedFor = -1;
         _chartShownAt = -1;
     }
 
@@ -277,6 +279,7 @@ public sealed class GameClient : Game
         _cardSelect = new CardSelectScreen(_primitives);
         _cardHand = new CardHand(_primitives);
         _chartScreen = new ChartScreen(_primitives);
+        _settingsPanel = new SettingsPanel(_primitives);
         _audio = GameAudio.TryCreate();
         if (_audio is not null) // no audio device, no music either
             _music = MusicPlayer.TryCreate(System.IO.Path.Combine(AppContext.BaseDirectory, "Music"));
@@ -294,7 +297,8 @@ public sealed class GameClient : Game
     {
         var dt = gameTime.ElapsedGameTime.TotalSeconds;
         _input.Update();
-        _audio?.Update(dt);
+        _audio?.SetListener(_camera.Position, _camera.Zoom);
+        _audio?.Update(dt, _session.World, LocalPlayerId);
         _music?.Watch(_menu.IsOpen ? null : _session.World, LocalPlayerId, dt);
         _music?.Update(dt);
 
@@ -338,7 +342,9 @@ public sealed class GameClient : Game
         // choice takes effect from the next frame, so the Enter or click that resumes doesn't also act on the game.
         if (_gameMenu.IsOpen)
         {
-            if (IsActive && !menuJustOpened)
+            if (IsActive && !menuJustOpened && _settingsPanel.IsOpen)
+                UpdateSettings();
+            else if (IsActive && !menuJustOpened)
             {
                 switch (_gameMenu.Update(_input, Hud, GameMenuNote))
                 {
@@ -346,19 +352,9 @@ public sealed class GameClient : Game
                         _audio?.Play(Cue.Click);
                         _gameMenu.Close();
                         break;
-                    case GameMenuAction.Sound:
-                        _settings.Volume = _gameMenu.SoundPercent / 100f;
-                        _settings.Save();
-                        if (_audio is not null)
-                            _audio.Volume = _settings.Volume;
+                    case GameMenuAction.Settings:
                         _audio?.Play(Cue.Click);
-                        break;
-                    case GameMenuAction.Music:
-                        _settings.MusicVolume = _gameMenu.MusicPercent / 100f;
-                        _settings.Save();
-                        if (_music is not null)
-                            _music.Volume = _settings.MusicVolume;
-                        _audio?.Play(Cue.Click);
+                        _settingsPanel.Open();
                         break;
                     case GameMenuAction.Leave:
                         _audio?.Play(Cue.Click);
@@ -452,9 +448,10 @@ public sealed class GameClient : Game
     }
 
     /// <summary>
-    /// Tab opens and closes the chart. It opens by itself when the crew is done at a stop and we've yet to vote (once a
-    /// stop, so closing it sticks), and closes when the crew sails on. Not at a port: the crew is there to shop, and
-    /// it's done there the moment it arrives, so a chart springing open would look like the last click didn't take.
+    /// Tab opens and closes the chart, and it closes when the crew sails on. It never opens by itself: the game carries on
+    /// under it (online it can't pause for one sailor), so a chart springing open the moment a fortress fell or a boss
+    /// sank would take the mouse mid-fight, and ask for the click that sails away from the plunder. Instead, once done at a
+    /// stop and the cards are chosen, the banner says so and what's left ashore, and the HUD keeps the call to chart a course.
     /// </summary>
     private void UpdateChart()
     {
@@ -468,11 +465,22 @@ public sealed class GameClient : Game
             _chartScreen.Close();
             _chartShownAt = director.NodeId;
         }
-        if (director.Cleared && _chartOpenedFor != director.NodeId && LocalPlayer?.CourseVote is null
-            && director.CurrentNode?.Kind != NodeKind.Port)
+        if (director.Cleared && _clearedAnnouncedFor != director.NodeId && director.CurrentNode is { Kind: not NodeKind.Port } node)
         {
-            _chartScreen.Open();
-            _chartOpenedFor = director.NodeId;
+            _clearedAnnouncedFor = director.NodeId;
+            var loot = Plundering.LeftToPlunder(_session.World).Count();
+            var next = loot switch
+            {
+                0 => "TAB: CHART YOUR COURSE",
+                1 => "1 ISLAND TO PLUNDER  -  TAB: CHART YOUR COURSE",
+                _ => $"{loot} ISLANDS TO PLUNDER  -  TAB: CHART YOUR COURSE",
+            };
+            _seaBanner.Announce(node.Kind switch
+            {
+                NodeKind.Boss => "FLAGSHIP SUNK",
+                NodeKind.Fortress => $"{_lastFortressTaken ?? "FORTRESS"} TAKEN",
+                _ => "OPEN WATER", // the start: its banner on arrival was under the starting card
+            }, next);
         }
         if (_input.WasKeyPressed(Keys.Tab))
         {
@@ -501,8 +509,8 @@ public sealed class GameClient : Game
         _session.Update(dt);
         var events = _session.TakeEvents();
         _worldRenderer.ProcessEffects(_session.World, events);
-        _audio?.SetListener(_camera.Position, _camera.Zoom);
         _audio?.HandleEvents(_session.World, events, LocalPlayerId);
+        _music?.Hear(_session.World, events, LocalPlayerId);
         Announce(events);
     }
 
@@ -558,7 +566,7 @@ public sealed class GameClient : Game
                 _seaBanner.Announce("THE FLAGSHIP'S WATERS", $"{act}  -  BOSS {node.Act} OF {RunDirector.BossCount} IS COMING", alarm: true);
                 break;
             default:
-                _seaBanner.Announce("OPEN WATER", "CHART YOUR COURSE");
+                _seaBanner.Announce("OPEN WATER", "TAB: CHART YOUR COURSE");
                 break;
         }
     }
@@ -574,6 +582,11 @@ public sealed class GameClient : Game
         _session.Update(dt); // the sea behind the menu
         if (!IsActive)
             return;
+        if (_settingsPanel.IsOpen)
+        {
+            UpdateSettings();
+            return;
+        }
         if (_menu.OnMainPage && StartingGoldStep() is { } step)
         {
             _settings.SoloStartingGold = StepStartingGold(_settings.SoloStartingGold, step);
@@ -598,9 +611,30 @@ public sealed class GameClient : Game
                 SaveSettings();
                 Join(address, _menu.Password);
                 break;
+            case MenuAction.Settings:
+                _settingsPanel.Open();
+                break;
             case MenuAction.Quit:
                 SaveSettings();
                 Exit();
+                break;
+        }
+    }
+
+    /// <summary>The settings panel, over the title or the game menu: sliders apply as they move, and save once settled.</summary>
+    private void UpdateSettings()
+    {
+        var result = _settingsPanel.Update(_input, Hud);
+        switch (result.Action)
+        {
+            case SettingsAction.Committed:
+                _settings.Save();
+                if (result.Channel is { } channel)
+                    _audio?.Preview(channel); // in solo the game's paused: let the slider be heard
+                break;
+            case SettingsAction.Closed:
+                _settings.Save();
+                _audio?.Play(Cue.Click);
                 break;
         }
     }
@@ -621,15 +655,21 @@ public sealed class GameClient : Game
         if (_menu.IsOpen)
         {
             _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view);
-            _menu.Draw(Hud);
-            if (_menu.OnMainPage)
-                DrawSoloGold();
+            if (_settingsPanel.IsOpen)
+                _settingsPanel.Draw(Hud);
+            else
+            {
+                _menu.Draw(Hud);
+                if (_menu.OnMainPage)
+                    DrawSoloGold();
+            }
             base.Draw(gameTime);
             return;
         }
 
         var aim = ShowingAim is { } slot ? new AimPreview(slot, _aimCursor) : (AimPreview?)null;
-        _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view, aim);
+        var cursor = _gameMenu.IsOpen ? (NVector2?)null : _aimCursor;
+        _worldRenderer.Draw(_session.World, _session.InterpolationAlpha, LocalPlayerId, view, aim, cursor);
         _islandOverlays.Draw(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _session.InterpolationAlpha, view, Hud, AnchorDropProgress);
         _offscreenMarkers.Draw(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _session.InterpolationAlpha, view, Hud);
         var localShip = _session.World.GetPlayerShip(LocalPlayerId);
@@ -657,7 +697,9 @@ public sealed class GameClient : Game
             _chartScreen.Draw(_session.World, LocalPlayerId, _input, Hud);
         if (inRun && ChoosingCards)
             _cardSelect.Draw(_session.World, LocalPlayer, _lastFortressTaken, _input, Hud);
-        if (_gameMenu.IsOpen)
+        if (_gameMenu.IsOpen && _settingsPanel.IsOpen)
+            _settingsPanel.Draw(Hud);
+        else if (_gameMenu.IsOpen)
             _gameMenu.Draw(Hud, GameMenuTitle, GameMenuNote);
         base.Draw(gameTime);
     }
@@ -678,8 +720,9 @@ public sealed class GameClient : Game
 
         var mouseWorld = IsoProjection.IsoToWorld(_camera.ScreenToIso(_input.MousePosition, GraphicsDevice.Viewport));
 
-        // Abilities. Broadsides fire on key-down. Aimed ones are quick-cast: tap fires at the cursor (on release,
-        // no indicator), hold shows the targeting indicator and releasing fires, any click while down cancels.
+        // Abilities. Broadsides fire on key-down, laid on the enemy nearest the cursor on that side (the lock-on
+        // shows which). Other aimed ones are quick-cast: tap fires at the cursor (on release, no indicator), hold
+        // shows the targeting indicator and releasing fires, any click while down cancels.
         var ship = _session.World.GetPlayerShip(LocalPlayerId);
         _aimCursor = mouseWorld;
         if (_aimKeyDown is not null)
@@ -687,7 +730,7 @@ public sealed class GameClient : Game
 
         foreach (var (key, slot) in AbilityKeys)
         {
-            var aimed = ship?.GetAbility(slot)?.Definition.IsAimed == true;
+            var aimed = ship?.GetAbility(slot)?.Definition is { IsAimed: true } and not BroadsideVolley;
             if (!aimed)
             {
                 if (_input.WasKeyPressed(key))

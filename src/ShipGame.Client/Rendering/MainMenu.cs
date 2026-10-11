@@ -15,11 +15,12 @@ public enum MenuAction
     PlaySolo,
     Host,
     Join,
+    Settings,
     Quit,
 }
 
 /// <summary>
-/// The title menu: play solo, host, or join a server by address (and password, if it has one). Arrow keys and
+/// The title menu: play solo, host, or join a server by address (and password, if it has one); or the settings. Arrow keys and
 /// Enter or the mouse; Tab or Up/Down move between the join page's fields; Esc backs out of the join page (it never
 /// quits; that's the Quit button). Typing goes through <see cref="OnTextInput"/> so keyboard layouts and key repeat
 /// behave; Ctrl/Cmd+V pastes into the focused field and Ctrl/Cmd+C copies the address.
@@ -40,6 +41,7 @@ public sealed class MainMenu
         Join,
         FriendlyFire,
         Testing,
+        Settings,
         Quit,
         Connect,
         Back,
@@ -74,7 +76,7 @@ public sealed class MainMenu
     private static readonly Color ButtonBorder = new(130, 140, 165);
     private static readonly Color FieldBack = new(8, 10, 16);
 
-    private static readonly Item[] MainItems = { Item.Solo, Item.Host, Item.Join, Item.FriendlyFire, Item.Testing, Item.Quit };
+    private static readonly Item[] MainItems = { Item.Solo, Item.Host, Item.Join, Item.FriendlyFire, Item.Testing, Item.Settings, Item.Quit };
     private static readonly Item[] JoinItems = { Item.Connect, Item.Back };
 
     private readonly PrimitiveBatch _batch;
@@ -302,6 +304,8 @@ public sealed class MainMenu
             case Item.Testing:
                 Testing = !Testing;
                 return MenuAction.None;
+            case Item.Settings:
+                return MenuAction.Settings;
             case Item.Quit:
                 return MenuAction.Quit;
             case Item.Connect:
@@ -337,6 +341,7 @@ public sealed class MainMenu
         Item.Join => "JOIN GAME",
         Item.FriendlyFire => FriendlyFire ? "HOSTING: FRIENDLY FIRE ON" : "HOSTING: CO-OP ONLY",
         Item.Testing => Testing ? $"TESTING: START WITH {CardRewards.TestingHands} CARDS" : "TESTING: OFF",
+        Item.Settings => "SETTINGS",
         Item.Quit => "QUIT",
         Item.Connect => "JOIN",
         _ => "BACK",

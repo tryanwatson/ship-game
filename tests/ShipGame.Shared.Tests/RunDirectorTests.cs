@@ -118,7 +118,7 @@ public class RunDirectorTests
         var chart = SeaChart.Generate(seed: 3);
 
         Assert.Equal(NodeKind.Start, chart.Start.Kind);
-        Assert.Equal(1 + SeaChart.Acts * (SeaChart.RowsPerAct * SeaChart.Lanes + 1), chart.Nodes.Count);
+        Assert.Equal(1 + SeaChart.Acts * (SeaChart.RowsPerAct * SeaChart.Lanes + 2), chart.Nodes.Count);
         var bosses = chart.Nodes.Where(n => n.Kind == NodeKind.Boss).OrderBy(n => n.Act).ToList();
         Assert.Equal(Enumerable.Range(1, SeaChart.Acts), bosses.Select(b => b.Act));
         Assert.Equal(new[] { 3, 5, 7 }, bosses.Select(b => b.Level));
@@ -142,7 +142,7 @@ public class RunDirectorTests
         for (var seed = 0; seed < 20; seed++)
         {
             var chart = SeaChart.Generate(seed);
-            foreach (var row in chart.Nodes.Where(n => n.Kind is NodeKind.Fortress or NodeKind.Port).GroupBy(n => (n.Act, n.Row)))
+            foreach (var row in chart.Nodes.Where(n => n.Kind is NodeKind.Fortress or NodeKind.Port && n.Row < SeaChart.HarborRow).GroupBy(n => (n.Act, n.Row)))
             {
                 var (act, index) = row.Key;
                 Assert.Equal(SeaChart.Lanes, row.Count());
@@ -172,11 +172,31 @@ public class RunDirectorTests
             var next = node.Next.Select(id => chart.Find(id)!).ToList();
             if (node.Row == SeaChart.RowsPerAct - 1)
             {
-                Assert.Equal(NodeKind.Boss, Assert.Single(next).Kind);
+                Assert.Equal((NodeKind.Port, SeaChart.HarborRow), (Assert.Single(next).Kind, next[0].Row));
+                continue;
+            }
+            if (node.Row == SeaChart.HarborRow)
+            {
+                Assert.Equal((NodeKind.Boss, node.Act), (Assert.Single(next).Kind, next[0].Act));
                 continue;
             }
             Assert.All(next, n => Assert.Equal((node.Act, node.Row + 1), (n.Act, n.Row)));
             Assert.Equal(Enumerable.Range(node.Lane - 1, 3).Where(l => l is >= 0 and < SeaChart.Lanes), next.Select(n => n.Lane).Order());
+        }
+    }
+
+    [Fact]
+    public void EveryBoss_IsComeToFromAPort()
+    {
+        for (var seed = 0; seed < 20; seed++)
+        {
+            var chart = SeaChart.Generate(seed);
+            foreach (var boss in chart.Nodes.Where(n => n.Kind == NodeKind.Boss))
+            {
+                var before = chart.Nodes.Where(n => n.Next.Contains(boss.Id)).ToList();
+                Assert.Equal((NodeKind.Port, boss.Act, SeaChart.HarborRow), (Assert.Single(before).Kind, before[0].Act, before[0].Row));
+                Assert.False(string.IsNullOrEmpty(before[0].Name));
+            }
         }
     }
 
@@ -237,6 +257,29 @@ public class RunDirectorTests
         world.Step();
         Assert.Equal(course.Id, director.NodeId);
         Assert.All(world.Players.Values, p => Assert.Null(p.CourseVote)); // votes start over at each stop
+    }
+
+    [Fact]
+    public void TheCrew_WaitsForACrewmatesPlunder_BeforeSettingSail()
+    {
+        var (world, director) = CreateRun(players: 2);
+        var start = director.NodeId;
+        var island = world.Islands.First(i => !world.IsPort(i));
+        var looter = world.GetPlayerShip(2)!;
+        var offshore = Vector2.Normalize(world.RegionEntry - island.Center);
+        looter.Position = looter.PreviousPosition = island.ShoreToward(offshore) + offshore * 2f;
+        looter.IsAnchored = true;
+        RunTicks(world, Plundering.DurationTicks / 2);
+        Assert.NotNull(looter.PlunderIslandId);
+        var gold = world.Players[2].Gold;
+
+        SailTo(world, Next(world).Id);
+        Assert.Equal(start, director.NodeId); // everyone's voted, but not from under a half-done plunder
+        Assert.True(Plundering.UnderWay(world));
+
+        RunTicks(world, Plundering.DurationTicks);
+        Assert.NotEqual(start, director.NodeId); // done, and off
+        Assert.True(world.Players[2].Gold > gold);
     }
 
     [Fact]

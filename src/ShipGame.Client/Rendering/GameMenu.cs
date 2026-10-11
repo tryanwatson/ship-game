@@ -10,16 +10,13 @@ public enum GameMenuAction
     None,
     Resume,
     Leave,
-    /// <summary><see cref="GameMenu.SoundPercent"/> changed.</summary>
-    Sound,
-    /// <summary><see cref="GameMenu.MusicPercent"/> changed.</summary>
-    Music,
+    Settings,
 }
 
 /// <summary>
 /// The Esc menu during a game or in the lobby: resume, or leave for the title menu. Arrow keys and Enter or the
 /// mouse; Esc again resumes. The caller titles it (solo pauses the game behind it; online it carries on, which the
-/// note can say). The sound row steps the volume: click or Enter to go up a notch (wrapping to off), Left/Right too.
+/// note can say). Settings opens the <see cref="SettingsPanel"/>.
 /// </summary>
 public sealed class GameMenu
 {
@@ -30,7 +27,6 @@ public sealed class GameMenu
     private const float TitleScale = 4f;
     private const float LabelScale = 2f;
     private const float SmallScale = 1.5f;
-    private const int SoundStep = 20;
 
     private static readonly Color Dim = new Color(0, 0, 0) * 0.45f;
     private static readonly Color PanelBack = new Color(14, 18, 28) * 0.95f;
@@ -45,8 +41,7 @@ public sealed class GameMenu
     private static readonly (string Label, GameMenuAction Action)[] Items =
     {
         ("RESUME", GameMenuAction.Resume),
-        ("SOUND", GameMenuAction.Sound),
-        ("MUSIC", GameMenuAction.Music),
+        ("SETTINGS", GameMenuAction.Settings),
         ("LEAVE GAME", GameMenuAction.Leave),
     };
 
@@ -59,12 +54,6 @@ public sealed class GameMenu
     }
 
     public bool IsOpen { get; private set; }
-
-    /// <summary>The volume shown on (and set by) the sound row, 0..100.</summary>
-    public int SoundPercent { get; set; } = 80;
-
-    /// <summary>The volume shown on (and set by) the music row, 0..100.</summary>
-    public int MusicPercent { get; set; } = 30;
 
     public void Open()
     {
@@ -82,16 +71,6 @@ public sealed class GameMenu
             _selected = (_selected + Items.Length - 1) % Items.Length;
         if (input.WasKeyPressed(Keys.Down))
             _selected = (_selected + 1) % Items.Length;
-        if (Items[_selected].Action is GameMenuAction.Sound or GameMenuAction.Music
-            && (input.WasKeyPressed(Keys.Left) || input.WasKeyPressed(Keys.Right)))
-        {
-            var step = input.WasKeyPressed(Keys.Left) ? -SoundStep : SoundStep;
-            if (Items[_selected].Action == GameMenuAction.Sound)
-                SoundPercent = Math.Clamp(SoundPercent + step, 0, 100);
-            else
-                MusicPercent = Math.Clamp(MusicPercent + step, 0, 100);
-            return Items[_selected].Action;
-        }
 
         var mouse = hud.FromScreen(input.Mouse.Position);
         var moved = input.Mouse.Position != input.PreviousMouse.Position;
@@ -103,31 +82,12 @@ public sealed class GameMenu
             if (moved)
                 _selected = i;
             if (input.WasLeftMousePressed)
-                return Choose(i);
+                return Items[i].Action;
         }
 
-        return input.WasKeyPressed(Keys.Enter) ? Choose(_selected) : GameMenuAction.None;
+        return input.WasKeyPressed(Keys.Enter) ? Items[_selected].Action : GameMenuAction.None;
     }
 
-    private GameMenuAction Choose(int item)
-    {
-        if (Items[item].Action == GameMenuAction.Sound)
-            SoundPercent = NextStep(SoundPercent);
-        else if (Items[item].Action == GameMenuAction.Music)
-            MusicPercent = NextStep(MusicPercent);
-        return Items[item].Action;
-    }
-
-    private static int NextStep(int percent) => percent >= 100 ? 0 : Math.Min(100, percent + SoundStep);
-
-    private string Label(int item) => Items[item].Action switch
-    {
-        GameMenuAction.Sound => VolumeLabel("SOUND", SoundPercent),
-        GameMenuAction.Music => VolumeLabel("MUSIC", MusicPercent),
-        _ => Items[item].Label,
-    };
-
-    private static string VolumeLabel(string name, int percent) => percent == 0 ? $"{name}  OFF" : $"{name}  {percent}%";
 
     /// <param name="note">A line under the title, or null.</param>
     public void Draw(HudView hud, string title, string? note)
@@ -150,7 +110,7 @@ public sealed class GameMenu
             var selected = i == _selected;
             Fill(buttons[i], selected ? ButtonHover : ButtonBack);
             Outline(buttons[i], selected ? Title : ButtonBorder);
-            var label = Label(i);
+            var label = Items[i].Label;
             PixelFont.Draw(_batch, label, new Vector2(buttons[i].Center.X - PixelFont.Measure(label, LabelScale) / 2f,
                 buttons[i].Center.Y - PixelFont.Height(LabelScale) / 2f), LabelScale, Text);
         }

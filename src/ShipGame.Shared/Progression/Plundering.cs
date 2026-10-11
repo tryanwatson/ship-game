@@ -75,6 +75,17 @@ public static class Plundering
             .Where(s => s.OwnerPlayerId is { } id && id != plundererId && !s.IsSunk && island.DistanceTo(s.Position) <= ShareRange)
             .Select(s => s.OwnerPlayerId!.Value);
 
+    /// <summary>
+    /// The islands here with gold still to give without asking: not plundered, not a fortress still held, and not a
+    /// port (those are shops, plundered only on request).
+    /// </summary>
+    public static IEnumerable<Island> LeftToPlunder(World world) =>
+        world.Islands.Where(i => !world.IsPlundered(i) && !world.IsHeld(i) && !world.IsPort(i));
+
+    /// <summary>Some player's ship afloat is part-way through a plunder (the crew doesn't sail off from under it).</summary>
+    public static bool UnderWay(World world) =>
+        world.Ships.Any(s => s.OwnerPlayerId is not null && !s.IsSunk && s.PlunderIslandId is not null);
+
     /// <summary>0..1 progress of the ship's current plunder; 0 when it isn't plundering.</summary>
     public static float Progress(Ship ship) => ship.PlunderIslandId is null ? 0f : (float)ship.PlunderTicks / DurationTicks;
 

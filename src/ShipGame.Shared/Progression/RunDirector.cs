@@ -211,13 +211,18 @@ public sealed class RunDirector
         Enter(world, node);
     }
 
-    /// <summary>Once every player has voted, the crew sails for the stop with the most votes (a tie settled at random).</summary>
+    /// <summary>
+    /// Once every player has voted, the crew sails for the stop with the most votes (a tie settled at random): but not
+    /// from under a crewmate part-way through a plunder (they'd lose it), so it waits the few seconds for that to finish.
+    /// </summary>
     private void SetSailIfAgreed(World world)
     {
         if (Chart is null || world.Players.Count == 0)
             return;
         // Not while anyone's still choosing from a hand bought at the port: it'd follow them into the next fight.
         if (world.Players.Values.Any(p => p.CardOffers.Count > 0))
+            return;
+        if (Plundering.UnderWay(world))
             return;
         var votes = world.Players.Values.Select(p => p.CourseVote).ToList();
         if (votes.Any(v => v is null || !Chart.Leads(NodeId, v.Value)))

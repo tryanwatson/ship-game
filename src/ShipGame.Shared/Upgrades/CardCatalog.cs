@@ -507,7 +507,7 @@ public static class CardCatalog
         {
             AbilityId = BroadsideVolley.AbilityId,
             Values = new[] { V(0.15f, 0.4f) },
-            Describe = v => $"EACH BROADSIDE DECK FIRES BY ITSELF WHENEVER IT'S LOADED AND AN ENEMY IS IN ITS LANE. RELOADS {P(v[0])} FASTER.",
+            Describe = v => $"EACH BROADSIDE DECK FIRES BY ITSELF THE MOMENT IT'S LOADED AND CAN REACH AN ENEMY, LEADING ITS AIM. RELOADS {P(v[0])} FASTER.",
             WeaponEffects = v => new[] { Flat(AutoFire, 1f), Times(Cooldown, Faster(v[0])) },
         },
         new("grapeshot", "GRAPESHOT", CardTier.Gold)

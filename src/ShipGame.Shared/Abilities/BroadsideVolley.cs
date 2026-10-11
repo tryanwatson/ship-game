@@ -11,7 +11,9 @@ namespace ShipGame.Shared.Abilities;
 /// Skills can change the number of cannon, and add damage up close (<see cref="AbilityStat.CloseRangeDamage"/>)
 /// or when fired near full sail (<see cref="AbilityStat.SpeedDamage"/>). Cards can turn it into a ring all round the
 /// ship (<see cref="AbilityStat.Ring"/>), and make it fire by itself (<see cref="AbilityStat.AutoFire"/>, and the ring
-/// always does): see <see cref="World"/>'s FireBroadsidesByThemselves.
+/// always does): see <see cref="World"/>'s FireWeaponsByThemselves.
+/// A player's guns are easier to lay than a pirate's (see <see cref="HasPlayerGunnery"/>): a wider window, balls that
+/// fly where they're laid, and a volley that finds the enemy nearest the aim (see <see cref="FindMark"/>).
 /// </summary>
 public sealed class BroadsideVolley : Ability
 {
@@ -30,8 +32,11 @@ public sealed class BroadsideVolley : Ability
     /// <summary>Fraction of top speed the ship must be making for <see cref="AbilityStat.SpeedDamage"/>.</summary>
     public const float RunningSpeedFraction = 0.75f;
 
-    /// <summary>How far fore or aft of the beam the guns can be laid, in degrees: a 30-degree window each side.</summary>
+    /// <summary>How far fore or aft of the beam a pirate's guns can be laid, in degrees: a 30-degree window each side.</summary>
     public const float AimArcDegrees = 15f;
+
+    /// <summary>How far fore or aft of the beam a player's guns can be laid, in degrees: a 70-degree window each side.</summary>
+    public const float PlayerAimArcDegrees = 35f;
 
     /// <summary>However far skills widen the window, the guns still fire off the side.</summary>
     public const float MaxAimArcDegrees = 75f;
@@ -50,7 +55,20 @@ public sealed class BroadsideVolley : Ability
     /// <summary>Man o' War: the broadside is a ring all round the ship, and fires by itself.</summary>
     public static bool FiresRing(Ship ship) => ship.AbilityValue(AbilityId, AbilityStat.Ring, 0f) >= 0.5f;
 
-    /// <summary>Gun Captains: each deck fires by itself when there's an enemy in its lane.</summary>
+    /// <summary>
+    /// Whether a player sails this ship. A player's broadside lays <see cref="PlayerAimArcDegrees"/> round, its balls fly
+    /// where they're laid (they don't carry the ship's way, so the aim shows true at any speed), and it's laid on the
+    /// enemy nearest the aim that it can reach, led (see <see cref="FindMark"/>). Pirates' guns get none of that.
+    /// </summary>
+    public static bool HasPlayerGunnery(Ship ship) => ship.OwnerPlayerId is not null;
+
+    /// <summary>A pirate's balls carry its way, so a ship sailing alongside is led for it; a player's fly where they're laid.</summary>
+    public static bool CarriesShipMotion(Ship ship) => !HasPlayerGunnery(ship);
+
+    /// <summary>The way this ship's balls carry on top of their own speed (see <see cref="CarriesShipMotion"/>).</summary>
+    public static Vector2 CarriedVelocity(Ship ship) => CarriesShipMotion(ship) ? ship.Forward * ship.Speed : Vector2.Zero;
+
+    /// <summary>Gun Captains: each deck fires by itself, led, when there's an enemy it can reach (see <see cref="FindMark"/>).</summary>
     public static bool FiresItself(Ship ship) => ship.AbilityValue(AbilityId, AbilityStat.AutoFire, 0f) >= 0.5f;
 
     /// <summary>Balls each cannon fires: 1, or more with Grapeshot.</summary>
@@ -74,7 +92,8 @@ public sealed class BroadsideVolley : Ability
 
     /// <summary>This ship's aiming window either side of the beam, in radians.</summary>
     public static float AimArcFor(Ship ship) =>
-        Math.Clamp(ship.AbilityValue(AbilityId, AbilityStat.AimArc, AimArcDegrees), 0f, MaxAimArcDegrees) * MathF.PI / 180f;
+        Math.Clamp(ship.AbilityValue(AbilityId, AbilityStat.AimArc, HasPlayerGunnery(ship) ? PlayerAimArcDegrees : AimArcDegrees),
+            0f, MaxAimArcDegrees) * MathF.PI / 180f;
 
     public static float DamageFor(Ship ship) =>
         Damage * ship.Stats.WeaponDamage * ship.AbilityValue(AbilityId, AbilityStat.Damage, 1f) * ship.CastDamageScale;
@@ -100,7 +119,7 @@ public sealed class BroadsideVolley : Ability
 
     public override string Name => "Broadside";
 
-    public override string Description => "A ROW OF CANNON OFF EITHER BEAM, LAID A LITTLE FORE OR AFT. EACH SIDE RELOADS ON ITS OWN.";
+    public override string Description => "A ROW OF CANNON OFF EITHER BEAM, LAID ON THE NEAREST ENEMY TO YOUR AIM. EACH SIDE RELOADS ON ITS OWN.";
 
     public const int PortChannel = 0;
     public const int StarboardChannel = 1;
@@ -150,13 +169,19 @@ public sealed class BroadsideVolley : Ability
         }
 
         var side = SideToward(caster, target);
+        if (HasPlayerGunnery(caster) && FindMark(world, caster, side, target) is { } mark)
+            target = mark.Aim;
         var offset = AimOffset(caster, caster.Position, caster.Heading, side, target);
         Fire(world, caster, side, offset);
         if (FiresBothSides(caster))
         {
-            // The other deck goes off too, laid as far fore or aft, and reloads with it (not for an echo, which reloads nothing).
+            // The other deck goes off too, laid as far fore or aft (a player's on its own nearest mark, if it has one),
+            // and reloads with it (not for an echo, which reloads nothing).
             var other = side == BroadsideSide.Starboard ? BroadsideSide.Port : BroadsideSide.Starboard;
-            Fire(world, caster, other, -offset);
+            var otherOffset = HasPlayerGunnery(caster) && FindMark(world, caster, other, caster.Position) is { } otherMark
+                ? AimOffset(caster, caster.Position, caster.Heading, other, otherMark.Aim)
+                : -offset;
+            Fire(world, caster, other, otherOffset);
             if (!caster.IsEchoing)
                 caster.FindAbility(Id)?.StartCooldown(ChannelOf(other), CooldownTicksFor(caster), caster.Stats.CooldownSpeed);
         }
@@ -193,8 +218,8 @@ public sealed class BroadsideVolley : Ability
             for (var g = 0; g < grape; g++)
             {
                 var fan = grape == 1 ? 0f : -spread + 2f * spread * g / (grape - 1);
-                // Cannonballs inherit the ship's motion, so firing on the move leads the shot.
-                var velocity = Geometry.Rotate(direction, fan) * speed + forward * caster.Speed;
+                // A pirate's cannonballs inherit the ship's motion, so firing on the move leads the shot (see CarriesShipMotion).
+                var velocity = Geometry.Rotate(direction, fan) * speed + CarriedVelocity(caster);
                 world.SpawnProjectile(caster, muzzle, velocity, damage, lifetimeTicks, effects: effects);
             }
         }
@@ -217,7 +242,7 @@ public sealed class BroadsideVolley : Ability
             var angle = caster.Heading + MathF.Tau * (i + turn) / shots;
             var direction = new Vector2(MathF.Cos(angle), MathF.Sin(angle));
             var muzzle = caster.Position + direction * (caster.Stats.Beam / 2f);
-            world.SpawnProjectile(caster, muzzle, direction * speed + caster.Forward * caster.Speed, damage, lifetimeTicks, effects: effects);
+            world.SpawnProjectile(caster, muzzle, direction * speed + CarriedVelocity(caster), damage, lifetimeTicks, effects: effects);
         }
         return true;
     }
@@ -306,6 +331,53 @@ public sealed class BroadsideVolley : Ability
         var along = Geometry.Cross(fromMuzzles, direction) / skew;
         return down <= RangeFor(ship) + radius
             && MathF.Abs(along) <= HalfSpan(ship) + (Projectile.DefaultRadius + radius) / MathF.Abs(skew);
+    }
+
+    /// <summary>
+    /// A mark counts as in reach when a circle this share of its hull's radius, round where it'll be, is in the lane:
+    /// the volley is laid on its middle, not just clipping it.
+    /// </summary>
+    public const float MarkTightness = 0.5f;
+
+    /// <summary>Passes refining where a mark will be by the time the balls arrive.</summary>
+    private const int LeadIterations = 3;
+
+    /// <summary>
+    /// The enemy <paramref name="ship"/>'s <paramref name="side"/> deck can hit now, nearest <paramref name="near"/>
+    /// (the player's aim, or the ship itself), and where to lay the guns to hit it: where it will be when the balls get
+    /// there, sailing on as it is. Judged from where a lagging player saw it (see <see cref="Ship.ShotRewindTicks"/>),
+    /// as the balls will be. Never a crewmate, even with friendly fire, nor anything behind land. Null if none.
+    /// </summary>
+    public static (Ship Target, Vector2 Aim)? FindMark(World world, Ship ship, BroadsideSide side, Vector2 near)
+    {
+        if (side == BroadsideSide.None)
+            return null;
+        var speed = ProjectileSpeedFor(ship);
+        var carried = CarriedVelocity(ship);
+        var seenAt = world.Tick - ship.ShotRewindTicks;
+        (Ship Target, Vector2 Aim)? best = null;
+        var bestDistance = float.PositiveInfinity;
+        foreach (var other in world.Ships)
+        {
+            if (other.IsSunk || other.Team == ship.Team || !world.CanDamage(ship.Id, ship.Team, other))
+                continue;
+            // Over the flight, what counts is how the target moves against the balls' own drift.
+            var seen = other.PoseAt(seenAt).Position;
+            var relative = other.Velocity - carried;
+            var aim = seen;
+            for (var i = 0; i < LeadIterations; i++)
+                aim = seen + relative * (Vector2.Distance(ship.Position, aim) / speed);
+            if (!Covers(ship, side, aim, other.Stats.Radius * MarkTightness)
+                || world.LineHitsLand(ship.Position, aim, Projectile.DefaultRadius, clearForts: true))
+                continue;
+            var distance = Vector2.DistanceSquared(aim, near);
+            if (distance < bestDistance)
+            {
+                best = (other, aim);
+                bestDistance = distance;
+            }
+        }
+        return best;
     }
 
     /// <summary>The side whose lane covers <paramref name="point"/>, or <see cref="BroadsideSide.None"/>.</summary>

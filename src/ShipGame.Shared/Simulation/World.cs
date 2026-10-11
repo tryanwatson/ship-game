@@ -1186,7 +1186,8 @@ public sealed class World
 
     /// <summary>
     /// Weapons that fire themselves. A Man o' War's ring goes off whenever it's loaded and an enemy is in range; with
-    /// gun captains, each broadside deck fires whenever it's loaded and an enemy is in its lane; and a Floating
+    /// gun captains, each broadside deck fires whenever it's loaded and can reach an enemy, led (see
+    /// <see cref="BroadsideVolley.FindMark"/>); and a Floating
     /// Fortress at anchor fires all its guns that way, its long gun and mortar at the nearest enemy in reach, laid
     /// where it's headed. Each takes the nearest enemy, if several.
     /// </summary>
@@ -1213,8 +1214,8 @@ public sealed class World
                         foreach (var side in new[] { BroadsideSide.Port, BroadsideSide.Starboard })
                         {
                             if (guns.IsChannelReady(BroadsideVolley.ChannelOf(side))
-                                && NearestEnemy(ship, other => BroadsideVolley.Covers(ship, side, other.Position, other.Stats.Radius)) is { } enemy)
-                                CastAbility(ship, slot, enemy.Position);
+                                && BroadsideVolley.FindMark(this, ship, side, ship.Position) is { } mark)
+                                CastAbility(ship, slot, mark.Aim);
                         }
                         break;
                     case { Definition: LongGun, IsReady: true } when fortress:

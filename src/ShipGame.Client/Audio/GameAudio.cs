@@ -25,7 +25,7 @@ public sealed class GameAudio : IDisposable
     private readonly record struct Limit(int Count, double Seconds);
 
     private readonly Dictionary<Cue, SoundEffect[]> _sounds;
-    private readonly SoundEffectInstance _sea;
+    private readonly SeaAmbience _sea;
     private readonly Random _random = new();
     private readonly List<Pending> _pending = new();
     private readonly Dictionary<Cue, List<double>> _recent = new();
@@ -39,15 +39,11 @@ public sealed class GameAudio : IDisposable
     private double _clock;
     private Vector2 _listener;
     private float _zoom = 1f;
-    private float _volume = 1f;
 
     private GameAudio(Dictionary<Cue, SoundEffect[]> sounds)
     {
         _sounds = sounds;
-        _sea = sounds[Cue.Sea][0].CreateInstance();
-        _sea.IsLooped = true;
-        _sea.Volume = BaseVolume(Cue.Sea);
-        _sea.Play();
+        _sea = new SeaAmbience(sounds);
     }
 
     public static GameAudio? TryCreate()
@@ -70,16 +66,8 @@ public sealed class GameAudio : IDisposable
         }
     }
 
-    /// <summary>Sound effects volume (the sea's too), 0..1. The music has its own (see <see cref="MusicPlayer"/>).</summary>
-    public float Volume
-    {
-        get => _volume;
-        set
-        {
-            _volume = Math.Clamp(value, 0f, 1f);
-            _sea.Volume = BaseVolume(Cue.Sea) * _volume;
-        }
-    }
+    /// <summary>The player's volume sliders: read as each sound starts (and each frame for the sea), so changes apply at once.</summary>
+    public AudioLevels Levels { get; set; } = new();
 
     /// <summary>How loud each sound plays at full volume, relative to the rest.</summary>
     private static float BaseVolume(Cue cue) => cue switch
@@ -109,7 +97,6 @@ public sealed class GameAudio : IDisposable
         Cue.Alarm => 0.6f,
         Cue.Fanfare => 0.55f,
         Cue.Victory or Cue.Defeat => 0.6f,
-        Cue.Sea => 0.5f,
         _ => 0.5f,
     };
 
@@ -252,10 +239,12 @@ public sealed class GameAudio : IDisposable
         }
     }
 
-    /// <summary>Starts sounds whose delay is up.</summary>
-    public void Update(double elapsedSeconds)
+    /// <summary>Starts sounds whose delay is up, and moves the sea on (listening to <paramref name="world"/>, if there is one).</summary>
+    public void Update(double elapsedSeconds, World? world = null, int localPlayerId = 0)
     {
         _clock += elapsedSeconds;
+        if (world is not null)
+            _sea.Update(elapsedSeconds, world, localPlayerId, _listener, _zoom, Levels.Gain(Channel.Ambience));
         for (var i = _pending.Count - 1; i >= 0; i--)
         {
             if (_pending[i].At > _clock)
@@ -264,6 +253,21 @@ public sealed class GameAudio : IDisposable
             _pending.RemoveAt(i);
             Start(p.Cue, p.Volume, p.Pan, p.Pitch);
         }
+    }
+
+    /// <summary>A sample of what <paramref name="channel"/>'s slider controls, to hear it as it's set.</summary>
+    public void Preview(Channel channel)
+    {
+        Cue? cue = channel switch
+        {
+            Channel.Master or Channel.Combat => Cue.Cannon,
+            Channel.Interface => Cue.Coin,
+            Channel.Alerts => Cue.Bell,
+            Channel.Ambience => Cue.Swell,
+            _ => null, // the music's playing already
+        };
+        if (cue is { } sample)
+            Start(sample, 1f, 0f, 0f);
     }
 
     /// <summary>A sound that isn't anywhere in particular: the interface, gold, the run's big moments.</summary>
@@ -300,7 +304,7 @@ public sealed class GameAudio : IDisposable
         if (SoundSynth.IsTuned(cue))
             pitch = 0f; // in key, and staying there
         var takes = _sounds[cue];
-        var level = volume * BaseVolume(cue) * _volume;
+        var level = volume * BaseVolume(cue) * Levels.Gain(AudioLevels.ChannelOf(cue));
         if (level > 0.001f)
             takes[_random.Next(takes.Length)].Play(Math.Clamp(level, 0f, 1f), Math.Clamp(pitch, -1f, 1f), pan);
     }

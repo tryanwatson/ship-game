@@ -40,7 +40,7 @@ public class BalanceRulesTests
         new(1, act, 1, SeaChart.MiddleLane, NodeKind.Fortress, level, difficulty, Array.Empty<int>());
 
     private static ChartNode BossStop(int round) =>
-        new(1, round, SeaChart.RowsPerAct, SeaChart.MiddleLane, NodeKind.Boss, SeaChart.BossLevel(round), Difficulty.Dire, Array.Empty<int>());
+        new(1, round, SeaChart.BossRow, SeaChart.MiddleLane, NodeKind.Boss, SeaChart.BossLevel(round), Difficulty.Dire, Array.Empty<int>());
 
     private static void RunTicks(World world, int ticks)
     {

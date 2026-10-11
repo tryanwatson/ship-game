@@ -37,7 +37,6 @@ public sealed class WorldRenderer
     // Hugs the hull: the beam is 0.45 tiles out from the centerline, so this sits just outside the sides.
     private const float DeckRingInner = 0.75f;
     private const float DeckRingOuter = 0.95f;
-    private const float DeckArcHalfDegrees = 20f;
 
     private static readonly Color AimFill = new Color(170, 220, 255) * 0.18f;
     private static readonly Color AimEdge = new Color(170, 220, 255) * 0.6f;
@@ -104,7 +103,8 @@ public sealed class WorldRenderer
         _forts = new FortVisuals(batch);
     }
 
-    public void Draw(World world, float alpha, int localPlayerId, Matrix view, AimPreview? aim = null)
+    /// <param name="cursor">Where the mouse points, in world space: the broadside shows what it'd be laid on (see DrawBroadsideMark).</param>
+    public void Draw(World world, float alpha, int localPlayerId, Matrix view, AimPreview? aim = null, NVector2? cursor = null)
     {
         // Shells and warnings run on ticks; alpha is how far we are into the latest one.
         var renderTick = world.Tick - 1 + alpha;
@@ -147,6 +147,8 @@ public sealed class WorldRenderer
         if (localShip is not null)
         {
             DrawLocalShipOverlays(localShip, alpha);
+            if (cursor is { } mouse)
+                DrawBroadsideMark(world, localShip, alpha, mouse);
             if (aim is { } preview)
                 DrawAimPreview(localShip, NVector2.Lerp(localShip.PreviousPosition, localShip.Position, alpha), preview);
         }
@@ -249,8 +251,8 @@ public sealed class WorldRenderer
     }
 
     /// <summary>
-    /// The broadside readiness ring on the water around a ship: an arc on each beam, centered where that deck fires.
-    /// Loaded: glowing orange. Reloading: dark, refilling from the stern end toward the bow as the guns come ready.
+    /// The broadside readiness ring on the water around a ship: an arc on each beam, as far round as that deck can be
+    /// laid. Loaded: glowing orange. Reloading: dark, refilling from the stern end toward the bow as the guns come ready.
     /// Only drawn for the local player's ship.
     /// </summary>
     private void DrawBroadsideRing(Ship ship, NVector2 pos, float heading)
@@ -258,7 +260,7 @@ public sealed class WorldRenderer
         if (ship.Abilities.FirstOrDefault(a => a?.Definition is BroadsideVolley) is not { } broadside)
             return;
 
-        var halfArc = DeckArcHalfDegrees * MathF.PI / 180f;
+        var halfArc = BroadsideVolley.AimArcFor(ship);
         foreach (var side in new[] { BroadsideSide.Port, BroadsideSide.Starboard })
         {
             var channel = BroadsideVolley.ChannelOf(side);
@@ -285,11 +287,11 @@ public sealed class WorldRenderer
     /// <summary>A band of a ring on the water between two angles, built from small convex quads.</summary>
     private void DrawRingArc(NVector2 center, float from, float to, float inner, float outer, Color color)
     {
-        const int maxSegments = 14;
+        const float segmentRadians = 3f * MathF.PI / 180f;
         var span = MathF.Abs(to - from);
         if (span < 1e-4f)
             return;
-        var segments = Math.Max(1, (int)MathF.Ceiling(maxSegments * span / (2f * DeckArcHalfDegrees * MathF.PI / 180f)));
+        var segments = Math.Max(1, (int)MathF.Ceiling(span / segmentRadians));
         Span<Vector2> quad = stackalloc Vector2[4];
         for (var i = 0; i < segments; i++)
         {
@@ -387,6 +389,38 @@ public sealed class WorldRenderer
     }
 
     /// <summary>
+    /// What a press of the broadside key would hit: the enemy the deck facing the cursor would be laid on (see
+    /// <see cref="BroadsideVolley.FindMark"/>), ringed, and the lane laid on it while that deck's loaded. Nothing
+    /// when that deck can't reach an enemy (the volley then goes toward the cursor) or for a Man o' War's ring.
+    /// </summary>
+    private void DrawBroadsideMark(World world, Ship ship, float alpha, NVector2 cursor)
+    {
+        if (ship.IsSunk || BroadsideVolley.FiresRing(ship)
+            || ship.Abilities.FirstOrDefault(a => a?.Definition is BroadsideVolley) is not { } broadside)
+            return;
+        var side = BroadsideVolley.SideToward(ship, cursor);
+        if (BroadsideVolley.FindMark(world, ship, side, cursor) is not var (target, aim))
+            return;
+
+        var pos = NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha);
+        var heading = Angles.Lerp(ship.PreviousHeading, ship.Heading, alpha);
+        var loaded = broadside.IsChannelReady(BroadsideVolley.ChannelOf(side));
+        if (loaded)
+        {
+            Span<Vector2> lane = stackalloc Vector2[4];
+            FiringLane(ship, side, pos, heading, BroadsideVolley.AimOffset(ship, ship.Position, ship.Heading, side, aim), 1f, lane);
+            _batch.FillConvex(lane, DeckLoaded * 0.22f);
+            _batch.Outline(lane, DeckLoadedEdge * 0.45f);
+        }
+
+        var center = NVector2.Lerp(target.PreviousPosition, target.Position, alpha);
+        var radius = target.Stats.Radius * 1.35f;
+        var color = loaded ? DeckLoadedEdge : AimCooling;
+        DrawGroundCircle(center, radius, color);
+        DrawGroundCircle(center, radius + 0.12f, color * 0.6f);
+    }
+
+    /// <summary>
     /// The corners of a side's lane in screen space, laid <paramref name="offset"/> radians off the beam (see
     /// <see cref="BroadsideVolley.AimOffset"/>), out to <paramref name="reach"/> of its range.
     /// </summary>
@@ -404,36 +438,6 @@ public sealed class WorldRenderer
         lane[1] = IsoProjection.WorldToIso(near + forward * halfSpan + down);
         lane[2] = IsoProjection.WorldToIso(near - forward * halfSpan + down);
         lane[3] = IsoProjection.WorldToIso(near - forward * halfSpan);
-    }
-
-    /// <summary>
-    /// Everywhere a side's guns can reach, laid anywhere in its arc: the row of muzzles swept round the arc. The fore
-    /// muzzle bounds the forward-laid half, the aft muzzle the rest.
-    /// </summary>
-    private void DrawFiringArc(Ship ship, BroadsideSide side, NVector2 pos, float heading, Color color)
-    {
-        const int stepsPerHalf = 6;
-        var forward = new NVector2(MathF.Cos(heading), MathF.Sin(heading));
-        var right = new NVector2(-forward.Y, forward.X);
-        var outward = side == BroadsideSide.Starboard ? right : -right;
-        var near = pos + outward * (ship.Stats.Beam / 2f);
-        var halfSpan = BroadsideVolley.HalfSpan(ship) + Projectile.DefaultRadius;
-        var fore = near + forward * halfSpan;
-        var aft = near - forward * halfSpan;
-        var range = BroadsideVolley.RangeFor(ship);
-        var arc = BroadsideVolley.AimArcFor(ship);
-        // Fore of the beam is a negative offset on starboard, positive on port.
-        var foreSign = side == BroadsideSide.Starboard ? -1f : 1f;
-
-        Span<Vector2> outline = stackalloc Vector2[2 * stepsPerHalf + 4];
-        var n = 0;
-        outline[n++] = IsoProjection.WorldToIso(aft);
-        outline[n++] = IsoProjection.WorldToIso(fore);
-        for (var i = stepsPerHalf; i >= 0; i--)
-            outline[n++] = IsoProjection.WorldToIso(fore + BroadsideVolley.DirectionAt(heading, side, foreSign * arc * i / stepsPerHalf) * range);
-        for (var i = 0; i <= stepsPerHalf; i++)
-            outline[n++] = IsoProjection.WorldToIso(aft + BroadsideVolley.DirectionAt(heading, side, -foreSign * arc * i / stepsPerHalf) * range);
-        _batch.FillConvex(outline[..n], color);
     }
 
     private void DrawCannonball(Projectile projectile, NVector2 pos)
@@ -524,23 +528,6 @@ public sealed class WorldRenderer
         var ready = ability is not null && ability.IsChannelReady(ability.Definition.ChannelFor(ship, aim.Cursor));
         switch (ability?.Definition)
         {
-            case BroadsideVolley when BroadsideVolley.FiresRing(ship):
-                // A Man o' War's ring goes all the way round: its reach.
-                FillGroundCircle(pos, BroadsideVolley.RangeFor(ship), ready ? AimFill * 0.6f : AimCooling * 0.5f);
-                DrawGroundCircle(pos, BroadsideVolley.RangeFor(ship), ready ? AimEdge : AimCooling);
-                break;
-            case BroadsideVolley:
-            {
-                // The deck that will fire: how far round it can be laid, faint, and its lane laid toward the cursor,
-                // bright (grey if that side is still reloading).
-                var side = BroadsideVolley.SideToward(ship, aim.Cursor);
-                DrawFiringArc(ship, side, pos, ship.Heading, ready ? AimFill * 0.6f : AimCooling * 0.5f);
-                Span<Vector2> lane = stackalloc Vector2[4];
-                FiringLane(ship, side, pos, ship.Heading, BroadsideVolley.AimOffset(ship, pos, ship.Heading, side, aim.Cursor), 1f, lane);
-                _batch.FillConvex(lane, ready ? AimFill * 1.6f : AimCooling);
-                _batch.Outline(lane, ready ? AimEdge : AimCooling);
-                break;
-            }
             case LongGun:
             {
                 var direction = LongGun.AimDirection(ship, aim.Cursor);

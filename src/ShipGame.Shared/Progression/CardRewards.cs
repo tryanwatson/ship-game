@@ -71,7 +71,7 @@ public static class CardRewards
     /// </summary>
     public const int TestingHands = 1 + TypicalFortressesPerAct * RunDirector.BossCount + (RunDirector.BossCount - 1);
 
-    /// <summary>Fortresses a crew usually takes in an act of <see cref="Maps.SeaChart.RowsPerAct"/> rows, choosing a port once.</summary>
+    /// <summary>Fortresses a crew usually takes in an act of <see cref="Maps.SeaChart.RowsPerAct"/> rows, choosing its middle row's port.</summary>
     public const int TypicalFortressesPerAct = Maps.SeaChart.RowsPerAct - 1;
 
     /// <summary>A testing hand's level: the top, so every card comes at the strongest its tier goes.</summary>

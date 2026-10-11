@@ -29,7 +29,14 @@ public enum Cue
     Fanfare,
     Victory,
     Defeat,
-    Sea,
+    // The sea (see SeaAmbience): three loops under everything, and events laid over them at random.
+    SeaBed,
+    Wind,
+    BowWash,
+    Lap,
+    Swell,
+    Creak,
+    Surf,
 }
 
 /// <summary>
@@ -58,6 +65,8 @@ public static class SoundSynth
         Cue.HullHit or Cue.Splash => 4,
         Cue.LongGun or Cue.Explosion or Cue.ShoreHit => 3,
         Cue.MortarLaunch or Cue.Sink or Cue.Ram or Cue.Grounded or Cue.Fire or Cue.Card => 2,
+        Cue.Lap or Cue.Creak => 8,
+        Cue.Swell or Cue.Surf => 5,
         _ => 1,
     };
 
@@ -94,7 +103,13 @@ public static class SoundSynth
             case Cue.Fanfare: Fanfare(mix); break;
             case Cue.Victory: Victory(mix); break;
             case Cue.Defeat: Defeat(mix); break;
-            case Cue.Sea: return Sea(mix);
+            case Cue.SeaBed: return SeaBed(mix);
+            case Cue.Wind: return Wind(mix);
+            case Cue.BowWash: return BowWash(mix);
+            case Cue.Lap: Lap(mix); break;
+            case Cue.Swell: Swell(mix); break;
+            case Cue.Creak: Creak(mix); break;
+            case Cue.Surf: Surf(mix); break;
         }
         return mix.Finish();
     }
@@ -402,55 +417,145 @@ public static class SoundSynth
     }
 
     // ---------------------------------------------------------------- The sea
+    //
+    // Nothing here repeats on its own: the loops are featureless (a wash, wind, water past the hull), and everything
+    // you'd notice twice (a lap, a swell, a creak, surf on a beach) is a separate event with several takes, which
+    // SeaAmbience lays over the loops at random, in response to the game.
+
+    /// <summary>Thirty seconds of low, slowly shifting wash: the floor everything else sits on.</summary>
+    private static float[] SeaBed(Mix m)
+    {
+        const float loop = 30f;
+        const float fade = 3f;
+        var drift = m.Wander(loop + fade, 0.2f);
+        var air = m.Wander(loop + fade, 0.15f);
+        m.Noise(0f, loop + fade, Pass.Low, t => 190f + 140f * drift(t), 0.7f, t => 0.7f + 0.3f * drift(t), 0.5f);
+        m.Noise(0f, loop + fade, Pass.Band, t => 480f + 220f * air(t), 0.6f, t => 0.3f + 0.7f * air(t), 0.1f);
+        m.Warm(2500f);
+        return Mix.Level(Seamless(m.Raw(), loop, fade), rms: 0.12f, peak: 0.6f);
+    }
+
+    /// <summary>Wind over open water, gusting: soft, airy, with a faint whistle when it's strong.</summary>
+    private static float[] Wind(Mix m)
+    {
+        const float loop = 24f;
+        const float fade = 3f;
+        var gust = m.Wander(loop + fade, 0.35f);
+        var tone = m.Wander(loop + fade, 0.25f);
+        m.Noise(0f, loop + fade, Pass.Band, t => 450f + 550f * gust(t), 0.8f, t => 0.25f + 0.75f * gust(t), 0.5f);
+        m.Noise(0f, loop + fade, Pass.Band, t => 850f + 350f * tone(t), 8f, t => gust(t) * gust(t) * gust(t), 0.12f);
+        m.Warm(3500f);
+        return Mix.Level(Seamless(m.Raw(), loop, fade), rms: 0.12f, peak: 0.6f);
+    }
+
+    /// <summary>Water rushing past the hull, churning and bubbling: played louder the faster the ship sails.</summary>
+    private static float[] BowWash(Mix m)
+    {
+        const float loop = 8f;
+        const float fade = 1f;
+        var churn = m.Wander(loop + fade, 10f);
+        var surge = m.Wander(loop + fade, 0.8f);
+        m.Noise(0f, loop + fade, Pass.Band, t => 750f + 450f * surge(t), 0.7f, t => 0.35f + 0.65f * churn(t), 0.6f);
+        m.Noise(0f, loop + fade, Pass.Low, _ => 330f, 0.7f, t => 0.6f + 0.4f * surge(t), 0.5f);
+        m.Warm(4000f);
+        var wash = Seamless(m.Raw(), loop, fade);
+
+        // Bubbles laid round the loop, so one near the end carries on from the start.
+        var bubbles = new Mix(m.Seed + 1);
+        for (var i = 0; i < 50; i++)
+            bubbles.Bubble(bubbles.Random(0f, loop), bubbles.Random(500f, 1500f), bubbles.Random(0.03f, 0.08f));
+        var layer = bubbles.Raw();
+        for (var i = 0; i < layer.Length; i++)
+            wash[i % wash.Length] += layer[i];
+        return Mix.Level(wash, rms: 0.12f, peak: 0.6f);
+    }
+
+    /// <summary>A small wave slapping the hull: up, a slap at the top, and a few bubbles as it drains away.</summary>
+    private static void Lap(Mix m)
+    {
+        var rise = m.Random(0.2f, 0.45f);
+        var fall = m.Random(0.3f, 0.6f);
+        var pitch = m.Random(0.8f, 1.25f);
+        float Shape(float t) => t < rise ? Smooth(t / rise) : MathF.Exp(-(t - rise) / fall);
+        m.Noise(0f, rise + fall * 6f, Pass.Low, t => (250f + 700f * Shape(t)) * pitch, 0.7f, Shape, 0.7f);
+        m.Noise(MathF.Max(0f, rise - 0.02f), 0.5f, Pass.Band, _ => m.Random(500f, 900f) * pitch, 1.2f, Swell(0.01f, 0.08f), 0.35f);
+        var drops = 3 + (int)m.Random(0f, 4f);
+        for (var i = 0; i < drops; i++)
+            m.Bubble(rise + m.Random(0.02f, 0.5f), m.Random(600f, 1400f), m.Random(0.05f, 0.12f));
+        m.Warm(3500f);
+        m.Room = WorldRoom * 0.5f;
+    }
+
+    /// <summary>A bigger wave going by: a slow rise and fall, breaking a little at the crest.</summary>
+    private static void Swell(Mix m)
+    {
+        var rise = m.Random(0.9f, 1.8f);
+        var fall = m.Random(0.9f, 1.4f);
+        float Shape(float t) => t < rise ? Smooth(t / rise) : MathF.Exp(-(t - rise) / fall);
+        m.Noise(0f, rise + fall * 4f, Pass.Low, t => 250f + 850f * Shape(t), 0.7f, Shape, 0.8f);
+        m.Noise(rise - 0.1f, 1f, Pass.Band, _ => m.Random(650f, 950f), 0.9f, Swell(0.06f, 0.25f), 0.3f); // the crest
+        var drops = 4 + (int)m.Random(0f, 5f);
+        for (var i = 0; i < drops; i++)
+            m.Bubble(rise + m.Random(0f, 0.8f), m.Random(550f, 1300f), m.Random(0.04f, 0.09f));
+        m.Warm(3000f);
+        m.Room = WorldRoom * 0.5f;
+    }
+
+    /// <summary>The ship's timbers or rigging under strain: a low groan, or a higher rope creak, sometimes twice.</summary>
+    private static void Creak(Mix m)
+    {
+        var rope = m.Random(0f, 1f) < 0.35f;
+        var times = m.Random(0f, 1f) < 0.3f ? 2 : 1;
+        var at = 0f;
+        for (var i = 0; i < times; i++)
+        {
+            var length = rope ? m.Random(0.25f, 0.5f) : m.Random(0.5f, 1.1f);
+            var rate = rope ? m.Random(90f, 160f) : m.Random(35f, 60f);
+            var glide = m.Random(-0.4f, 0.4f) * rate;
+            var hz = rope ? m.Random(700f, 1100f) : m.Random(280f, 450f);
+            m.Creak(at, length, t => rate + glide * t / length, hz, rope ? 5f : 3.5f,
+                Swell(length * m.Random(0.2f, 0.4f), length * 0.35f), rope ? 0.35f : 0.5f);
+            at += length * m.Random(0.7f, 1.1f);
+        }
+        m.Warm(3000f);
+        m.Room = WorldRoom * 0.4f;
+    }
+
+    /// <summary>A wave breaking on a beach: the rush in, the crash, and the long fizzing hiss as it draws back.</summary>
+    private static void Surf(Mix m)
+    {
+        var rise = m.Random(0.9f, 1.4f);
+        var back = m.Random(2.4f, 3.4f);
+        m.Noise(0f, rise + 0.1f, Pass.Low, t => 300f + 1300f * Smooth(MathF.Min(1f, t / rise)),
+            0.7f, t => Smooth(MathF.Min(1f, t / rise)) * MathF.Min(1f, (rise + 0.1f - t) / 0.1f), 0.6f);
+        m.Noise(rise, 1.2f, Pass.Low, t => 400f + 2400f * MathF.Exp(-t / 0.15f), 0.7f, Decay(0.35f, 0.02f), 1f); // the crash
+        m.Noise(rise, 1.5f, Pass.Low, _ => 130f, 0.7f, Swell(0.03f, 0.4f), 0.5f);
+        m.Noise(rise + 0.1f, back, Pass.Band, t => 2100f - 800f * t / back, 0.7f, Swell(0.2f, back * 0.35f), 0.45f); // drawing back
+        m.Clicks(rise + 0.2f, back * 0.8f, 60, Pass.Band, 2400f, 1f, 0.002f, 0.12f); // the fizz on the sand
+        for (var i = 0; i < 15; i++)
+            m.Bubble(rise + m.Random(0.1f, back * 0.7f), m.Random(700f, 1600f), m.Random(0.03f, 0.07f));
+        m.Warm(4500f);
+        m.Room = WorldRoom;
+    }
 
     /// <summary>
-    /// Twenty seconds of sea that loops without a seam: a low wash under waves that rise, lap and fall, and now and then
-    /// the hull creaking. The wash is faded end into start; the waves are laid round a circle, so one that runs past
-    /// the end carries on from the start.
+    /// The first <paramref name="loop"/> seconds of <paramref name="raw"/>, with the <paramref name="fade"/> seconds
+    /// after them faded into the start, so it plays round without a seam. Filter before this, not after: a filter
+    /// starting afresh at the top would put the seam back.
     /// </summary>
-    private static float[] Sea(Mix m)
+    private static float[] Seamless(float[] raw, float loop, float fade)
     {
-        const float loop = 20f;
-        const float fade = 1.5f;
+        Mix.HighPass(raw, 50f);
         var length = (int)(loop * SampleRate);
-
-        var wash = new Mix(m.Seed + 1);
-        var a = wash.Random(0f, Tau);
-        wash.Noise(0f, loop + fade, Pass.Low, t => 220f + 60f * MathF.Sin(Tau * t / loop + a), 0.7f, _ => 0.22f);
-        var bed = wash.Raw();
-        Mix.HighPass(bed, 60f); // before the layers are joined, so the filter doesn't start afresh at the seam
+        var overlap = Math.Min((int)(fade * SampleRate), raw.Length - length);
         var looped = new float[length];
-        var overlap = Math.Min((int)(fade * SampleRate), bed.Length - length);
-        for (var i = 0; i < length; i++)
-            looped[i] = bed[i];
+        Array.Copy(raw, looped, length);
         for (var i = 0; i < overlap; i++)
         {
             var w = (float)i / overlap;
-            looped[i] = bed[i] * MathF.Sqrt(w) + bed[length + i] * MathF.Sqrt(1f - w);
+            looped[i] = raw[i] * MathF.Sqrt(w) + raw[length + i] * MathF.Sqrt(1f - w);
         }
-
-        const int waves = 9;
-        for (var i = 0; i < waves; i++)
-        {
-            var at = (i + m.Random(-0.3f, 0.3f)) * loop / waves;
-            if (at < 0f)
-                at += loop;
-            var rise = m.Random(0.9f, 1.6f);
-            var size = m.Random(0.6f, 1f);
-            float Shape(float t) => t < rise ? Smooth(t / rise) : MathF.Exp(-(t - rise) / 0.9f);
-            m.Noise(at, rise + 4f, Pass.Low, t => 300f + 900f * Shape(t), 0.7f, Shape, 0.6f * size);
-            m.Noise(at + rise - 0.05f, 0.8f, Pass.Band, _ => m.Random(600f, 900f), 1f, Swell(0.04f, 0.18f), 0.3f * size); // the lap
-            for (var b = 0; b < 4; b++)
-                m.Bubble(at + rise + m.Random(0f, 0.6f), m.Random(600f, 1300f), m.Random(0.04f, 0.08f) * size);
-        }
-        m.Creak(m.Random(3f, 6f), 1f, _ => 45f, 380f, 3f, Swell(0.35f, 0.35f), 0.1f);
-        m.Creak(m.Random(12f, 16f), 1f, _ => 55f, 330f, 3f, Swell(0.3f, 0.3f), 0.08f);
-        m.Warm(3000f);
-        var waveLayer = m.Raw();
-        Mix.HighPass(waveLayer, 60f);
-        for (var i = 0; i < waveLayer.Length; i++)
-            looped[i % length] += waveLayer[i];
-        return Mix.Level(looped, rms: 0.12f, peak: 0.6f);
+        return looped;
     }
 
     // ---------------------------------------------------------------- Building blocks
@@ -517,6 +622,24 @@ public static class SoundSynth
         public float Room { get; set; }
 
         public float Random(float min, float max) => min + _random.NextSingle() * (max - min);
+
+        /// <summary>
+        /// A smooth random wander between 0 and 1 over <paramref name="seconds"/>, through a new random point
+        /// <paramref name="perSecond"/> times a second: for things that drift (wind, a wash) rather than cycle.
+        /// </summary>
+        public Func<float, float> Wander(float seconds, float perSecond)
+        {
+            var points = new float[(int)MathF.Ceiling(seconds * perSecond) + 2];
+            for (var i = 0; i < points.Length; i++)
+                points[i] = _random.NextSingle();
+            return t =>
+            {
+                var x = Math.Clamp(t * perSecond, 0f, points.Length - 1.001f);
+                var i = (int)x;
+                var f = Smooth(x - i);
+                return points[i] + (points[i + 1] - points[i]) * f;
+            };
+        }
 
         private Span<float> Span(float at, float seconds)
         {

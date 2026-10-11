@@ -16,12 +16,12 @@ namespace ShipGame.Client.Rendering;
 /// how hard (calm, rough, dire) with its level and what its cards come in; a port; the flagship. The route sailed so
 /// far is traced in, and once the crew is done where it is, the stops it can sail on to light up: click one to vote
 /// for it. Everyone's votes show beside the stops as names. The crew sets sail once everyone has voted. The game
-/// carries on underneath; it opens by itself when there's a course to choose.
+/// carries on underneath, so it only ever opens on Tab.
 /// </summary>
 public sealed class ChartScreen
 {
-    private const float NodeRadius = 30f;
-    private const float BossRadius = 40f;
+    private const float NodeRadius = 26f;
+    private const float BossRadius = 35f;
     private const float LaneSpacing = 250f;
     private const float TopRow = 175f;
     private const float BottomMargin = 120f;
@@ -111,9 +111,11 @@ public sealed class ChartScreen
 
         DrawCentered($"ACT {SeaChart.ActNumeral(act)}  -  SEA CHART", 52f, 3f, Title, viewport.Width);
         var voted = world.Players.Values.Count(p => p.CourseVote is not null);
-        var subtitle = director.Cleared
-            ? $"CLICK WHERE TO SAIL NEXT  -  THE CREW SETS SAIL ONCE EVERYONE HAS VOTED ({voted}/{world.Players.Count})"
-            : here.Kind == NodeKind.Boss ? "SINK THE FLAGSHIP TO SAIL ON" : "TAKE THE FORTRESS TO SAIL ON";
+        var subtitle = !director.Cleared
+            ? here.Kind == NodeKind.Boss ? "SINK THE FLAGSHIP TO SAIL ON" : "TAKE THE FORTRESS TO SAIL ON"
+            : voted == world.Players.Count && Plundering.UnderWay(world)
+                ? "SETTING SAIL ONCE THE PLUNDERING'S DONE"
+                : $"CLICK WHERE TO SAIL NEXT  -  THE CREW SETS SAIL ONCE EVERYONE HAS VOTED ({voted}/{world.Players.Count})";
         DrawCentered(subtitle, 52f + PixelFont.Height(3f) + 12f, 1.5f, Subtitle, viewport.Width);
         if (self is not null)
             DrawCentered(Purse(world, self), 52f + PixelFont.Height(3f) + 32f, 1.5f, OwnVote, viewport.Width);
@@ -181,13 +183,19 @@ public sealed class ChartScreen
         _batch.Flush();
     }
 
-    /// <summary>What weighs on choosing a port: how battered our hull is, and the gold to spend there.</summary>
+    /// <summary>
+    /// What weighs on choosing a port: how battered our hull is, and the gold to spend there. And what weighs on going
+    /// at all: the gold still ashore here, left behind for good once the crew sails.
+    /// </summary>
     private static string Purse(World world, PlayerState self)
     {
         var hull = world.GetPlayerShip(self.PlayerId) is { } ship
             ? $"YOUR HULL {(int)MathF.Round(100f * ship.Health / MathF.Max(1f, ship.Stats.MaxHealth))}%"
             : "YOUR SHIP IS SUNK";
-        return $"{hull}  -  {self.Gold} GOLD";
+        var purse = $"{hull}  -  {self.Gold} GOLD";
+        if (world.Director is { Cleared: true, CurrentNode.Kind: not NodeKind.Port } && Plundering.LeftToPlunder(world).ToList() is { Count: > 0 } loot)
+            purse += $"  -  {loot.Count} {(loot.Count == 1 ? "ISLAND" : "ISLANDS")} LEFT TO PLUNDER ({loot.Sum(i => Plundering.PlunderFor(world, i))} GOLD)";
+        return purse;
     }
 
     /// <summary>The act on show: the one the crew is in, or the next once the boss ending this one is sunk.</summary>
@@ -203,7 +211,7 @@ public sealed class ChartScreen
     {
         var viewport = hud.Viewport;
         var bottom = viewport.Height - BottomMargin - 30f;
-        var step = (bottom - TopRow) / (SeaChart.RowsPerAct + 1);
+        var step = (bottom - TopRow) / (SeaChart.BossRow + 1);
         var row = node.Act < act || node.Kind == NodeKind.Start ? -1 : node.Row;
         var x = viewport.Width / 2f + (node.Lane - SeaChart.MiddleLane) * LaneSpacing;
         return new Vector2(x, bottom - (row + 1) * step);

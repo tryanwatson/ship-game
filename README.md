@@ -2,7 +2,7 @@
 
 An isometric pirate-ship roguelike for up to 12 players. The crew sails a sea chart of three acts, one stop at a time,
 voting on where to go next: each row offers fortresses of three difficulties (calm, rough, dire: a level apart) and,
-later on, a port, and each act ends with a pirate flagship. Every stop is its own small patch of sea. Fortress islands
+in the middle row, a port, and each act ends with a harbor (a port every route passes) and then a pirate flagship. Every stop is its own small patch of sea. Fortress islands
 are held by guns on their shores and ships at sea; take one (sink every gun) and every player chooses from a hand of
 cards, big permanent boosts to their ship or weapons: silver (changes how you play), gold (big boosts) and prismatic
 (breaks a rule). The harder the fortress, the better the tiers and the bigger the numbers; a level-8 fortress deals
@@ -47,7 +47,7 @@ progress.
 | Right-click (hold to steer) | Sail to a point |
 | W / S | More / less sail; S again with the sails furled rows slowly astern |
 | A / D | Helm to port / starboard |
-| 1-4 | Your weapons, in the order you got them. Broadside fires the side the cursor is on, aimed toward it within 15° either way of the beam; all three: tap to fire at the cursor, hold to aim |
+| 1-4 | Your weapons, in the order you got them. Broadside fires on the press from the side the cursor is on, laid on the enemy nearest the cursor that it can reach (ringed in orange), leading it, within 35° either way of the beam, or toward the cursor if none; long gun and mortar: tap to fire at the cursor, hold to aim |
 | X | Hold to drop anchor, press to raise it |
 | Click (card screen) | Choose a card after a fortress falls. The game pauses until every player has chosen |
 | R / click (card screen) | Reroll the three cards for gold: 50, doubling with every reroll you make that run |
@@ -59,7 +59,7 @@ progress.
 | Type (lobby) | Your name, shown over your ship and on the map |
 | - / = | Starting gold: in the lobby, or on the main menu for solo (a playtesting option) |
 | Enter | Ready up (lobby), new run (solo, after sinking) |
-| Esc | Game menu: resume, set the sound and music volume, or leave the game (solo pauses; online carries on) |
+| Esc | Game menu: resume, settings, or leave the game (solo pauses; online carries on) |
 
 ## Developing
 

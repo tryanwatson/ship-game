@@ -650,14 +650,19 @@ public sealed class HunterBehavior : INpcBehavior
         var firingPosition = ship.Position
                              + (new Vector2(MathF.Cos(midHeading), MathF.Sin(midHeading)) * ship.Speed + ship.WindDrift) * windup;
 
-        // Cannonballs carry the firing ship's way, so over their flight what matters is the target's motion relative to it.
-        var firingVelocity = new Vector2(MathF.Cos(firingHeading), MathF.Sin(firingHeading)) * ship.Speed;
+        // A pirate's cannonballs carry its way, so over their flight what matters is the target's motion relative to it.
+        // (A player's don't: see BroadsideVolley.CarriesShipMotion. The balance sim's bots sail as players.)
+        var firingVelocity = BroadsideVolley.CarriesShipMotion(ship)
+            ? new Vector2(MathF.Cos(firingHeading), MathF.Sin(firingHeading)) * ship.Speed
+            : Vector2.Zero;
         var predicted = target.Position + target.Velocity * (windup + flight) - firingVelocity * flight;
 
         var side = BroadsideVolley.SideCovering(ship, firingPosition, firingHeading, predicted, target.Stats.Radius * AimTightness);
-        if (side == BroadsideSide.None
-            || !broadside.IsChannelReady(BroadsideVolley.ChannelOf(side))
-            || Navigation.LineBlockedByLand(world, firingPosition, predicted))
+        // A fort stands on its island's shore, and the balls fly on over the beach to its walls (see LongGunAim).
+        var blocked = target.IsFort
+            ? world.LineHitsLand(firingPosition, predicted, Projectile.DefaultRadius, clearForts: true)
+            : Navigation.LineBlockedByLand(world, firingPosition, predicted);
+        if (side == BroadsideSide.None || !broadside.IsChannelReady(BroadsideVolley.ChannelOf(side)) || blocked)
             return null;
         // Lay the guns on where the target will be. The cast picks the side from where we are now, so if we're
         // turning hard enough to put that on the other beam, aim straight off the side that will fire instead.

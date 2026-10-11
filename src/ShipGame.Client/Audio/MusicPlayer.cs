@@ -16,7 +16,8 @@ namespace ShipGame.Client.Audio;
 /// </summary>
 /// <remarks>
 /// A fight is the AI's own idea of one: a pirate ship or fort within <see cref="HunterBehavior.AggroRange"/> of us,
-/// or our hull taking damage. It's over once nothing hostile is within <see cref="HunterBehavior.DisengageRange"/>
+/// or an enemy's attack landing on us (a ball, a shell or a ram: not running aground, a fire, or a crewmate's stray
+/// shot), which catches a pirate firing from further off. It's over once nothing hostile is within <see cref="HunterBehavior.DisengageRange"/>
 /// for a few seconds, so a running fight doesn't flap between the two. The calm music picks up where it left off; each
 /// fight starts the next battle track from the top.
 /// </remarks>
@@ -28,10 +29,12 @@ public sealed class MusicPlayer : IDisposable
 
     private readonly Deck? _calm;
     private readonly Deck? _battle;
-    private float _volume = 0.3f;
     private bool _inBattle;
     private double _quietFor;
-    private float _lastHealth = float.NaN;
+    private bool _attacked;
+    // Whose each shot and shell in flight is, from its launch: an impact event only says what it hit.
+    private readonly Dictionary<int, Team> _shotTeams = new();
+    private readonly Dictionary<int, (Team Team, float Radius)> _strikeTeams = new();
 
     private MusicPlayer(Deck? calm, Deck? battle)
     {
@@ -61,12 +64,8 @@ public sealed class MusicPlayer : IDisposable
         ? Directory.GetFiles(folder, prefix + "*.mp3").OrderBy(p => p, StringComparer.Ordinal).ToArray()
         : Array.Empty<string>();
 
-    /// <summary>0..1, on its own scale from the sound effects.</summary>
-    public float Volume
-    {
-        get => _volume;
-        set => _volume = Math.Clamp(value, 0f, 1f);
-    }
+    /// <summary>The player's volume sliders: the music slider (under the master) is read every update.</summary>
+    public AudioLevels Levels { get; set; } = new();
 
     /// <summary>
     /// Whether we're in a fight, from <paramref name="world"/> (null at the title menu: calm). Call every frame;
@@ -81,8 +80,7 @@ public sealed class MusicPlayer : IDisposable
         }
         else if (ours is not null)
         {
-            var hurt = !float.IsNaN(_lastHealth) && ours.Health < _lastHealth;
-            if (hurt || Hostile(world, ours, HunterBehavior.AggroRange))
+            if (_attacked || Hostile(world, ours, HunterBehavior.AggroRange))
             {
                 _inBattle = true;
                 _quietFor = 0;
@@ -97,7 +95,47 @@ public sealed class MusicPlayer : IDisposable
                 _quietFor = 0;
         }
         // Sunk and waiting to respawn: the music stays where it was.
-        _lastHealth = ours?.Health ?? float.NaN;
+        _attacked = false;
+    }
+
+    /// <summary>Notes an enemy's attack landing on our ship among <paramref name="events"/>, for <see cref="Watch"/>.</summary>
+    public void Hear(World world, IReadOnlyList<WorldEvent> events, int localPlayerId)
+    {
+        if (world.GetPlayerShip(localPlayerId) is not { } ours)
+            return;
+        foreach (var worldEvent in events)
+        {
+            switch (worldEvent)
+            {
+                case RegionEntered:
+                    _shotTeams.Clear();
+                    _strikeTeams.Clear();
+                    break;
+                case ProjectileSpawned shot:
+                    if (_shotTeams.Count > 4096)
+                        _shotTeams.Clear(); // balls that ran out of flight never say so: don't keep them for ever
+                    _shotTeams[shot.ProjectileId] = shot.Team;
+                    break;
+                case AreaStrikeLaunched strike:
+                    _strikeTeams[strike.StrikeId] = (strike.Team, strike.Radius);
+                    break;
+                case ProjectileImpact impact:
+                    if (impact.ShipId == ours.Id && _shotTeams.TryGetValue(impact.ProjectileId, out var shotTeam) && shotTeam != ours.Team)
+                        _attacked = true;
+                    if (!impact.PassedThrough)
+                        _shotTeams.Remove(impact.ProjectileId);
+                    break;
+                case AreaStrikeImpact impact:
+                    if (_strikeTeams.Remove(impact.StrikeId, out var shell) && shell.Team != ours.Team
+                        && System.Numerics.Vector2.Distance(impact.Target, ours.Position) <= shell.Radius + ours.Stats.Length / 2f)
+                        _attacked = true;
+                    break;
+                case ShipRammed rammed when rammed.TargetShipId == ours.Id && world.FindShip(rammed.RammerShipId) is { } rammer
+                    && rammer.Team != ours.Team:
+                    _attacked = true;
+                    break;
+            }
+        }
     }
 
     private static bool Hostile(World world, Ship ours, float range)
@@ -113,6 +151,7 @@ public sealed class MusicPlayer : IDisposable
     /// <summary>Moves the crossfade on and keeps each playing deck fed; call every frame.</summary>
     public void Update(double elapsedSeconds)
     {
+        var volume = Levels.Gain(Channel.Music);
         var battle = _inBattle && _battle is not null;
         var into = (float)(elapsedSeconds / IntoBattleSeconds);
         var outOf = (float)(elapsedSeconds / OutOfBattleSeconds);
@@ -122,12 +161,12 @@ public sealed class MusicPlayer : IDisposable
             _battle.Gain = Math.Clamp(_battle.Gain + (battle ? into : -outOf), 0f, 1f);
             if (_battle.Gain <= 0f && !wasSilent)
                 _battle.Next(); // the next fight starts on a fresh track, from the top
-            _battle.Update(_volume);
+            _battle.Update(volume);
         }
         if (_calm is not null)
         {
             _calm.Gain = Math.Clamp(_calm.Gain + (battle ? -into : outOf), 0f, 1f);
-            _calm.Update(_volume);
+            _calm.Update(volume);
         }
     }
 
