@@ -1,5 +1,7 @@
 using ShipGame.Shared.Simulation;
 
+using ShipGame.Shared.Stats;
+
 namespace ShipGame.Shared.Progression;
 
 /// <summary>
@@ -34,9 +36,17 @@ public static class KillRewards
             killer.Health = MathF.Min(killer.Stats.MaxHealth, killer.Health + heal * killer.Stats.MaxHealth);
     }
 
-    /// <summary>The gold for sinking <paramref name="victim"/>, before it's shared out.</summary>
-    public static int GoldFor(Ship victim) =>
-        PirateLevels.KillGold(victim.Level) * (victim.IsBoss ? BossMultiplier : victim.IsFort ? FortMultiplier : 1);
+    /// <summary>
+    /// The gold for sinking <paramref name="victim"/>, before it's shared out. A fort or boss made sturdier for a bigger
+    /// crew (see <see cref="Fortresses.CrewSizeSource"/>) pays that much more, so there's as much to share round.
+    /// </summary>
+    public static int GoldFor(Ship victim)
+    {
+        var gold = PirateLevels.KillGold(victim.Level) * (victim.IsBoss ? BossMultiplier : victim.IsFort ? FortMultiplier : 1);
+        var crew = victim.Modifiers.Where(m => m.Source == Fortresses.CrewSizeSource && m.Kind == ModifierKind.Multiplier)
+            .Select(m => m.Value).DefaultIfEmpty(1f).Max();
+        return (int)MathF.Round(gold * crew);
+    }
 
     /// <summary>The players other than <paramref name="killerId"/> who hit <paramref name="victim"/> recently enough to share.</summary>
     public static IEnumerable<int> Assists(World world, Ship victim, int killerId) =>

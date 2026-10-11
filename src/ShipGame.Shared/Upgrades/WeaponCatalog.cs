@@ -33,12 +33,12 @@ public static class WeaponCatalog
         "+50% MAX HEALTH AND +2 HEALTH A SECOND");
 
     public static readonly WeaponOffer LongGun = new(new LongGun(), UnlockCost: 45,
-        new[] { new StatModifier(StatId.WeaponRange, ModifierKind.Percent, 0.25f, StartingBonusSource) },
-        "+25% RANGE ON EVERY WEAPON");
+        new[] { new StatModifier(StatId.WeaponRange, ModifierKind.Percent, 0.35f, StartingBonusSource) },
+        "+35% RANGE ON EVERY WEAPON"); // just outreaching a shore battery, so a long gun can open on one in safety
 
     public static readonly WeaponOffer Mortar = new(new Mortar(), UnlockCost: 45,
-        new[] { new StatModifier(StatId.CooldownSpeed, ModifierKind.Percent, 0.25f, StartingBonusSource) },
-        "+25% COOLDOWN SPEED ON EVERY WEAPON");
+        new[] { new StatModifier(StatId.CooldownSpeed, ModifierKind.Percent, 0.15f, StartingBonusSource) },
+        "+15% COOLDOWN SPEED ON EVERY WEAPON");
 
     public static readonly IReadOnlyList<WeaponOffer> All = new[] { Broadside, LongGun, Mortar };
 

@@ -90,6 +90,59 @@ public sealed class LoopbackTests : IDisposable
         return (a, b);
     }
 
+    /// <summary>The first fortress the start leads to.</summary>
+    private static int FirstFortress(World world) =>
+        world.Director!.CurrentNode!.Next.First(id => world.Director.Chart!.Find(id)!.Kind == NodeKind.Fortress);
+
+    /// <summary>Both vote for <paramref name="nodeId"/>, and the crew sails there, on the server and both clients.</summary>
+    private void SailTo(ClientConnection a, ClientConnection b, int nodeId)
+    {
+        a.Send(new ChooseCourseCommand(0, nodeId));
+        b.Send(new ChooseCourseCommand(0, nodeId));
+        PumpUntil(() => new[] { a, b }.All(c => c.Replica.World.Director!.NodeId == nodeId
+                                               && c.Replica.World.Islands.Select(i => i.Id).SequenceEqual(_server.World!.Islands.Select(i => i.Id))),
+            "the crew to sail on, on both clients");
+    }
+
+    [Fact]
+    public void TheVoyage_ReachesTheClients_TheChartTheRegionsAndTheVotes()
+    {
+        var (a, b) = StartTwoPlayerRun();
+        var world = _server.World!;
+        var director = world.Director!;
+
+        // The chart, and the start's open water.
+        PumpUntil(() => a.Replica.World.Director!.Chart is not null && b.Replica.World.Director!.Chart is not null, "the chart");
+        Assert.Equal(director.Chart!.Nodes, a.Replica.World.Director!.Chart!.Nodes);
+        Assert.Equal(world.WorldSize, a.Replica.World.WorldSize);
+        Assert.Equal(world.Islands.Select(i => (i.Id, i.Name, i.Center)), a.Replica.World.Islands.Select(i => (i.Id, i.Name, i.Center)));
+        PumpUntil(() => a.Replica.World.Director!.Cleared, "the call to chart a course");
+
+        // a votes: both clients see it, and the crew waits for b.
+        var start = director.NodeId;
+        var course = FirstFortress(world);
+        a.Send(new ChooseCourseCommand(0, course));
+        PumpUntil(() => b.Replica.World.Players[a.LocalPlayerId].CourseVote == course, "a's vote on b's client");
+        Assert.Equal(start, director.NodeId);
+
+        // b votes: the crew sails into the fortress's waters, everywhere.
+        var regions = a.Replica.World.RegionsEntered;
+        b.Send(new ChooseCourseCommand(0, course));
+        PumpUntil(() => new[] { a, b }.All(c => c.Replica.World.Director!.NodeId == course), "the crew to sail on");
+        PumpUntil(() => a.Replica.World.Islands.Count == world.Islands.Count, "the new islands");
+        Assert.Equal(world.WorldSize, a.Replica.World.WorldSize);
+        Assert.Equal(world.Islands.Select(i => (i.Id, i.Name, i.Level, i.IsFortress)), a.Replica.World.Islands.Select(i => (i.Id, i.Name, i.Level, i.IsFortress)));
+        Assert.Equal(world.Islands.Single(i => i.IsFortress).Outline.ToArray(), a.Replica.World.Islands.Single(i => i.IsFortress).Outline.ToArray());
+        Assert.False(a.Replica.World.Director!.Cleared);
+        Assert.Equal(regions + 1, a.Replica.World.RegionsEntered); // the client's scenery, wakes and wrecks start over
+        Assert.Null(a.Replica.World.Players[a.LocalPlayerId].CourseVote);
+        Assert.Equal(new[] { start, course }, a.Replica.World.Director!.Route);
+
+        // Our own ship is drawn where it came in, not where it was.
+        var ship = world.GetPlayerShip(a.LocalPlayerId)!;
+        PumpUntil(() => a.Replica.World.FindShip(ship.Id) is { } drawn && Vector2.Distance(drawn.Position, ship.Position) < 2f, "a drawn at the entry");
+    }
+
     [Fact]
     public void Clients_JoinTheLobby_WithDistinctPlayerIds()
     {
@@ -461,29 +514,31 @@ public sealed class LoopbackTests : IDisposable
     [Fact]
     public void Pirates_AppearOnClients_OnlyNearAPlayer_AndGoWhenLeftBehind()
     {
-        var (a, _) = StartTwoPlayerRun();
+        var (a, b) = StartTwoPlayerRun();
         var world = _server.World!;
+        SailTo(a, b, FirstFortress(world));
 
-        // The whole map's pirates are at sea from the start, but only those near the crew are sent.
+        // The fortress's garrison is at sea from the start, but nobody's near it yet: nothing is sent.
         PumpFor(0.5);
         var ship = world.GetPlayerShip(a.LocalPlayerId)!;
-        var far = Archipelago.Camps.MaxBy(c => Vector2.Distance(c.Position, Archipelago.Start))!;
-        Assert.True(a.Replica.World.Ships.Count(s => s.Team == Team.Pirates) < world.Ships.Count(s => s.Team == Team.Pirates) / 4);
-        bool Near(Ship pirate, Vector2 point) => Vector2.Distance(pirate.Position, point) <= Relevance.LeaveRange + 10f;
-        Assert.DoesNotContain(a.Replica.World.Ships, s => s.Team == Team.Pirates && Near(s, far.Position));
+        var fortress = world.Islands.Single(i => i.IsFortress);
+        Assert.NotEmpty(world.Ships.Where(s => s.Team == Team.Pirates));
+        Assert.DoesNotContain(a.Replica.World.Ships, s => s.Team == Team.Pirates);
 
-        // Sail a's ship (by fiat) out beside a far-off pack: it comes into view, with its level.
-        ship.Position = ship.PreviousPosition = far.Position + new Vector2(0f, Relevance.EnterRange - 10f);
-        PumpUntil(() => a.Replica.World.Ships.Any(s => s.Team == Team.Pirates && s.Level == far.Level && Near(s, far.Position)), "the pack to show up");
-        var seen = a.Replica.World.Ships.First(s => s.Team == Team.Pirates && Near(s, far.Position));
+        // Sail a's ship (by fiat) up to it: the forts and guards come into view, with their level.
+        ship.AddModifier(new ShipGame.Shared.Stats.StatModifier(ShipGame.Shared.Stats.StatId.MaxHealth, ShipGame.Shared.Stats.ModifierKind.Flat, 1e6f, "test"));
+        ship.Position = ship.PreviousPosition = fortress.ShoreToward(Vector2.UnitY) + Vector2.UnitY * 25f;
+        PumpUntil(() => a.Replica.World.Ships.Any(s => s.FortIslandId == fortress.Id), "the forts to show up");
+        var seen = a.Replica.World.Ships.First(s => s.FortIslandId == fortress.Id);
+        Assert.Equal(fortress.Level, seen.Level);
         Assert.Equal(world.FindShip(seen.Id)!.Level, seen.Level);
 
         // The forecast comes along too.
-        Assert.Equal(world.Director!.Status, a.Replica.World.Director!.Status);
+        PumpUntil(() => world.Director!.Status == a.Replica.World.Director!.Status, "the forecast");
 
-        // Back to the start: the pack is hidden again (though still afloat on the server).
-        ship.Position = ship.PreviousPosition = Archipelago.Start;
-        PumpUntil(() => a.Replica.World.FindShip(seen.Id) is null, "the pack to be hidden");
+        // Back to where the crew came in: the forts are hidden again (though still standing on the server).
+        ship.Position = ship.PreviousPosition = new Vector2(world.WorldSize.X / 2f, world.WorldSize.Y - 2f);
+        PumpUntil(() => a.Replica.World.FindShip(seen.Id) is null, "the forts to be hidden");
         Assert.NotNull(world.FindShip(seen.Id));
     }
 
@@ -492,7 +547,8 @@ public sealed class LoopbackTests : IDisposable
     {
         var (a, b) = StartTwoPlayerRun();
         var world = _server.World!;
-        var fortress = world.Islands.Where(i => i.IsFortress).MinBy(i => Vector2.Distance(i.Center, Archipelago.Start))!;
+        SailTo(a, b, FirstFortress(world));
+        var fortress = world.Islands.Single(i => i.IsFortress);
 
         // Raze it (by fiat), with a parked alongside so its forts are sent to the client.
         var ship = world.GetPlayerShip(a.LocalPlayerId)!;
@@ -541,34 +597,5 @@ public sealed class LoopbackTests : IDisposable
         b.Send(new ChooseCardCommand(0, world.Players[b.LocalPlayerId].CardOffers[0].Cards[0].Id));
         PumpUntil(() => !a.Replica.World.IsPaused && !b.Replica.World.IsPaused, "play to resume on both clients");
         PumpUntil(() => world.Tick > pausedAt + 15 && a.Replica.LatestSnapshotTick > pausedAt + 15, "the clock to run again");
-    }
-
-    [Fact]
-    public void Trade_IsMirrored_FromTheBoardToTheHoldToTheSea()
-    {
-        var (a, b) = StartTwoPlayerRun();
-        var world = _server.World!;
-        var post = world.Islands.First(i => i.HasShipyard);
-        PumpUntil(() => a.Replica.World.Trade.OffersAt(post.Id).SequenceEqual(world.Trade.OffersAt(post.Id)), "offers on the client");
-
-        // Moor a's ship just off the trading post and buy its first contract.
-        var ship = world.GetPlayerShip(a.LocalPlayerId)!;
-        var outward = Vector2.Normalize(new Vector2(-1, -1));
-        var spot = post.Center;
-        while (post.DistanceTo(spot) < 2f)
-            spot += outward * 0.25f;
-        ship.Position = ship.PreviousPosition = spot;
-        ship.IsAnchored = true;
-        world.AddGold(a.LocalPlayerId, 100);
-        var offer = world.Trade.OffersAt(post.Id)[0];
-        a.Send(new PurchaseContractCommand(0, offer.Id));
-
-        PumpUntil(() => new[] { a, b }.All(c => c.Replica.World.FindShip(ship.Id)?.Cargo.Count == 1), "cargo aboard on both clients");
-        Assert.Equal(offer, a.Replica.World.FindShip(ship.Id)!.Cargo[0].Contract);
-        PumpUntil(() => a.Replica.World.Trade.OffersAt(post.Id).SequenceEqual(world.Trade.OffersAt(post.Id)), "the restocked board");
-
-        ship.Health = 0;
-        PumpUntil(() => new[] { a, b }.All(c => c.Replica.World.Trade.Crates.Count == 1), "the spilled crate on both clients");
-        Assert.Equal(world.Trade.Crates.Single(), b.Replica.World.Trade.Crates.Single());
     }
 }

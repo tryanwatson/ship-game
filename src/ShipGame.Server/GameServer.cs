@@ -8,7 +8,6 @@ using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Server;
@@ -217,7 +216,6 @@ public sealed class GameServer : IDisposable
     private void StartRun()
     {
         var seed = _runSeed++;
-        // Line the crew up abreast in the middle of the map, facing north.
         var players = _byPeerId.Values.OrderBy(p => p.PlayerId).ToList();
         var crew = players
             .Select(p => (p.PlayerId, p.Name)) // everyone ready means everyone's named

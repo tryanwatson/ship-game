@@ -33,15 +33,15 @@ public sealed class Island
 
     public int Id { get; }
 
-    /// <summary>What the charts call it (upper case, for the pixel font): how trade contracts name their destinations.</summary>
+    /// <summary>What the charts call it (upper case, for the pixel font).</summary>
     public string Name { get; }
 
     /// <summary>Gold a player earns for plundering this island.</summary>
     public int PlunderGold { get; }
 
     /// <summary>
-    /// The level of the waters it lies in (see <c>Archipelago.Seas</c>), or a fortress's own level: richer plunder,
-    /// better shipyard stock, and a fortress's stronger defenses.
+    /// The level of the chart stop it's part of (see <c>Maps.Regions</c>): richer plunder, better shipyard stock, and a
+    /// fortress's stronger defenses.
     /// </summary>
     public int Level { get; }
 

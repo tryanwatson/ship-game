@@ -4,15 +4,15 @@ using ShipGame.Shared.Stats;
 namespace ShipGame.Shared.Progression;
 
 /// <summary>
-/// A pirate's level: how far from the middle of the map it sails (or the level of the fortress it serves), and so how
-/// dangerous it is and how much it's worth. Each level past the first adds to its hull, guns, reload, and speed, and
+/// A pirate's level: the level of the stop on the chart it sails at (the fortress it serves, the act's flagship), and so
+/// how dangerous it is and how much it's worth. Each level past the first adds to its hull, guns, reload, and speed, and
 /// to the gold for sinking it.
 /// </summary>
 public static class PirateLevels
 {
     // Per level after the first, as fractions of base stats.
     public const float HealthPerLevel = 0.25f;
-    public const float DamagePerLevel = 0.08f;
+    public const float DamagePerLevel = 0.13f;
     public const float CooldownSpeedPerLevel = 0.04f;
     public const float SpeedPerLevel = 0.02f;
 
@@ -37,6 +37,6 @@ public static class PirateLevels
     /// <summary>Gold for sinking a ship of <paramref name="level"/>; ships without a level (players) pay as level 1.</summary>
     public static int KillGold(int level) => KillRewards.Gold * Math.Max(1, level);
 
-    /// <summary>Gold for plundering an island in waters of <paramref name="level"/>.</summary>
+    /// <summary>Gold for plundering an island of <paramref name="level"/>.</summary>
     public static int PlunderGold(int level) => Island.DefaultPlunderGold * Math.Max(1, level);
 }

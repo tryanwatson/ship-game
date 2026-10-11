@@ -29,6 +29,21 @@ public sealed class PlayerState
 
     public bool IsAwaitingRespawn => RespawnTicksRemaining > 0;
 
+    /// <summary>Times sunk at the current stop on the chart: each one keeps them out longer (see <see cref="Respawning.DelayTicksFor"/>).</summary>
+    public int DeathsThisStop { get; set; }
+
+    /// <summary>
+    /// A lone sailor's lifeboats left this act: sinking with one to spare puts them back in the fight instead of
+    /// ending the run (see <see cref="Respawning"/>). Crews have each other instead.
+    /// </summary>
+    public int ExtraLives { get; set; }
+
+    /// <summary>Sunk, and coming back on a lifeboat (<see cref="ExtraLives"/>): the run isn't over while they wait. Server-side only.</summary>
+    public bool OnLifeboat { get; set; }
+
+    /// <summary>Card packs bought at the port the crew is at: each one doubles the price of the next (see <see cref="Upgrades.Shipyards.CardPackCost"/>).</summary>
+    public int PacksBoughtHere { get; set; }
+
     /// <summary>The ship that went down, kept so the replacement can inherit its hull, guns, skills, and upgrades. Server-side only.</summary>
     public Simulation.Ship? LostShip { get; set; }
 
@@ -40,6 +55,9 @@ public sealed class PlayerState
 
     /// <summary>Times this player has rerolled an offer this run: each one doubles the price of the next (see <see cref="CardRewards.RerollCost"/>).</summary>
     public int Rerolls { get; set; }
+
+    /// <summary>The chart stop this player has voted to sail to next, if they've voted (see <see cref="RunDirector"/>).</summary>
+    public int? CourseVote { get; set; }
 
     /// <summary>Every card this player has chosen. They belong to the player: a ship that sinks hands them on to the next.</summary>
     public List<Upgrades.CardPick> Cards { get; } = new();

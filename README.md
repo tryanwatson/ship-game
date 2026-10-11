@@ -1,14 +1,14 @@
 # ShipGame
 
-An isometric pirate-ship roguelike for up to 12 players. Start in the middle of a big square sea and fight your way
-out: the further from the middle, the higher the pirates' levels and the richer the loot. Fortress islands are held by
-guns on their shores and ships at sea; take one (sink every gun) and every player chooses from a hand of cards, big
-permanent boosts to their ship or weapons: silver (changes how you play), gold (big boosts) and prismatic (breaks a
-rule). The harder the fortress, the better the tiers and the bigger the numbers; a level-8 fortress deals four
-prismatics. Sinking a pirate flagship deals a hand of prismatics too. Every two fortresses taken, a pirate flagship comes hunting the crew; sink
-the third to win. Pirates also roam each ring of sea, alone or in packs that fight together. Plunder islands, upgrade
-your ship at shipyards and taken fortresses (outer ones stock more), and run cargo contracts between islands (sunk cargo floats free for
-anyone to salvage). Friendly fire is on unless the host turns it off.
+An isometric pirate-ship roguelike for up to 12 players. The crew sails a sea chart of three acts, one stop at a time,
+voting on where to go next: each row offers fortresses of three difficulties (calm, rough, dire: a level apart) and,
+later on, a port, and each act ends with a pirate flagship. Every stop is its own small patch of sea. Fortress islands
+are held by guns on their shores and ships at sea; take one (sink every gun) and every player chooses from a hand of
+cards, big permanent boosts to their ship or weapons: silver (changes how you play), gold (big boosts) and prismatic
+(breaks a rule). The harder the fortress, the better the tiers and the bigger the numbers; a level-8 fortress deals
+four prismatics. Damage carries from stop to stop; a port repairs every hull and has a shipyard to upgrade at (deeper
+ones stock more). The first two flagships deal a hand of prismatics; sink the third to win. Friendly fire is on unless
+the host turns it off.
 
 ## Playing
 
@@ -51,6 +51,7 @@ progress.
 | X | Hold to drop anchor, press to raise it |
 | Click (card screen) | Choose a card after a fortress falls. The game pauses until every player has chosen |
 | R / click (card screen) | Reroll the three cards for gold: 50, doubling with every reroll you make that run |
+| Tab / click (chart) | The sea chart. Once the crew is done at a stop, click where to sail next; the crew sets sail once everyone has voted |
 | M | Map |
 | Mouse wheel | Zoom |
 | Y / C / arrow keys | Toggle camera lock / center on ship / pan |
@@ -73,6 +74,7 @@ dotnet run --project src/ShipGame.Client -- --connect host[:port] [--password P]
 dotnet run --project src/ShipGame.Client -- --connect host --lag 150 --jitter 30 --loss 5  # test on a bad network
 dotnet run --project src/ShipGame.Server -- [--port 7777] [--no-friendly-fire] [--password P]
 SHIPGAME_INSTALL_DIR=/tmp/shipgame dotnet run --project src/ShipGame.Launcher # try the launcher without touching your install
+dotnet run -c Release --project tools/ShipGame.BalanceSim -- [--seeds 4] [--only fort|boss] [--dodge 0.6] [--csv out.csv]
 ```
 
 | Project | |
@@ -82,6 +84,7 @@ SHIPGAME_INSTALL_DIR=/tmp/shipgame dotnet run --project src/ShipGame.Launcher # 
 | `src/ShipGame.Server` | Dedicated server. Also runs inside the client for Host Game. |
 | `src/ShipGame.Client` | MonoGame DesktopGL client. |
 | `src/ShipGame.Launcher` | Installs the latest GitHub release of the client and starts it. |
+| `tools/ShipGame.BalanceSim` | Bot crews of 1-8 fight every fortress level and boss headlessly; prints a table and the balance targets missed. |
 
 Bump `Protocol.Version` in `src/ShipGame.Net/Protocol.cs` on any wire change. Clients and servers on different
 versions refuse each other.

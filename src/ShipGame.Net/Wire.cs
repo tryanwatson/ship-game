@@ -2,10 +2,10 @@ using System.Numerics;
 using LiteNetLib.Utils;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Stats;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Net;
@@ -35,21 +35,57 @@ public static class Wire
         return value < 0 ? null : value;
     }
 
-    public static void Put(this NetDataWriter w, TradeContract c)
+    /// <summary>The chart: each stop's place, kind, level, difficulty and name, and where it leads.</summary>
+    public static void Put(this NetDataWriter w, SeaChart chart)
     {
-        w.Put(c.Id); w.Put(c.OriginIslandId); w.Put(c.DestinationIslandId); w.Put(c.Cost); w.Put(c.Payout); w.Put(c.CargoUnits);
+        w.Put((ushort)chart.Nodes.Count);
+        foreach (var node in chart.Nodes)
+        {
+            w.Put((ushort)node.Id); w.Put((byte)node.Act); w.Put((sbyte)node.Row); w.Put((byte)node.Lane);
+            w.Put((byte)node.Kind); w.Put((byte)node.Level); w.Put((byte)node.Difficulty); w.Put(node.Name);
+            w.Put((byte)node.Next.Count);
+            foreach (var next in node.Next)
+                w.Put((ushort)next);
+        }
     }
 
-    public static TradeContract GetContract(this NetDataReader r) =>
-        new(r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt());
-
-    public static void Put(this NetDataWriter w, CargoLot lot)
+    public static SeaChart GetChart(this NetDataReader r)
     {
-        w.Put(lot.Contract);
-        w.Put(lot.RemainingUnits);
+        var count = r.GetUShort();
+        if (count == 0)
+            throw new InvalidDataException("A chart needs a start.");
+        var nodes = new List<ChartNode>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var (id, act, row, lane) = (r.GetUShort(), r.GetByte(), r.GetSByte(), r.GetByte());
+            var (kind, level, difficulty, name) = ((NodeKind)r.GetByte(), r.GetByte(), (Difficulty)r.GetByte(), r.GetString(64));
+            var next = new int[r.GetByte()];
+            for (var n = 0; n < next.Length; n++)
+                next[n] = r.GetUShort();
+            nodes.Add(new ChartNode(id, act, row, lane, kind, level, difficulty, next, name));
+        }
+        return new SeaChart(nodes);
     }
 
-    public static CargoLot GetCargoLot(this NetDataReader r) => new(r.GetContract(), r.GetInt());
+    /// <summary>An island, outline and all: regions are built on the server, so their islands come over the wire.</summary>
+    public static void Put(this NetDataWriter w, Island island)
+    {
+        w.Put(island.Id); w.Put(island.Name); w.Put(island.PlunderGold); w.Put((byte)island.Level);
+        w.Put(island.HasShipyard); w.Put(island.IsFortress);
+        w.Put((byte)island.Outline.Length);
+        foreach (var point in island.Outline)
+            w.Put(point);
+    }
+
+    public static Island GetIsland(this NetDataReader r)
+    {
+        var (id, name, gold, level) = (r.GetInt(), r.GetString(64), r.GetInt(), r.GetByte());
+        var (shipyard, fortress) = (r.GetBool(), r.GetBool());
+        var outline = new Vector2[r.GetByte()];
+        for (var i = 0; i < outline.Length; i++)
+            outline[i] = r.GetVector2();
+        return new Island(id, outline, gold, shipyard, name, level, fortress);
+    }
 
     /// <summary>A card by id, with the level its numbers were dealt at and its roll.</summary>
     public static void Put(this NetDataWriter w, CardPick card)
@@ -95,13 +131,14 @@ public static class Wire
         AnchorKey = 6,
         ChoosePlunder = 7,
         PurchaseUpgrade = 8,
-        PurchaseContract = 9,
         UnlockAbility = 10,
         PurchaseSkill = 11,
         PurchaseRepair = 12,
         ChooseCard = 13,
         RerollCards = 14,
         ChooseStartingWeapon = 15,
+        ChooseCourse = 16,
+        BuyCardPack = 17,
     }
 
     public static void PutCommand(this NetDataWriter w, Command command)
@@ -140,16 +177,15 @@ public static class Wire
                 w.Put((byte)CommandTag.PurchaseUpgrade);
                 w.Put(purchase.UpgradeId);
                 break;
-            case PurchaseContractCommand contract:
-                w.Put((byte)CommandTag.PurchaseContract);
-                w.Put(contract.ContractId);
-                break;
             case UnlockAbilityCommand unlock:
                 w.Put((byte)CommandTag.UnlockAbility);
                 w.Put(unlock.AbilityId);
                 break;
             case PurchaseRepairCommand:
                 w.Put((byte)CommandTag.PurchaseRepair);
+                break;
+            case BuyCardPackCommand:
+                w.Put((byte)CommandTag.BuyCardPack);
                 break;
             case PurchaseSkillCommand skill:
                 w.Put((byte)CommandTag.PurchaseSkill);
@@ -167,6 +203,10 @@ public static class Wire
                 w.Put((byte)CommandTag.ChooseStartingWeapon);
                 w.Put(weapon.AbilityId);
                 break;
+            case ChooseCourseCommand course:
+                w.Put((byte)CommandTag.ChooseCourse);
+                w.Put(course.NodeId);
+                break;
             default:
                 throw new ArgumentException($"No wire format for {command.GetType().Name}.");
         }
@@ -183,13 +223,14 @@ public static class Wire
         CommandTag.AnchorKey => new AnchorKeyCommand(playerId, r.GetBool()),
         CommandTag.ChoosePlunder => new ChoosePlunderCommand(playerId),
         CommandTag.PurchaseUpgrade => new PurchaseUpgradeCommand(playerId, r.GetString(64)),
-        CommandTag.PurchaseContract => new PurchaseContractCommand(playerId, r.GetInt()),
         CommandTag.UnlockAbility => new UnlockAbilityCommand(playerId, r.GetString(64)),
         CommandTag.PurchaseSkill => new PurchaseSkillCommand(playerId, r.GetString(64)),
         CommandTag.PurchaseRepair => new PurchaseRepairCommand(playerId),
+        CommandTag.BuyCardPack => new BuyCardPackCommand(playerId),
         CommandTag.ChooseCard => new ChooseCardCommand(playerId, r.GetString(64)),
         CommandTag.RerollCards => new RerollCardsCommand(playerId, r.GetByte() is > 0 and <= (byte)CardTier.Prismatic + 1 and var tier ? (CardTier)(tier - 1) : null),
         CommandTag.ChooseStartingWeapon => new ChooseStartingWeaponCommand(playerId, r.GetString(64)),
+        CommandTag.ChooseCourse => new ChooseCourseCommand(playerId, r.GetInt()),
         var tag => throw new InvalidDataException($"Unknown command tag {tag}."),
     };
 
@@ -213,12 +254,6 @@ public static class Wire
         AreaStrikeLaunched = 15,
         AreaStrikeImpact = 16,
         AreaDiscovered = 17,
-        ContractsOffered = 18,
-        ContractPurchased = 19,
-        ContractDelivered = 20,
-        CargoDropped = 21,
-        CargoRecovered = 22,
-        CargoLost = 23,
         AbilityUnlocked = 24,
         SkillPurchased = 25,
         ShipHidden = 26,
@@ -232,6 +267,10 @@ public static class Wire
         ShipRammed = 34,
         FireStarted = 35,
         ProjectileVolley = 36,
+        VoyageCharted = 37,
+        RegionEntered = 38,
+        BossPhaseChanged = 39,
+        ReliefFleetSighted = 40,
     }
 
     /// <summary>
@@ -373,28 +412,6 @@ public static class Wire
             case RunEnded x:
                 Begin(w, EventTag.RunEnded, x); w.Put(x.Victory);
                 break;
-            case ContractsOffered x:
-                Begin(w, EventTag.ContractsOffered, x);
-                w.Put(x.IslandId);
-                w.Put((byte)x.Offers.Count);
-                foreach (var contract in x.Offers)
-                    w.Put(contract);
-                break;
-            case ContractPurchased x:
-                Begin(w, EventTag.ContractPurchased, x); w.Put(x.ShipId); w.Put(x.PlayerId); w.Put(x.Contract);
-                break;
-            case ContractDelivered x:
-                Begin(w, EventTag.ContractDelivered, x); w.Put(x.ShipId); w.Put(x.PlayerId); w.Put(x.ContractId); w.Put(x.Payout);
-                break;
-            case CargoDropped x:
-                Begin(w, EventTag.CargoDropped, x); w.Put(x.CrateId); w.Put(x.Position); w.Put(x.Cargo);
-                break;
-            case CargoRecovered x:
-                Begin(w, EventTag.CargoRecovered, x); w.Put(x.CrateId); w.Put(x.ShipId); w.Put(x.PlayerId);
-                break;
-            case CargoLost x:
-                Begin(w, EventTag.CargoLost, x); w.Put(x.ContractId);
-                break;
             case FortressTaken x:
                 Begin(w, EventTag.FortressTaken, x); w.Put(x.IslandId);
                 break;
@@ -422,6 +439,22 @@ public static class Wire
                 break;
             case BossSpawned x:
                 Begin(w, EventTag.BossSpawned, x); w.Put(x.ShipId); w.Put((byte)x.Round); w.Put(x.PreyPlayerId);
+                break;
+            case BossPhaseChanged x:
+                Begin(w, EventTag.BossPhaseChanged, x); w.Put(x.ShipId); w.Put((byte)Math.Clamp(x.Phase, 0, byte.MaxValue));
+                break;
+            case ReliefFleetSighted x:
+                Begin(w, EventTag.ReliefFleetSighted, x); w.Put((byte)Math.Clamp(x.Ships, 0, byte.MaxValue));
+                break;
+            case VoyageCharted x:
+                Begin(w, EventTag.VoyageCharted, x); w.Put(x.Chart);
+                break;
+            case RegionEntered x:
+                Begin(w, EventTag.RegionEntered, x);
+                w.Put(x.NodeId); w.Put(x.Size); w.Put(x.FirstEntityId);
+                w.Put((byte)x.Islands.Count);
+                foreach (var island in x.Islands)
+                    w.Put(island);
                 break;
             default:
                 throw new ArgumentException($"No wire format for {e.GetType().Name}.");
@@ -477,20 +510,6 @@ public static class Wire
             case EventTag.PlayerSunk: return new PlayerSunk(tick, r.GetInt(), r.GetInt());
             case EventTag.PlayerRespawned: return new PlayerRespawned(tick, r.GetInt(), r.GetInt());
             case EventTag.RunEnded: return new RunEnded(tick, r.GetBool());
-            case EventTag.ContractsOffered:
-            {
-                var islandId = r.GetInt();
-                var count = r.GetByte();
-                var offers = new TradeContract[count];
-                for (var i = 0; i < count; i++)
-                    offers[i] = r.GetContract();
-                return new ContractsOffered(tick, islandId, offers);
-            }
-            case EventTag.ContractPurchased: return new ContractPurchased(tick, r.GetInt(), r.GetInt(), r.GetContract());
-            case EventTag.ContractDelivered: return new ContractDelivered(tick, r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt());
-            case EventTag.CargoDropped: return new CargoDropped(tick, r.GetInt(), r.GetVector2(), r.GetCargoLot());
-            case EventTag.CargoRecovered: return new CargoRecovered(tick, r.GetInt(), r.GetInt(), r.GetInt());
-            case EventTag.CargoLost: return new CargoLost(tick, r.GetInt());
             case EventTag.FortressTaken: return new FortressTaken(tick, r.GetInt());
             case EventTag.CardsOffered: return new CardsOffered(tick, r.GetInt(), r.GetCardOffer());
             case EventTag.CardChosen: return new CardChosen(tick, r.GetInt(), r.GetCardPick());
@@ -500,6 +519,18 @@ public static class Wire
             case EventTag.StartingWeaponChosen: return new StartingWeaponChosen(tick, r.GetInt(), r.GetString(64));
             case EventTag.CardsRerolled: return new CardsRerolled(tick, r.GetInt(), r.GetCardOffer(), r.GetUShort());
             case EventTag.BossSpawned: return new BossSpawned(tick, r.GetInt(), r.GetByte(), r.GetInt());
+            case EventTag.BossPhaseChanged: return new BossPhaseChanged(tick, r.GetInt(), r.GetByte());
+            case EventTag.ReliefFleetSighted: return new ReliefFleetSighted(tick, r.GetByte());
+            case EventTag.VoyageCharted: return new VoyageCharted(tick, r.GetChart());
+            case EventTag.RegionEntered:
+            {
+                var (nodeId, size, firstEntityId) = (r.GetInt(), r.GetVector2(), r.GetInt());
+                var count = r.GetByte();
+                var islands = new Island[count];
+                for (var i = 0; i < count; i++)
+                    islands[i] = r.GetIsland();
+                return new RegionEntered(tick, nodeId, size, islands, firstEntityId);
+            }
             default: throw new InvalidDataException($"Unknown event tag {tag}.");
         }
     }
@@ -641,7 +672,7 @@ public static class Wire
         foreach (var value in new[]
                  {
                      s.MaxSpeed, s.Acceleration, s.CoastTimeConstant, s.MinDeceleration, s.MinTurnRadius, s.TurnRadiusAtMaxSpeed,
-                     s.Radius, s.Length, s.Beam, s.MaxHealth, s.CooldownSpeed, s.WeaponDamage, s.ProjectileSpeed, s.WeaponRange, s.CargoCapacity, s.HealthRegen,
+                     s.Radius, s.Length, s.Beam, s.MaxHealth, s.CooldownSpeed, s.WeaponDamage, s.ProjectileSpeed, s.WeaponRange, s.HealthRegen,
                  })
             w.Put(value);
     }
@@ -650,7 +681,7 @@ public static class Wire
         MaxSpeed: r.GetFloat(), Acceleration: r.GetFloat(), CoastTimeConstant: r.GetFloat(), MinDeceleration: r.GetFloat(),
         MinTurnRadius: r.GetFloat(), TurnRadiusAtMaxSpeed: r.GetFloat(), Radius: r.GetFloat(), Length: r.GetFloat(),
         Beam: r.GetFloat(), MaxHealth: r.GetFloat(), CooldownSpeed: r.GetFloat(), WeaponDamage: r.GetFloat(),
-        ProjectileSpeed: r.GetFloat(), WeaponRange: r.GetFloat(), CargoCapacity: r.GetFloat(), HealthRegen: r.GetFloat());
+        ProjectileSpeed: r.GetFloat(), WeaponRange: r.GetFloat(), HealthRegen: r.GetFloat());
 
     // ---- Snapshots (chunked: each chunk is one unreliable packet) ---------------------------------------
 
@@ -663,6 +694,8 @@ public static class Wire
         var header = new NetDataWriter();
         header.Put(snapshot.Wind);
         var run = snapshot.Run;
+        header.Put((ushort)Math.Clamp(run.NodeId, 0, ushort.MaxValue));
+        header.Put(run.Cleared);
         header.Put((byte)Math.Clamp(run.FortressesTaken, 0, byte.MaxValue));
         header.Put((byte)Math.Clamp(run.BossesSunk, 0, byte.MaxValue));
         header.Put((ushort)Math.Clamp(run.BossCountdownTicks, 0, ushort.MaxValue));
@@ -673,7 +706,8 @@ public static class Wire
         header.Put((byte)snapshot.Players.Count);
         foreach (var p in snapshot.Players)
         {
-            header.Put(p.PlayerId); header.Put(p.Gold); header.Put(p.Kills); header.Put(p.RespawnTicks);
+            header.Put(p.PlayerId); header.Put(p.Gold); header.Put(p.Kills); header.Put(p.RespawnTicks); header.PutOptional(p.CourseVote);
+            header.Put((byte)Math.Clamp(p.ExtraLives, 0, byte.MaxValue)); header.Put((byte)Math.Clamp(p.PacksBoughtHere, 0, byte.MaxValue));
         }
         header.Put((byte)snapshot.CommandAcks.Count);
         foreach (var (playerId, sequence) in snapshot.CommandAcks)
@@ -739,14 +773,14 @@ public static class Wire
         if (index == 0)
         {
             snapshot.Wind = r.GetVector2();
-            snapshot.Run = new RunStatus(FortressesTaken: r.GetByte(), BossesSunk: r.GetByte(), BossCountdownTicks: r.GetUShort(),
-                BossAfloat: r.GetBool());
+            snapshot.Run = new RunStatus(NodeId: r.GetUShort(), Cleared: r.GetBool(), FortressesTaken: r.GetByte(), BossesSunk: r.GetByte(),
+                BossCountdownTicks: r.GetUShort(), BossAfloat: r.GetBool());
             snapshot.Paused = r.GetBool();
             snapshot.RunOver = r.GetBool();
             snapshot.Victory = r.GetBool();
             var players = r.GetByte();
             for (var i = 0; i < players; i++)
-                snapshot.Players.Add(new PlayerSnapshot(r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt()));
+                snapshot.Players.Add(new PlayerSnapshot(r.GetInt(), r.GetInt(), r.GetInt(), r.GetInt(), r.GetOptionalInt(), r.GetByte(), r.GetByte()));
             var acks = r.GetByte();
             for (var i = 0; i < acks; i++)
                 snapshot.CommandAcks.Add((r.GetInt(), r.GetUInt()));

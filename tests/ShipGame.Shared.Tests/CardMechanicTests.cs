@@ -415,7 +415,7 @@ public class CardMechanicTests
         ship.AddToTally(Tally.BroadsideHits, 70f);
         Assert.Equal(plain * 1.04f, BroadsideVolley.DamageFor(ship), 3);
 
-        Assert.Equal("NOW +4% BROADSIDE DAMAGE. NEXT IN 30 BROADSIDE HITS.", new CardPick("gunnery-drill", 1).DescriptionOn(ship));
+        Assert.Equal("GROWN TO +4% BROADSIDE DAMAGE. NEXT STEP IN 30 BROADSIDE HITS.", new CardPick("gunnery-drill", 1).DescriptionOn(ship));
         Assert.Equal("EVERY 50 BROADSIDE HITS: +2% BROADSIDE DAMAGE.", new CardPick("gunnery-drill", 1).Description);
     }
 
@@ -423,7 +423,7 @@ public class CardMechanicTests
     public void AGrowingCard_SaysSo_BeforeItsGrown()
     {
         var (_, ship) = CreateWorld();
-        Assert.Equal("NOW NOTHING YET. NEXT IN 5 KILLS.", new CardPick("bounty-hunter", 1).DescriptionOn(ship));
+        Assert.Equal("NOT GROWN YET. FIRST STEP IN 5 KILLS.", new CardPick("bounty-hunter", 1).DescriptionOn(ship));
     }
 
     [Fact]

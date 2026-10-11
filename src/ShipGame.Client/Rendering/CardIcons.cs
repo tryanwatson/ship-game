@@ -22,6 +22,7 @@ public enum CardIcon
     Fire,
     Echo,
     Anchor,
+    Chain,
 }
 
 /// <summary>Simple line-and-shape icons for card emblems, drawn to fit a circle of the given radius.</summary>
@@ -195,6 +196,17 @@ public static class CardIcons
                     batch.Stroke(c + new Vector2(dx - 0.25f, -0.55f) * r, c + new Vector2(dx, 0.15f) * r, w - 1f, color * 0.6f);
                 }
                 break;
+            case CardIcon.Chain:
+            {
+                // Chain shot: two balls with a run of links between them.
+                var from = c + new Vector2(-0.6f, 0.4f) * r;
+                var to = c + new Vector2(0.6f, -0.4f) * r;
+                for (var i = 1; i <= 3; i++)
+                    Circle(batch, Vector2.Lerp(from, to, i / 4f), 0.14f * r, w - 1f, color * 0.75f);
+                batch.FillEllipse(from, new Vector2(0.3f * r), color);
+                batch.FillEllipse(to, new Vector2(0.3f * r), color);
+                break;
+            }
         }
     }
 

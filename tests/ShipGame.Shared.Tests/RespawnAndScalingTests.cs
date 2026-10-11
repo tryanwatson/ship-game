@@ -47,7 +47,7 @@ public class RespawnAndScalingTests
         var reborn = world.GetPlayerShip(1);
         Assert.NotNull(reborn);
         Assert.False(world.Players[1].IsAwaitingRespawn);
-        Assert.Equal(reborn.Stats.MaxHealth, reborn.Health);
+        Assert.InRange(reborn.Health, reborn.Stats.MaxHealth * Respawning.ReturnHealth, reborn.Stats.MaxHealth * Respawning.ReturnHealth + 1f);
         Assert.InRange(Vector2.Distance(reborn.Position, world.GetPlayerShip(2)!.Position), 6f, 10f);
     }
 
@@ -69,7 +69,7 @@ public class RespawnAndScalingTests
         Assert.Equal(42, world.Players[1].Gold);
         Assert.Equal(statsBefore, reborn.Stats);
         Assert.Equal(1, Shipyards.Level(reborn, UpgradeCatalog.Find("hull")!));
-        Assert.Equal(statsBefore.MaxHealth, reborn.Health);
+        Assert.InRange(reborn.Health, statsBefore.MaxHealth * Respawning.ReturnHealth, statsBefore.MaxHealth * Respawning.ReturnHealth + 1f);
         Assert.NotNull(reborn.GetAbility(AbilitySlot.One)); // guns came back too
     }
 

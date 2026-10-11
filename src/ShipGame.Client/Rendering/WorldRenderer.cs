@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Xna.Framework;
 using ShipGame.Shared.Abilities;
-using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using NVector2 = System.Numerics.Vector2;
@@ -20,13 +19,10 @@ public sealed class WorldRenderer
     private static readonly Color Water = new(26, 85, 104);
     private static readonly Color OutOfBoundsWater = new(19, 53, 71);
     private static readonly Color GridLine = new Color(255, 255, 255) * 0.06f;
-    private static readonly Color HullOutline = new(30, 20, 12);
     private static readonly Color Shallows = new(64, 142, 145);
     private static readonly Color Sand = new(214, 196, 140);
     private static readonly Color Grass = new(92, 140, 70);
     private static readonly Color Shoreline = new(120, 100, 60);
-    private static readonly Color HutWallLit = new(170, 120, 70);
-    private static readonly Color HutWallShade = new(120, 82, 48);
     private static readonly Color MoveMarker = new Color(120, 255, 140) * 0.8f;
     private static readonly Color Cannonball = new(20, 20, 24);
     private static readonly Color Shadow = new Color(0, 0, 0) * 0.3f;
@@ -50,13 +46,12 @@ public sealed class WorldRenderer
     private static readonly Color FireGlow = new Color(255, 120, 30) * 0.28f;
     private static readonly Color FireEdge = new Color(255, 170, 60) * 0.7f;
     private static readonly Color FireFlame = new(255, 190, 80);
-    private static readonly Color MarkColor = new(255, 90, 70);
+    private static readonly Color MarkColor = StatusLook.MarkColor;
 
     // Status pips under a health bar, one per status: a colored square, draining as it wears off, with its stacks.
     private const float PipSize = 9f;
     private const float PipGap = 2f;
     private static readonly Color PipBack = new Color(10, 12, 18) * 0.8f;
-    private static readonly Color PipText = new(250, 250, 250);
     private static readonly Color StrikeFill = new Color(235, 80, 60) * 0.3f;
     private static readonly Color StrikeEdge = new Color(240, 110, 80) * 0.8f;
     private static readonly Color Shell = new(25, 25, 30);
@@ -69,7 +64,7 @@ public sealed class WorldRenderer
     private static readonly Color HealthCrew = new(77, 208, 192);
     private static readonly Color HealthEnemy = new(210, 70, 60);
 
-    // Pirate levels: plain at or below the waters we're in, warmer the further above them.
+    // Pirate levels: plain at or below the stop we're at, warmer the further above it.
     private const float LevelScale = 1.5f;
     private static readonly Color LevelBack = new Color(0, 0, 0) * 0.7f;
     private static readonly Color LevelEven = new(235, 235, 240);
@@ -132,9 +127,6 @@ public sealed class WorldRenderer
         }
 
         _combat.DrawGround();
-
-        foreach (var crate in world.Trade.Crates)
-            DrawFloatingCrate(crate.Position);
 
         // Burning water, and where shells will land: public, so anyone can get out of the way.
         foreach (var fire in world.Fires)
@@ -232,8 +224,8 @@ public sealed class WorldRenderer
         _combat.DrawAir();
         _batch.Flush();
 
-        // Health bars float above everything, League-style. Levels are judged against the waters we're in.
-        var localLevel = localShip is null ? 0 : Archipelago.LevelAt(localShip.Position);
+        // Health bars float above everything, League-style. Levels are judged against the stop we're at.
+        var localLevel = localShip is null ? 0 : world.Director?.CurrentNode?.Level ?? 0;
         foreach (var ship in world.Ships)
             DrawHealthBar(ship, NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), ship == localShip, localLevel, renderTick,
                 ship.OwnerPlayerId is { } owner && world.Players.TryGetValue(owner, out var player) ? player.Name : null);
@@ -442,28 +434,6 @@ public sealed class WorldRenderer
         for (var i = 0; i <= stepsPerHalf; i++)
             outline[n++] = IsoProjection.WorldToIso(aft + BroadsideVolley.DirectionAt(heading, side, -foreSign * arc * i / stepsPerHalf) * range);
         _batch.FillConvex(outline[..n], color);
-    }
-
-    /// <summary>Spilled cargo: a little crate riding in the water, with a ring of foam so it shows against the sea.</summary>
-    private void DrawFloatingCrate(NVector2 position)
-    {
-        DrawGroundCircle(position, 0.8f, AnchorRipple);
-        const float half = 0.35f;
-        const float height = 8f;
-        var top = IsoProjection.WorldToIso(position + IsoProjection.Grid(-half, -half));
-        var right = IsoProjection.WorldToIso(position + IsoProjection.Grid(half, -half));
-        var bottom = IsoProjection.WorldToIso(position + IsoProjection.Grid(half, half));
-        var left = IsoProjection.WorldToIso(position + IsoProjection.Grid(-half, half));
-        var up = new Vector2(0, -height);
-
-        Span<Vector2> face = stackalloc Vector2[4];
-        face[0] = left; face[1] = bottom; face[2] = bottom + up; face[3] = left + up;
-        _batch.FillConvex(face, HutWallLit);
-        face[0] = bottom; face[1] = right; face[2] = right + up; face[3] = bottom + up;
-        _batch.FillConvex(face, HutWallShade);
-        face[0] = top + up; face[1] = right + up; face[2] = bottom + up; face[3] = left + up;
-        _batch.FillConvex(face, TradeMarkers.Cargo);
-        _batch.Outline(face, HullOutline);
     }
 
     private void DrawCannonball(Projectile projectile, NVector2 pos)
@@ -700,7 +670,7 @@ public sealed class WorldRenderer
         var x = topLeft.X;
         foreach (var status in ship.Statuses.OrderByDescending(s => s.Definition.IsBuff).ThenBy(s => s.Id))
         {
-            var color = StatusColor(status.Id);
+            var color = StatusLook.Color(status.Id);
             var left = (float)Math.Clamp((status.UntilTick - renderTick) / status.Definition.Ticks, 0, 1);
             FillRect(new Vector2(x, topLeft.Y), new Vector2(PipSize, PipSize), PipBack);
             FillRect(new Vector2(x + 1f, topLeft.Y + 1f + (PipSize - 2f) * (1f - left)), new Vector2(PipSize - 2f, (PipSize - 2f) * left), color);
@@ -713,16 +683,6 @@ public sealed class WorldRenderer
             x += PipSize + PipGap;
         }
     }
-
-    private static Color StatusColor(StatusId id) => id switch
-    {
-        StatusId.Burning => new Color(255, 140, 40),
-        StatusId.Frenzy => new Color(235, 60, 70),
-        StatusId.Marked => MarkColor,
-        StatusId.Slowed => new Color(100, 160, 240),
-        StatusId.Entrenched => new Color(220, 190, 110),
-        _ => PipText,
-    };
 
     /// <summary>Flames licking up off a burning hull: more of them, and taller, the more stacks it has.</summary>
     private void DrawShipAflame(Ship ship, NVector2 pos, float heading, int stacks, float time)
@@ -749,7 +709,7 @@ public sealed class WorldRenderer
 
     /// <summary>
     /// A ship's level in a dark box, its left edge at <paramref name="leftMiddle"/>: colored by how far it's above
-    /// <paramref name="localLevel"/> (the waters we're in), so outclassed foes stand out.
+    /// <paramref name="localLevel"/> (the stop we're at), so outclassed foes stand out.
     /// </summary>
     private void DrawLevelBadge(int level, Vector2 leftMiddle, int localLevel)
     {

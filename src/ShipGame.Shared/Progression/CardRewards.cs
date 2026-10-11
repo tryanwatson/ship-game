@@ -19,6 +19,9 @@ public enum OfferSource
     /// at its strongest, and rerolls are free and unlimited (see <see cref="CardRewards.OfferTesting"/>).
     /// </summary>
     Testing,
+
+    /// <summary>A pack bought at a port (see <see cref="Upgrades.Shipyards.TryBuyCardPack"/>): the hand a fortress of the port's level deals.</summary>
+    Shop,
 }
 
 /// <summary>
@@ -36,10 +39,13 @@ public sealed record CardOffer(OfferSource Source, int Level, IReadOnlyList<Card
     public bool Contains(string cardId) => Cards.Any(c => c.Id == cardId);
 }
 
+/// <summary>One card of a hand before it's dealt: its tier, and the chance it comes a tier better instead.</summary>
+public readonly record struct HandSlot(CardTier Tier, float Upgrade = 0f);
+
 /// <summary>
 /// Cards as rewards. Taking a fortress wins every player in the run an offer of their own, dealt at the fortress's
-/// level: the level sets the odds of each tier (<see cref="TierOdds"/>), how many cards there are, and the numbers on
-/// them, so the hardest fortresses deal hands of prismatics at their strongest. Sinking a boss (other than the last)
+/// level: the level sets the hand (<see cref="Hand"/>: how many cards of each tier, and any chance of a better one) and
+/// the numbers on them, so the hardest fortresses deal hands of prismatics at their strongest. Sinking a boss (other than the last)
 /// deals a hand of prismatics, stronger for the second than the first. Every run also opens with a free starting card.
 /// Weapon cards are only dealt for weapons the player carries (any, before they've chosen one). The game pauses until
 /// everyone has chosen (see <see cref="World.IsPaused"/>), however long that takes; offers queue up if they come at
@@ -59,11 +65,14 @@ public static class CardRewards
     public static int RerollCost(int rerolls) => RerollBaseCost * (1 << Math.Clamp(rerolls, 0, 20));
 
     /// <summary>
-    /// Cards a player holds by the last boss of a full run: the starting card, one per fortress (every boss but the
-    /// first comes after another <see cref="RunDirector.FortressesPerBoss"/>), and one per boss sunk before the last.
-    /// A testing run deals this many hands up front.
+    /// Cards a player typically holds by the last boss of a full run: the starting card, one per fortress (about
+    /// <see cref="TypicalFortressesPerAct"/> an act, with a port stop or so between), and one per boss sunk before the
+    /// last. A testing run deals this many hands up front.
     /// </summary>
-    public const int TestingHands = 1 + RunDirector.FortressesPerBoss * RunDirector.BossCount + (RunDirector.BossCount - 1);
+    public const int TestingHands = 1 + TypicalFortressesPerAct * RunDirector.BossCount + (RunDirector.BossCount - 1);
+
+    /// <summary>Fortresses a crew usually takes in an act of <see cref="Maps.SeaChart.RowsPerAct"/> rows, choosing a port once.</summary>
+    public const int TypicalFortressesPerAct = Maps.SeaChart.RowsPerAct - 1;
 
     /// <summary>A testing hand's level: the top, so every card comes at the strongest its tier goes.</summary>
     public const int TestingLevel = 8;
@@ -74,43 +83,71 @@ public static class CardRewards
     /// <summary>The level a boss's hand is dealt at: round 1 at 6, round 2 at 8.</summary>
     public static int BossDropLevel(int round) => Math.Min(8, 4 + 2 * Math.Max(1, round));
 
-    /// <summary>Chances of silver, gold and prismatic for each card in an offer.</summary>
-    public static (float Silver, float Gold, float Prismatic) TierOdds(OfferSource source, int level) => source switch
+    private static readonly HandSlot S = new(CardTier.Silver);
+    private static readonly HandSlot G = new(CardTier.Gold);
+    private static readonly HandSlot P = new(CardTier.Prismatic);
+
+    private static HandSlot Lucky(CardTier tier, float upgrade) => new(tier, upgrade);
+
+    /// <summary>
+    /// A fortress's hand at each level, from 1: every step up is a visibly better hand (a better card, or a chance at
+    /// one), so the chart can show exactly what's on offer.
+    /// </summary>
+    private static readonly HandSlot[][] FortressHands =
     {
-        OfferSource.Start => (0.70f, 0.30f, 0f),
-        OfferSource.Boss => (0f, 0f, 1f),
-        OfferSource.Testing => Only(DefaultTestingTier),
-        _ => level switch
-        {
-            <= 2 => (0.60f, 0.40f, 0f),
-            <= 4 => (0.25f, 0.60f, 0.15f),
-            <= 6 => (0.05f, 0.55f, 0.40f),
-            7 => (0f, 0.40f, 0.60f),
-            _ => (0f, 0f, 1f),
-        },
+        new[] { S, S, G },
+        new[] { S, G, G },
+        new[] { S, G, Lucky(CardTier.Gold, 0.25f) },
+        new[] { G, G, Lucky(CardTier.Gold, 0.35f) },
+        new[] { G, G, P },
+        new[] { G, Lucky(CardTier.Gold, 0.5f), P },
+        new[] { G, P, P },
+        new[] { P, P, P, P },
     };
 
-    private static (float Silver, float Gold, float Prismatic) Only(CardTier tier) => tier switch
+    private static readonly HandSlot[] StartHand = { S, S, G };
+    private static readonly HandSlot[] BossHand = { P, P, P };
+
+    /// <summary>The hand an offer is dealt as: a card of each slot's tier, or the tier above by its chance.</summary>
+    public static IReadOnlyList<HandSlot> Hand(OfferSource source, int level) => source switch
     {
-        CardTier.Silver => (1f, 0f, 0f),
-        CardTier.Gold => (0f, 1f, 0f),
-        _ => (0f, 0f, 1f),
+        OfferSource.Start => StartHand,
+        OfferSource.Boss => BossHand,
+        OfferSource.Testing => Enumerable.Repeat(new HandSlot(DefaultTestingTier), TopOfferSize).ToArray(),
+        _ => FortressHands[Math.Clamp(level, 1, FortressHands.Length) - 1],
     };
 
-    public static int CardsFor(OfferSource source, int level) =>
-        source == OfferSource.Testing || (source == OfferSource.Fortress && level >= 8) ? TopOfferSize : OfferSize;
+    public static int CardsFor(OfferSource source, int level) => Hand(source, level).Count;
 
     public static int FreeRerollsFor(OfferSource source, int level) => source == OfferSource.Fortress && level >= 7 ? 1 : 0;
 
-    /// <summary>A few words on what a fortress of <paramref name="level"/> pays out, for the map and the island's label.</summary>
-    public static string RewardLabel(int level) => level switch
+    /// <summary>
+    /// What a fortress of <paramref name="level"/> pays out, in words, for the banner on arriving: "2 GOLD + 1 SILVER,
+    /// 25% CHANCE OF A PRISMATIC", "4 PRISMATIC + A FREE REROLL".
+    /// </summary>
+    public static string RewardLabel(int level) =>
+        Describe(Hand(OfferSource.Fortress, level)) + (FreeRerollsFor(OfferSource.Fortress, level) > 0 ? " + A FREE REROLL" : "");
+
+    /// <summary>A hand in words: how many of each tier, best first, then any chance of a better card.</summary>
+    public static string Describe(IReadOnlyList<HandSlot> hand)
     {
-        <= 2 => "SILVER",
-        <= 4 => "GOLD",
-        <= 6 => "GOLD+",
-        7 => "PRISMATIC",
-        _ => "PRISMATIC X4",
+        var text = string.Join(" + ", hand.GroupBy(s => s.Tier).OrderByDescending(g => g.Key).Select(g => $"{g.Count()} {TierName(g.Key)}"));
+        foreach (var slot in hand.Where(s => s.Upgrade > 0f))
+        {
+            var better = slot.Tier + 1;
+            text += $", {Percent(slot.Upgrade)}% CHANCE OF {(hand.Any(s => s.Tier == better) ? "ANOTHER" : "A")} {TierName(better)}";
+        }
+        return text;
+    }
+
+    public static string TierName(CardTier tier) => tier switch
+    {
+        CardTier.Silver => "SILVER",
+        CardTier.Gold => "GOLD",
+        _ => "PRISMATIC",
     };
+
+    public static int Percent(float chance) => (int)MathF.Round(chance * 100f);
 
     /// <summary>Offers each player in the run their own hand.</summary>
     public static void OfferAll(World world, Random rng, OfferSource source, int level)
@@ -144,21 +181,19 @@ public static class CardRewards
     }
 
     /// <summary>
-    /// A hand from <paramref name="pool"/>: each card's tier drawn by <see cref="TierOdds"/>, all different, at
-    /// <paramref name="level"/> (or the top of its tier, if that's lower). A tier with nothing left to deal gives way to
-    /// the next tier down, then up. Cards in <paramref name="avoid"/> are dealt only if there's nothing else.
+    /// A hand from <paramref name="pool"/>, as <see cref="Hand"/> lays it out: each card of its slot's tier (or the one
+    /// above, by the slot's chance), all different, at <paramref name="level"/> (or the top of its tier, if that's
+    /// lower). A tier with nothing left to deal gives way to the next tier down, then up. Cards in
+    /// <paramref name="avoid"/> are dealt only if there's nothing else.
     /// </summary>
-    /// <param name="only">Every card of this tier (as far as the pool allows), whatever the odds.</param>
+    /// <param name="only">Every card of this tier (as far as the pool allows), whatever the hand.</param>
     public static CardOffer Deal(Random rng, IReadOnlyList<CardDefinition> pool, OfferSource source, int level, IReadOnlyCollection<string>? avoid = null,
         CardTier? only = null)
     {
-        var odds = only is { } forced ? Only(forced) : TierOdds(source, level);
         var dealt = new List<CardPick>();
-        var size = CardsFor(source, level);
-        for (var i = 0; i < size; i++)
+        foreach (var slot in Hand(source, level))
         {
-            var roll = rng.NextSingle();
-            var tier = roll < odds.Silver ? CardTier.Silver : roll < odds.Silver + odds.Gold ? CardTier.Gold : CardTier.Prismatic;
+            var tier = only ?? (slot.Upgrade > 0f && rng.NextSingle() < slot.Upgrade ? slot.Tier + 1 : slot.Tier);
             var left = pool.Where(c => dealt.All(d => d.Id != c.Id)).ToList();
             var fresh = avoid is null ? left : left.Where(c => !avoid.Contains(c.Id)).ToList();
             var card = Pick(rng, fresh, tier) ?? Pick(rng, left, tier);

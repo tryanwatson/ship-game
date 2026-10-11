@@ -149,7 +149,7 @@ public sealed class CardDefinition
     public required Func<float[], string> Describe { get; init; }
 
     /// <summary>For a card whose effect depends on the ship (its speed, say): what that comes to on a given ship, right now.</summary>
-    public Func<float[], Ship, string>? DescribeOn { get; init; }
+    public Func<float[], Ship, string?>? DescribeOn { get; init; }
 
     public Func<float[], IEnumerable<CardStat>>? Stats { get; init; }
 
@@ -187,7 +187,8 @@ public sealed class CardDefinition
     public float[] ValuesFor(CardPick pick)
     {
         var (min, max) = LevelRange;
-        var t = Math.Clamp((pick.Level - min) / (float)(max - min), 0f, 1f + MaxImprovement / (float)(max - min));
+        // Only a prismatic taken again goes past its tier's top; anything else dealt higher (a testing hand) stops there.
+        var t = Math.Clamp((pick.Level - min) / (float)(max - min), 0f, Improves ? 1f + MaxImprovement / (float)(max - min) : 1f);
         return Values.Select(v => v.At(t, pick.Roll)).ToArray();
     }
 
@@ -266,13 +267,15 @@ public static class CardCatalog
             AbilityId = abilityId,
             Growth = growth,
             Values = new[] { value },
-            Describe = v => $"EVERY {N(every)} {Tallies.Noun(tally)}: {what(v[0])}.",
+            Describe = v => $"EVERY {Tallies.Count(tally, every)}: {what(v[0])}.",
             DescribeOn = (v, ship) =>
             {
                 var count = ship.TallyOf(tally);
                 var steps = (int)MathF.Floor(count / every);
-                var next = MathF.Max(1f, MathF.Ceiling((steps + 1) * every - count));
-                return $"NOW {(steps == 0 ? "NOTHING YET" : what(v[0] * steps))}. NEXT IN {N(next)} {Tallies.Noun(tally)}.";
+                var next = Tallies.Count(tally, MathF.Max(1f, MathF.Ceiling((steps + 1) * every - count)));
+                return steps == 0
+                    ? $"NOT GROWN YET. FIRST STEP IN {next}."
+                    : $"GROWN TO {what(v[0] * steps)}. NEXT STEP IN {next}.";
             },
             Stats = stat is null ? null : v => new[] { stat(v[0]) },
             WeaponEffects = weapon is null ? null : v => new[] { weapon(v[0]) },
@@ -645,7 +648,13 @@ public static class CardCatalog
         {
             Values = new[] { V(40f, 100f) },
             Describe = v => $"RAMMING A SHIP DEALS {N(v[0])} DAMAGE AT A SLOOP'S TOP SPEED, MORE IF FASTER. YOU TAKE NONE.",
-            DescribeOn = (v, ship) => $"AT YOUR TOP SPEED: {N(World.RamDamageAt(v[0], ship.Stats.MaxSpeed))} DAMAGE.",
+            DescribeOn = (v, ship) =>
+            {
+                // At your top speed; and while sailing slower (or rowing), at the speed you're going now.
+                var top = $"AT YOUR TOP SPEED: {N(World.RamDamageAt(v[0], ship.Stats.MaxSpeed))} DAMAGE.";
+                var speed = MathF.Abs(ship.Speed);
+                return speed < 0.1f || ship.Stats.MaxSpeed - speed < 0.1f ? top : $"{top} AT YOUR SPEED NOW: {N(World.RamDamageAt(v[0], speed))}.";
+            },
             Perks = v => new[] { (Perk.RamDamage, v[0]) },
         },
         new("hunters-mark", "HUNTERS MARK", CardTier.Prismatic)
@@ -693,8 +702,10 @@ public static class CardCatalog
             Values = new[] { V(0f, 0.5f) },
             Describe = v => "THE BROADSIDE FIRES A RING OF SHOT ALL ROUND THE SHIP, BY ITSELF, WHENEVER AN ENEMY IS IN RANGE."
                             + (v[0] < 0.005f ? "" : $" +{P(v[0])} DAMAGE."),
-            DescribeOn = (_, ship) =>
-                $"YOUR RING: {BroadsideVolley.RingShotsFor(ship)} BALLS, EVERY {BroadsideVolley.ReloadSecondsFor(ship):0.0} SECONDS.",
+            // Only a ship with a broadside has a ring to tell of (one choosing its starting card has no guns yet).
+            DescribeOn = (_, ship) => ship.HasAbility(BroadsideVolley.AbilityId)
+                ? $"YOUR RING: {BroadsideVolley.RingShotsFor(ship)} BALLS, EVERY {BroadsideVolley.ReloadSecondsFor(ship):0.0} SECONDS."
+                : null,
             WeaponEffects = v => new[] { Flat(Ring, 1f), Times(Damage, 1f + v[0]) },
         },
         new("railgun", "RAILGUN", CardTier.Prismatic)

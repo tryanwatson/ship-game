@@ -98,34 +98,36 @@ public class CardTests
     // ---- Dealing ----------------------------------------------------------------------------------------
 
     [Fact]
-    public void TheOdds_FavourBetterTiers_AtHigherLevels()
+    public void EveryLevel_DealsABetterHand_ThanTheOneBelow()
     {
-        foreach (var source in Enum.GetValues<OfferSource>())
-        {
-            foreach (var level in Enumerable.Range(1, 8))
-            {
-                var (silver, gold, prismatic) = CardRewards.TierOdds(source, level);
-                Assert.Equal(1f, silver + gold + prismatic, 4);
-            }
-        }
-        Assert.Equal(0f, CardRewards.TierOdds(OfferSource.Fortress, 2).Prismatic);
-        Assert.Equal(1f, CardRewards.TierOdds(OfferSource.Fortress, 8).Prismatic);
-        Assert.Equal(1f, CardRewards.TierOdds(OfferSource.Boss, 6).Prismatic);
+        static double Expected(OfferSource source, int level) =>
+            CardRewards.Hand(source, level).Sum(s => (int)s.Tier + s.Upgrade);
+
+        for (var level = 2; level <= 8; level++)
+            Assert.True(Expected(OfferSource.Fortress, level) > Expected(OfferSource.Fortress, level - 1), $"level {level} deals no better than {level - 1}");
+        Assert.All(CardRewards.Hand(OfferSource.Boss, 6), s => Assert.Equal(CardTier.Prismatic, s.Tier));
+        Assert.All(Enumerable.Range(1, 8).SelectMany(l => CardRewards.Hand(OfferSource.Fortress, l)),
+            s => Assert.True(s.Upgrade == 0f || s.Tier < CardTier.Prismatic, "a prismatic can't come any better"));
         Assert.Equal((CardRewards.TopOfferSize, 1), (CardRewards.CardsFor(OfferSource.Fortress, 8), CardRewards.FreeRerollsFor(OfferSource.Fortress, 8)));
         Assert.Equal((CardRewards.OfferSize, 1), (CardRewards.CardsFor(OfferSource.Fortress, 7), CardRewards.FreeRerollsFor(OfferSource.Fortress, 7)));
         Assert.Equal(0, CardRewards.FreeRerollsFor(OfferSource.Fortress, 6));
+        Assert.Equal(new[]
+            {
+                "1 GOLD + 2 SILVER", "2 GOLD + 1 SILVER, 25% CHANCE OF A PRISMATIC", "1 PRISMATIC + 2 GOLD, 50% CHANCE OF ANOTHER PRISMATIC",
+                "4 PRISMATIC + A FREE REROLL",
+            },
+            new[] { 1, 3, 6, 8 }.Select(CardRewards.RewardLabel));
+    }
 
-        // Averaged over many hands, each step up deals better cards.
-        static double MeanTier(int level)
-        {
-            var rng = new Random(level);
-            return Enumerable.Range(0, 300)
-                .SelectMany(_ => CardRewards.Deal(rng, CardCatalog.All, OfferSource.Fortress, level).Cards)
-                .Average(c => (int)c.Definition.Tier);
-        }
-        Assert.True(MeanTier(1) < MeanTier(4));
-        Assert.True(MeanTier(4) < MeanTier(6));
-        Assert.True(MeanTier(6) < MeanTier(8));
+    [Fact]
+    public void AHand_IsDealtAsItsSlotsSay()
+    {
+        // The sure cards always come as their tier; the chancy one comes better about as often as it says.
+        var rng = new Random(5);
+        var hands = Enumerable.Range(0, 2000).Select(_ => CardRewards.Deal(rng, CardCatalog.All, OfferSource.Fortress, 3).Cards).ToList();
+        Assert.All(hands, cards => Assert.Equal(new[] { CardTier.Silver, CardTier.Gold }, cards.Take(2).Select(c => c.Definition.Tier)));
+        var better = hands.Count(cards => cards[2].Definition.Tier == CardTier.Prismatic) / (double)hands.Count;
+        Assert.InRange(better, 0.2, 0.3);
     }
 
     [Fact]
@@ -238,7 +240,7 @@ public class CardTests
         var reborn = world.GetPlayerShip(PlayerId)!;
         Assert.Equal(new[] { "ironclad", "full-sail" }, reborn.Cards.Select(c => c.Id));
         Assert.Equal(ShipStats.Sloop.MaxHealth * 1.6f, reborn.Stats.MaxHealth, 3);
-        Assert.Equal(reborn.Stats.MaxHealth, reborn.Health);
+        Assert.InRange(reborn.Health, reborn.Stats.MaxHealth * Respawning.ReturnHealth, reborn.Stats.MaxHealth * Respawning.ReturnHealth + 1f);
         Assert.Equal(ShipStats.Sloop.MaxSpeed * 1.3f, reborn.Stats.MaxSpeed, 3);
     }
 

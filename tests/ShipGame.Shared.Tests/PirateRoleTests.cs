@@ -1,6 +1,7 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Ai;
+using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 
@@ -52,7 +53,9 @@ public class PirateRoleTests
     [Fact]
     public void ARun_PutsEveryRoleToSea_AndBossesLeadWithABroadside()
     {
-        var world = Runs.Create(seed: 1, new List<(int, string)> { (PlayerId, "ANNE") });
+        var world = Runs.CreateMap();
+        world.SpawnShip(Archipelago.Start, 0f, ShipStats.Sloop, PlayerId);
+        PirateCamps.Populate(world, seed: 1);
         var pirates = world.Ships.Where(s => s.Team == Team.Pirates && !s.IsFort).ToList();
 
         var roles = pirates.Select(s => PirateRoles.Of(s)).ToList();

@@ -4,7 +4,6 @@ using ShipGame.Shared.Commands;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Net;
@@ -102,11 +101,14 @@ public sealed class ClientReplica
     private double _clock;
     private bool _clockStarted;
     private double _predictClock;
-    private LocalShipPredictor _predictor = new(Archipelago.Size);
+    private LocalShipPredictor _predictor = new(Regions.StartSize);
+
+    /// <summary>A region the server has sailed into whose first snapshot hasn't come yet: the predictor moves to it then.</summary>
+    private RegionEntered? _regionAhead;
 
     public ClientReplica()
     {
-        World = CreateWorld(Vector2.Zero);
+        World = CreateWorld(Regions.StartSize, Vector2.Zero);
     }
 
     /// <summary>Whose ship to predict; 0 for none.</summary>
@@ -138,10 +140,10 @@ public sealed class ClientReplica
     /// <summary>The newest snapshot's <see cref="Snapshot.Sequence"/>; 0 before any.</summary>
     public uint LatestSnapshotSequence { get; private set; }
 
-    /// <summary>A new run: start from an empty world on the shared map.</summary>
+    /// <summary>A new run: start from an empty sea. The chart and the first region's islands follow as events.</summary>
     public void Reset(RunStart start)
     {
-        World = CreateWorld(start.Wind);
+        World = CreateWorld(start.WorldSize, start.Wind);
         World.FriendlyFire = start.FriendlyFire;
         // Everyone opens the run choosing a card, then a weapon: the game waits for them (the cards arrive as events).
         foreach (var (playerId, name) in start.Crew ?? Array.Empty<(int, string)>())
@@ -161,6 +163,7 @@ public sealed class ClientReplica
         _clockStarted = false;
         LatestSnapshotSequence = 0;
         _predictor = new LocalShipPredictor(start.WorldSize);
+        _regionAhead = null;
         Alpha = 1f;
     }
 
@@ -260,7 +263,17 @@ public sealed class ClientReplica
         ship.Health = health; // health comes from snapshots; don't let re-applying upgrades top it up
     }
 
-    public void EnqueueEvents(IEnumerable<WorldEvent> events) => _pendingEvents.AddRange(events);
+    public void EnqueueEvents(IEnumerable<WorldEvent> events)
+    {
+        foreach (var e in events)
+        {
+            // Our ship is predicted from the newest snapshot: once one from the new region is in (see AddSnapshot),
+            // predict it against the new islands, not once the render clock catches up.
+            if (e is RegionEntered entered)
+                _regionAhead = entered;
+            _pendingEvents.Add(e);
+        }
+    }
 
     public void AddSnapshot(Snapshot snapshot)
     {
@@ -269,6 +282,12 @@ public sealed class ClientReplica
         if (_snapshots.Count > 0 && snapshot.Tick < _snapshots[^1].Tick)
             return;
         LatestSnapshotSequence = snapshot.Sequence;
+        // The region changes during the step announced (tick T); snapshots from T + 1 on are taken in the new one.
+        if (_regionAhead is { } region && snapshot.Tick > region.Tick)
+        {
+            _predictor = _predictor.ForRegion(region.Size, region.Islands);
+            _regionAhead = null;
+        }
         // Paused, the server sends the same tick again with a fresher header (command acks): it replaces the last.
         if (_snapshots.Count > 0 && snapshot.Tick == _snapshots[^1].Tick)
             _snapshots[^1] = snapshot;
@@ -565,27 +584,14 @@ public sealed class ClientReplica
                         Dps = fire.Dps, StartTick = fire.Tick, EndTick = fire.EndTick,
                     });
                     break;
+                case VoyageCharted charted when World.Director is { } director:
+                    director.Chart = charted.Chart;
+                    break;
+                case RegionEntered entered:
+                    EnterRegion(entered);
+                    break;
                 case CardsRerolled rerolled:
                     CardRewards.ApplyRerolled(World, rerolled.PlayerId, rerolled.Offer, rerolled.Rerolls);
-                    break;
-                case ContractsOffered offered:
-                    World.Trade.SetOffers(offered.IslandId, offered.Offers);
-                    break;
-                case ContractPurchased purchased:
-                    World.FindShip(purchased.ShipId)?.LoadCargo(new CargoLot(purchased.Contract, purchased.Contract.CargoUnits));
-                    break;
-                case ContractDelivered delivered:
-                    World.FindShip(delivered.ShipId)?.UnloadCargo(delivered.ContractId);
-                    break;
-                case CargoDropped dropped:
-                    World.Trade.AddCrate(dropped.Position, dropped.Cargo, dropped.CrateId);
-                    break;
-                case CargoRecovered recovered:
-                    if (World.Trade.FindCrate(recovered.CrateId) is { } crate)
-                    {
-                        World.Trade.RemoveCrate(crate.Id);
-                        World.FindShip(recovered.ShipId)?.LoadCargo(crate.Cargo);
-                    }
                     break;
             }
             _appliedEvents.Add(e);
@@ -630,7 +636,12 @@ public sealed class ClientReplica
     private void ApplyHeader(Snapshot snapshot)
     {
         World.Wind = snapshot.Wind;
-        World.Director?.Restore(snapshot.Run);
+        // The newer snapshot runs ahead of what's drawn: until the crew has sailed into a new stop's sea here (its
+        // RegionEntered applied at the render tick), the run's progress stays at the old stop, matching the islands.
+        var sailingAhead = World.Director is { } director && snapshot.Run.NodeId != director.NodeId
+                           && _pendingEvents.Any(e => e is RegionEntered entered && entered.NodeId == snapshot.Run.NodeId);
+        if (!sailingAhead)
+            World.Director?.Restore(snapshot.Run);
         if (snapshot.RunOver)
             World.EndRun(snapshot.Victory);
 
@@ -640,6 +651,9 @@ public sealed class ClientReplica
             player.Gold = p.Gold;
             player.Kills = p.Kills;
             player.RespawnTicksRemaining = p.RespawnTicks;
+            player.CourseVote = p.CourseVote;
+            player.ExtraLives = p.ExtraLives;
+            player.PacksBoughtHere = p.PacksBoughtHere;
         }
 
         World.SetPlunderedIslands(snapshot.PlunderedIslands);
@@ -762,11 +776,23 @@ public sealed class ClientReplica
         return drawnOrigin - origin;
     }
 
-    private static World CreateWorld(Vector2 wind)
+    /// <summary>
+    /// The crew sailed on: the old region's ships, shots, and islands go, and the new islands come. (Our own ship's
+    /// prediction moved over when the news arrived.)
+    /// </summary>
+    private void EnterRegion(RegionEntered entered)
     {
-        // A RunDirector here only holds the server's counters for display; this world never steps.
-        var world = Runs.CreateMap();
-        world.Wind = wind;
+        World.EnterRegion(entered.Size, entered.Islands, entered.FirstEntityId);
+        _flights.Clear();
+        _serverToLocal.Clear();
+        _gunsFiredUntil.Clear();
+        _hasOwnShipFrames = false;
+    }
+
+    private static World CreateWorld(Vector2 size, Vector2 wind)
+    {
+        // A RunDirector here only holds the server's counters (and the chart) for display; this world never steps.
+        var world = new World(size) { Wind = wind };
         world.Director = new RunDirector(seed: 0);
         return world;
     }

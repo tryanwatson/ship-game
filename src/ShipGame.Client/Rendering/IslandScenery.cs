@@ -15,6 +15,7 @@ public sealed class IslandScenery
     private readonly List<Item> _items = new();
     private readonly Dictionary<int, List<(NVector2 Position, float Size, Color Color)>> _patches = new();
     private World? _world;
+    private int _region;
     public IReadOnlyList<Item> Items => _items;
 
     public IslandScenery(PrimitiveBatch batch) => _batch = batch;
@@ -27,8 +28,10 @@ public sealed class IslandScenery
 
     public void EnsureWorld(World world)
     {
-        if (ReferenceEquals(_world, world)) return;
+        // Built afresh for each world, and each region it sails into: the islands are all new.
+        if (ReferenceEquals(_world, world) && _region == world.RegionsEntered) return;
         _world = world;
+        _region = world.RegionsEntered;
         _items.Clear(); _patches.Clear();
         foreach (var island in world.Islands)
             Build(island);

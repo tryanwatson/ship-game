@@ -6,7 +6,6 @@ using ShipGame.Shared.Commands;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
 using ShipGame.Shared.Stats;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Net.Tests;
@@ -26,14 +25,15 @@ public class WireTests
         new object[] { new AnchorKeyCommand(9, false) },
         new object[] { new ChoosePlunderCommand(9) },
         new object[] { new PurchaseUpgradeCommand(9, "shot-speed") },
-        new object[] { new PurchaseContractCommand(9, 123) },
         new object[] { new UnlockAbilityCommand(9, "mortar") },
         new object[] { new PurchaseSkillCommand(9, "heavy-volley") },
         new object[] { new PurchaseRepairCommand(9) },
+        new object[] { new BuyCardPackCommand(9) },
         new object[] { new ChooseCardCommand(9, "double-battery") },
         new object[] { new RerollCardsCommand(9) },
         new object[] { new RerollCardsCommand(9, CardTier.Silver) },
         new object[] { new RerollCardsCommand(9, CardTier.Prismatic) },
+        new object[] { new ChooseCourseCommand(9, 17) },
     };
 
     [Theory]
@@ -85,12 +85,6 @@ public class WireTests
         new object[] { new PlayerRespawned(10, 2, 55) },
         new object[] { new RunEnded(10) },
         new object[] { new RunEnded(10, Victory: true) },
-        new object[] { new ContractsOffered(10, 1, new[] { Contract, Contract with { Id = 32, DestinationIslandId = 9 } }) },
-        new object[] { new ContractPurchased(10, 3, 2, Contract) },
-        new object[] { new ContractDelivered(10, 3, 2, 31, 60) },
-        new object[] { new CargoDropped(10, 4, new Vector2(70, 80.5f), new CargoLot(Contract, 6)) },
-        new object[] { new CargoRecovered(10, 4, 5, 3) },
-        new object[] { new CargoLost(10, 31) },
         new object[] { new FortressTaken(10, 12) },
         new object[] { new CardsOffered(10, 3, new CardOffer(OfferSource.Fortress, 8,
             new[] { new CardPick("twin-decks", 8), new CardPick("treasure-map", 7, 0.625f), new CardPick("echo", 8), new CardPick("ram", 8) }, 1)) },
@@ -99,10 +93,35 @@ public class WireTests
         new object[] { new ShipRammed(10, 3, 812) },
         new object[] { new FireStarted(10, 99, 3, Team.Players, new Vector2(40, 41.5f), 2.5f, 17.5f, 190) },
         new object[] { new BossSpawned(10, 812, 3, 2) },
+        new object[] { new BossPhaseChanged(10, 812, 2) },
+        new object[] { new ReliefFleetSighted(10, 7) },
+        new object[] { new CardsOffered(10, 3, new CardOffer(OfferSource.Shop, 4, new[] { new CardPick("ironclad", 4) })) },
+        new object[] { new VoyageCharted(10, ShipGame.Shared.Maps.SeaChart.Generate(4)) },
+        new object[] { new RegionEntered(10, 7, new Vector2(180, 180), ShipGame.Shared.Maps.Regions.Build(
+            ShipGame.Shared.Maps.SeaChart.Generate(4).Nodes.First(n => n.Kind == ShipGame.Shared.Maps.NodeKind.Fortress), seed: 4, firstIslandId: 30).Islands, 4321) },
         new object[] { new ShotWarned(10, 812, AbilitySlot.Two, new Vector2(3.5f, -7f), 26, BroadsideVolley.StarboardChannel) },
     };
 
-    private static readonly TradeContract Contract = new(31, 1, 7, Cost: 40, Payout: 100, CargoUnits: 10);
+
+    [Fact]
+    public void Islands_RoundTrip_WithEverythingThatMakesThem()
+    {
+        var fortress = Island.FromTemplate(41, ShipGame.Shared.Maps.IslandShapes.Wedge, new Vector2(90.5f, 57.25f), 380f, 1.3f,
+            name: "SKULL ROCK", plunderGold: 210, level: 7, isFortress: true);
+        var yard = Island.FromTemplate(42, ShipGame.Shared.Maps.IslandShapes.Round, new Vector2(20, 30), 200f, 0.2f, hasShipyard: true, name: "HAVEN", level: 3);
+        var writer = new NetDataWriter();
+        writer.Put(fortress);
+        writer.Put(yard);
+        var reader = ReaderFor(writer);
+
+        foreach (var sent in new[] { fortress, yard })
+        {
+            var read = reader.GetIsland();
+            Assert.Equal((sent.Id, sent.Name, sent.PlunderGold, sent.Level, sent.HasShipyard, sent.IsFortress),
+                (read.Id, read.Name, read.PlunderGold, read.Level, read.HasShipyard, read.IsFortress));
+            Assert.Equal(sent.Outline.ToArray(), read.Outline.ToArray());
+        }
+    }
 
     [Theory]
     [MemberData(nameof(Events))]
@@ -195,7 +214,7 @@ public class WireTests
     public void ShipInfo_RoundTrips()
     {
         var info = new ShipInfo(
-            123, 7, 2, Team.Players, ShipStats.Sloop with { WeaponRange = 1.3f, CargoCapacity = 16f, HealthRegen = 1.5f },
+            123, 7, 2, Team.Players, ShipStats.Sloop with { WeaponRange = 1.3f, HealthRegen = 1.5f },
             new[] { "broadside", null, "long-gun", "mortar" },
             new[] { new StatModifier(StatId.MaxHealth, ModifierKind.Flat, 20, "upgrade:hull") },
             new Vector2(96, 90), 1.25f, new[] { "heavy-volley", "point-blank" }, Level: 6, IsBoss: true, FortIslandId: 14,
@@ -229,6 +248,7 @@ public class WireTests
         for (var i = 0; i < 30; i++)
             world.SpawnShip(new Vector2(20 + i, 40), 0f, ShipStats.Sloop);
         world.AddGold(1, 25);
+        world.Players[1].CourseVote = 12;
         world.ApplyStatus(player, StatusId.Burning, 4.5f, sourceShipId: 7, stacks: 3);
         player.AddCard(new CardPick("sea-miles", 1));
         player.AddToTally(Tally.TilesSailed, 612.5f);
@@ -238,7 +258,7 @@ public class WireTests
         world.Ships.Last().AddToTally(Tally.TilesSailed, 9f); // a pirate's: only what its cards grow with is sent
         var snapshot = Snapshot.Capture(world);
         snapshot.CommandAcks.Add((1, 4_000_000_000u));
-        snapshot.Run = new ShipGame.Shared.Progression.RunStatus(FortressesTaken: 5, BossesSunk: 2, BossCountdownTicks: 287, BossAfloat: true);
+        snapshot.Run = new ShipGame.Shared.Progression.RunStatus(NodeId: 17, Cleared: true, FortressesTaken: 5, BossesSunk: 2, BossCountdownTicks: 287, BossAfloat: true);
         snapshot.RunOver = true;
         snapshot.Victory = true;
 
@@ -250,7 +270,7 @@ public class WireTests
         Assert.Equal(2, ships[0].Cooldowns[0].Length);           // the player's broadside: one per deck
         Assert.Single(ships[0].Cooldowns[1]);                    // the player's long gun: one cooldown
         Assert.Empty(ships[1].Cooldowns[1]);                     // a pirate's empty slot 2
-        Assert.Equal(25, Assert.Single(header.Players).Gold);
+        Assert.Equal((25, (int?)12), (Assert.Single(header.Players).Gold, header.Players[0].CourseVote));
         // What prediction needs to carry on from the server's state exactly.
         Assert.True(ships[0].IsHoldingCourse);
         Assert.Equal(new Vector2(0.25f, -0.5f), ships[0].WindDrift);
@@ -283,6 +303,8 @@ public class WireTests
             ship.MoveTarget = new Vector2(100, 100);
             ship.PlunderIslandId = 1;
         }
+        foreach (var player in world.Players.Values)
+            player.CourseVote = 40; // everyone's voted
         var snapshot = Snapshot.Capture(world);
         for (var i = 1; i <= 12; i++)
             snapshot.CommandAcks.Add((i, uint.MaxValue));

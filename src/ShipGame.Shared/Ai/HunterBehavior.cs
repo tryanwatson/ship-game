@@ -679,10 +679,11 @@ public sealed class HunterBehavior : INpcBehavior
         var aim = target.Position;
         for (var i = 0; i < LeadIterations; i++)
             aim = target.Position + target.Velocity * (windupSeconds + Vector2.Distance(ship.Position, aim) / speed);
-        return Vector2.Distance(ship.Position, aim) <= LongGun.RangeFor(ship)
-               && !Navigation.LineBlockedByLand(world, ship.Position, aim, ignoredIslandId)
-            ? aim
-            : null;
+        // A fort stands on its island's shore, and a shot flies on over the beach to its walls (see World's projectiles).
+        var blocked = target.IsFort
+            ? world.LineHitsLand(ship.Position, aim, Projectile.DefaultRadius, ignoredIslandId, clearForts: true)
+            : Navigation.LineBlockedByLand(world, ship.Position, aim, ignoredIslandId);
+        return Vector2.Distance(ship.Position, aim) <= LongGun.RangeFor(ship) && !blocked ? aim : null;
     }
 
     /// <summary>

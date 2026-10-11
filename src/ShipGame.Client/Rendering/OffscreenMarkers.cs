@@ -4,7 +4,6 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using ShipGame.Net;
 using ShipGame.Shared.Simulation;
-using ShipGame.Shared.Trading;
 using NVector2 = System.Numerics.Vector2;
 
 namespace ShipGame.Client.Rendering;
@@ -12,8 +11,8 @@ namespace ShipGame.Client.Rendering;
 /// <summary>
 /// Arrows pinned to the screen edge pointing at pirates out of view: bright when one is after you, dim while it
 /// guards its spot. Only pirates within <see cref="Relevance.EnterRange"/> of our ship get one (the range an online
-/// server sends), not the whole map's. Islands our cargo is bound for get a gold arrow too, so a delivery can be
-/// steered for without opening the map.
+/// server sends), not the whole map's. Where the crew has come to do something, a bigger arrow points the way: to a
+/// fortress still held, or a port's shipyard.
 /// </summary>
 public sealed class OffscreenMarkers
 {
@@ -23,6 +22,8 @@ public sealed class OffscreenMarkers
 
     private static readonly Color Hostile = new(235, 70, 55);
     private static readonly Color Dormant = new Color(200, 120, 110) * 0.55f;
+    private static readonly Color Fortress = new(245, 205, 110);
+    private static readonly Color Port = new(110, 180, 240);
 
     private readonly PrimitiveBatch _batch;
 
@@ -34,6 +35,16 @@ public sealed class OffscreenMarkers
     public void Draw(World world, Ship? localShip, float alpha, Matrix view, HudView hud)
     {
         _batch.Begin(hud.Transform);
+        if (localShip is not null)
+        {
+            foreach (var island in world.Islands)
+            {
+                if (world.IsHeld(island))
+                    DrawArrow(island.Center, Fortress, view, hud, 1.5f);
+                else if (island.HasShipyard)
+                    DrawArrow(island.Center, Port, view, hud, 1.5f);
+            }
+        }
         foreach (var ship in world.Ships)
         {
             if (ship.Team != Team.Pirates || localShip is null
@@ -42,17 +53,11 @@ public sealed class OffscreenMarkers
             var hostile = ship.Stance != NpcStance.Patrolling;
             DrawArrow(NVector2.Lerp(ship.PreviousPosition, ship.Position, alpha), hostile ? Hostile : Dormant, view, hud);
         }
-
-        foreach (var lot in localShip?.Cargo ?? (IReadOnlyList<CargoLot>)Array.Empty<CargoLot>())
-        {
-            if (world.FindIsland(lot.Contract.DestinationIslandId) is { } destination)
-                DrawArrow(destination.Center, TradeMarkers.Cargo, view, hud);
-        }
         _batch.Flush();
     }
 
     /// <summary>An arrow on the screen edge toward <paramref name="target"/>; nothing if it's in view.</summary>
-    private void DrawArrow(NVector2 target, Color color, Matrix view, HudView hud)
+    private void DrawArrow(NVector2 target, Color color, Matrix view, HudView hud, float size = 1f)
     {
         var viewport = hud.Viewport;
         var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(target), view));
@@ -70,8 +75,8 @@ public sealed class OffscreenMarkers
 
         var forward = Vector2.Normalize(direction);
         var side = new Vector2(-forward.Y, forward.X);
-        var baseCenter = tip - forward * ArrowLength;
-        Span<Vector2> arrow = stackalloc Vector2[] { tip, baseCenter + side * ArrowHalfWidth, baseCenter - side * ArrowHalfWidth };
+        var baseCenter = tip - forward * ArrowLength * size;
+        Span<Vector2> arrow = stackalloc Vector2[] { tip, baseCenter + side * ArrowHalfWidth * size, baseCenter - side * ArrowHalfWidth * size };
         _batch.FillConvex(arrow, color);
     }
 }

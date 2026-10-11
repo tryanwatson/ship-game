@@ -22,11 +22,14 @@ public sealed record StopCommand(int PlayerId) : Command(PlayerId);
 /// </summary>
 public sealed record AnchorKeyCommand(int PlayerId, bool Pressed) : Command(PlayerId);
 
-/// <summary>At a shipyard: plunder the island instead of trading (shipyards don't plunder unless asked).</summary>
+/// <summary>At a shipyard: plunder the island instead of shopping there (shipyards don't plunder unless asked).</summary>
 public sealed record ChoosePlunderCommand(int PlayerId) : Command(PlayerId);
 
 /// <summary>At a shipyard: pay to repair the hull to full health (see <c>Shipyards.RepairCost</c>).</summary>
 public sealed record PurchaseRepairCommand(int PlayerId) : Command(PlayerId);
+
+/// <summary>Buys a hand of cards at the port the player's docked at (see <c>Shipyards.TryBuyCardPack</c>).</summary>
+public sealed record BuyCardPackCommand(int PlayerId) : Command(PlayerId);
 
 /// <summary>At a shipyard: buy the next level of an upgrade from <c>UpgradeCatalog</c>.</summary>
 public sealed record PurchaseUpgradeCommand(int PlayerId, string UpgradeId) : Command(PlayerId);
@@ -36,9 +39,6 @@ public sealed record UnlockAbilityCommand(int PlayerId, string AbilityId) : Comm
 
 /// <summary>At a shipyard: buy a skill from one of the ship's weapons' trees (see <c>SkillTrees</c>).</summary>
 public sealed record PurchaseSkillCommand(int PlayerId, string SkillId) : Command(PlayerId);
-
-/// <summary>At a trading post (shipyard): buy one of the contracts it has on offer, by <c>TradeContract.Id</c>.</summary>
-public sealed record PurchaseContractCommand(int PlayerId, int ContractId) : Command(PlayerId);
 
 /// <summary>
 /// Sets the helm: -1 hard to port, 0 amidships, +1 hard to starboard. Sent when the input changes rather than
@@ -60,6 +60,12 @@ public sealed record ChooseCardCommand(int PlayerId, string CardId) : Command(Pl
 /// It goes on slot 1; the others are bought at ports as usual.
 /// </summary>
 public sealed record ChooseStartingWeaponCommand(int PlayerId, string AbilityId) : Command(PlayerId);
+
+/// <summary>
+/// A vote for where the crew sails next: one of the chart stops the current one leads to (see <c>RunDirector</c>). Can
+/// be changed until everyone has voted, when the crew sets sail.
+/// </summary>
+public sealed record ChooseCourseCommand(int PlayerId, int NodeId) : Command(PlayerId);
 
 /// <summary>Pays gold to swap the cards in the player's oldest offer for a fresh draw (see <c>CardRewards.TryReroll</c>).</summary>
 /// <param name="Tier">For a testing hand: the tier to deal it in. Ignored otherwise.</param>

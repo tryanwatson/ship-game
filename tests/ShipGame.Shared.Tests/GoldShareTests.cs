@@ -97,7 +97,8 @@ public class GoldShareTests
         for (var t = 0; t <= Plundering.DurationTicks; t++)
             world.Step();
 
-        var total = island.PlunderGold;
+        var total = Plundering.PlunderFor(world, island);
+        Assert.Equal((int)MathF.Round(island.PlunderGold * Fortresses.CrewScale(4)), total); // four sailors in the run share the islands
         Assert.Equal(total - total / 2, Gold(world, 1));
         Assert.Equal(total / 2, Gold(world, 2));
         Assert.Equal(0, Gold(world, 3));

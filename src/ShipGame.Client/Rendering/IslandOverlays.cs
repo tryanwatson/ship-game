@@ -10,20 +10,14 @@ namespace ShipGame.Client.Rendering;
 /// <summary>
 /// Screen-space markers pinned to the map: a coin over unplundered islands near the player, and a progress bar over
 /// the player's ship while plundering or weighing anchor.
-/// Trade shows here too: a crate over each island our cargo is bound for, and what each floating crate holds. Each
-/// fortress is named over its keep, with its level while it's held.
+/// Each fortress is named over its keep, with its level while it's held.
 /// </summary>
 public sealed class IslandOverlays
 {
     // Show "ripe for plunder" coins on islands within this many tiles of the player's ship.
     private const float CoinMarkerRange = 15f;
 
-    private static readonly Vector2 DigitSize = new(8f, 14f);
-    private const float DigitSpacing = 3f;
-    private const float DigitThickness = 2f;
-
     private static readonly Color Panel = new Color(12, 16, 24) * 0.8f;
-    private static readonly Color TimerDigits = new(235, 235, 240);
     private static readonly Color Coin = new(235, 190, 60);
     private static readonly Color CoinRim = new(150, 105, 25);
     private static readonly Color ProgressBack = new Color(0, 0, 0) * 0.6f;
@@ -54,38 +48,17 @@ public sealed class IslandOverlays
 
             if (island.IsFortress)
             {
-                var held = world.IsHeld(island);
-                var label = held ? $"{island.Name}  LV {island.Level}  {CardRewards.RewardLabel(island.Level)}" : $"{island.Name}  PORT";
-                DrawLabel(label, screen - new Vector2(0f, 30f), held ? FortressHeld : FortressTaken);
-                if (held)
+                if (world.IsHeld(island))
+                {
+                    DrawLabel(island.Name, screen - new Vector2(0f, 52f), FortressHeld);
+                    DrawHand(island.Level, screen - new Vector2(0f, 30f));
                     continue; // no plundering it yet
+                }
+                DrawLabel($"{island.Name}  TAKEN", screen - new Vector2(0f, 30f), FortressTaken);
             }
 
             if (!world.IsPlundered(island) && localShip is not null && island.DistanceTo(localShip.Position) <= CoinMarkerRange)
                 DrawCoin(screen, 8f);
-        }
-
-        // Destinations of our cargo, lifted clear of any plunder marker on the same island.
-        if (localShip is not null)
-        {
-            foreach (var lot in localShip.Cargo)
-            {
-                if (world.FindIsland(lot.Contract.DestinationIslandId) is not { } destination)
-                    continue;
-                var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(destination.Center) - new Vector2(0, IslandScenery.MarkerHeight(destination)), view));
-                if (bounds.Contains(screen.ToPoint()))
-                    TradeMarkers.DrawCrate(_batch, screen - new Vector2(0f, 26f), 16f, TradeMarkers.Cargo);
-            }
-        }
-
-        // Floating cargo: how many units, and whether there's room for it aboard.
-        foreach (var crate in world.Trade.Crates)
-        {
-            var screen = hud.FromScreen(Vector2.Transform(IsoProjection.WorldToIso(crate.Position), view));
-            if (!bounds.Contains(screen.ToPoint()))
-                continue;
-            var fits = localShip is null || localShip.FreeCargo >= crate.Cargo.RemainingUnits;
-            DrawCrateCount(screen - new Vector2(0f, 26f), crate.Cargo.RemainingUnits, fits);
         }
 
         if (localShip is not null)
@@ -112,17 +85,6 @@ public sealed class IslandOverlays
         }
 
         _batch.Flush();
-    }
-
-    /// <summary>Units in a floating crate, dimmed when it won't fit in our hold.</summary>
-    private void DrawCrateCount(Vector2 center, int units, bool fits)
-    {
-        var text = units.ToString();
-        var width = SegmentDigits.Measure(text, DigitSize, DigitSpacing);
-        var top = center.Y - DigitSize.Y / 2f;
-        FillRect(new Vector2(center.X - width / 2f - 6f, top - 5f), new Vector2(width + 12f, DigitSize.Y + 10f), Panel);
-        SegmentDigits.Draw(_batch, text, new Vector2(center.X - width / 2f, top), DigitSize, DigitSpacing, DigitThickness,
-            fits ? TradeMarkers.Cargo : TimerDigits * 0.5f);
     }
 
     private void DrawCoin(Vector2 center, float radius)
@@ -163,6 +125,19 @@ public sealed class IslandOverlays
         var height = PixelFont.Height(scale);
         FillRect(center - new Vector2(width / 2f + 5f, height / 2f + 4f), new Vector2(width + 10f, height + 8f), Panel);
         PixelFont.Draw(_batch, text, center - new Vector2(width / 2f, height / 2f), scale, color);
+    }
+
+    /// <summary>Under a held fortress's name: its level, and the hand taking it deals.</summary>
+    private void DrawHand(int level, Vector2 center)
+    {
+        const float scale = 1.5f;
+        var text = $"LV {level}";
+        var hand = CardRewards.Hand(OfferSource.Fortress, level);
+        var width = PixelFont.Measure(text, scale) + 8f + HandPips.Measure(hand, scale);
+        var height = HandPips.PipHeight(scale);
+        FillRect(center - new Vector2(width / 2f + 5f, height / 2f + 4f), new Vector2(width + 10f, height + 8f), Panel);
+        PixelFont.Draw(_batch, text, center - new Vector2(width / 2f, PixelFont.Height(scale) / 2f), scale, FortressHeld);
+        HandPips.Draw(_batch, hand, center + new Vector2(-width / 2f + PixelFont.Measure(text, scale) + 8f, 0f), scale);
     }
 
     private void FillRect(Vector2 topLeft, Vector2 size, Color color)

@@ -1,12 +1,11 @@
 using System;
 using Microsoft.Xna.Framework;
-using ShipGame.Shared.Maps;
 
 namespace ShipGame.Client.Rendering;
 
 /// <summary>
-/// Big news across the top of the screen for a few seconds, then fading: sailing into new waters (their name and
-/// level, also shown for the first waters at the start of a run), a fortress taken, a boss on its way.
+/// Big news across the top of the screen for a few seconds, then fading: sailing into a new region (what's there, and
+/// how hard), a boss on its way.
 /// </summary>
 public sealed class SeaBanner
 {
@@ -22,7 +21,6 @@ public sealed class SeaBanner
     private static readonly Color AlarmColor = new(245, 110, 85);
 
     private readonly PrimitiveBatch _batch;
-    private Sea? _sea;
     private string? _title;
     private string _subtitle = "";
     private Color _titleColor = NameColor;
@@ -42,15 +40,9 @@ public sealed class SeaBanner
         _shownAt = Environment.TickCount64;
     }
 
-    /// <param name="sea">The waters our ship is in; null while we have no ship (which keeps the last, so respawning doesn't re-announce them).</param>
-    public void Draw(Sea? sea, HudView hud)
+    public void Draw(HudView hud)
     {
         var now = Environment.TickCount64;
-        if (sea is not null && sea != _sea)
-        {
-            _sea = sea;
-            Announce(sea.Name, $"LEVEL {sea.Level} WATERS");
-        }
         if (_title is null)
             return;
 

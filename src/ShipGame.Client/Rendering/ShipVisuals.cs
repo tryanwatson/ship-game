@@ -97,35 +97,6 @@ public sealed class ShipVisuals
         }
         _batch.Stroke(Deck(length * 0.42f, 0), Deck(length * 0.62f, 0, DeckHeight + 3f), 2f, Rail);
 
-        // Laden ships carry a strapped crate on the stern deck, behind the mast and sail.
-        if (ship.Cargo.Count > 0)
-        {
-            var along = -length * 0.28f;
-            var half = beam * 0.2f;
-            Span<Vector2> corners = stackalloc Vector2[]
-            {
-                Deck(along - half, -half), Deck(along + half, -half),
-                Deck(along + half, half), Deck(along - half, half),
-            };
-            var up = new Vector2(0, -5);
-            for (var i = 0; i < corners.Length; i++)
-            {
-                var next = (i + 1) % corners.Length;
-                if (corners[next].X >= corners[i].X)
-                    continue;
-                face[0] = corners[i]; face[1] = corners[next];
-                face[2] = corners[next] + up; face[3] = corners[i] + up;
-                _batch.FillConvex(face, corners[next].Y > corners[i].Y
-                    ? new Color(131, 85, 40) : new Color(176, 125, 56));
-            }
-            for (var i = 0; i < corners.Length; i++)
-                face[i] = corners[i] + up;
-            _batch.FillConvex(face, TradeMarkers.Cargo);
-            for (var i = 0; i < face.Length; i++)
-                _batch.Stroke(face[i], face[(i + 1) % face.Length], 1f, Timber);
-            _batch.Stroke(corners[0] + up, corners[2] + up, 1.3f, Timber);
-        }
-
         var mastBase = Deck(0, 0);
         var mastTop = mastBase - new Vector2(0, MastHeight);
         _batch.Stroke(Deck(-length * 0.38f, 0), mastTop + new Vector2(0, 5), 0.9f, Rope * 0.6f);

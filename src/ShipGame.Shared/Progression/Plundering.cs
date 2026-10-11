@@ -32,7 +32,7 @@ public static class Plundering
 
             var island = ship.Anchor == AnchorState.Down ? PlunderableFrom(world, ship.Position) : null;
 
-            // Shipyards are trading posts first: they're only plundered when the player picks that option.
+            // Shipyards are shops first: they're only plundered when the player picks that option.
             if (island is not null && world.IsPort(island) && ship.PlunderConsentIslandId != island.Id)
                 island = null;
 
@@ -52,14 +52,22 @@ public static class Plundering
             if (++ship.PlunderTicks < DurationTicks)
                 continue;
 
-            GoldShares.Pay(world, island.PlunderGold, playerId, Nearby(world, island, playerId));
+            var gold = PlunderFor(world, island);
+            GoldShares.Pay(world, gold, playerId, Nearby(world, island, playerId));
             world.MarkPlundered(island);
-            world.Emit(new IslandPlundered(world.Tick, island.Id, playerId, island.PlunderGold));
+            world.Emit(new IslandPlundered(world.Tick, island.Id, playerId, gold));
             ship.PlunderConsentIslandId = null;
             ship.PlunderIslandId = null;
             ship.PlunderTicks = 0;
         }
     }
+
+    /// <summary>
+    /// What plundering <paramref name="island"/> pays, before it's shared: its gold, more for a bigger crew (by
+    /// <see cref="Fortresses.CrewScale"/>), since the crew shares it and there are no more islands for more sailors.
+    /// </summary>
+    public static int PlunderFor(World world, Island island) =>
+        (int)MathF.Round(island.PlunderGold * Fortresses.CrewScale(world.Players.Count));
 
     /// <summary>Players other than <paramref name="plundererId"/> close enough to <paramref name="island"/> to share its gold.</summary>
     public static IEnumerable<int> Nearby(World world, Island island, int plundererId) =>

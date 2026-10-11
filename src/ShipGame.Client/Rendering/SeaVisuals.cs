@@ -18,6 +18,7 @@ public sealed class SeaVisuals
     private readonly Dictionary<int, WakeTrack> _tracks = new();
     private readonly List<int> _expired = new();
     private World? _world;
+    private int _region;
 
     private readonly record struct WakeSample(NVector2 Position, float Time, float Strength);
     private sealed class WakeTrack
@@ -66,9 +67,11 @@ public sealed class SeaVisuals
 
     public void DrawShipWater(World world, float alpha, float time)
     {
-        if (!ReferenceEquals(world, _world))
+        // A new region (the ships moved, not sailed): no wakes trailing back to where they were.
+        if (!ReferenceEquals(world, _world) || _region != world.RegionsEntered)
         {
             _world = world;
+            _region = world.RegionsEntered;
             _tracks.Clear();
         }
         foreach (var ship in world.Ships)

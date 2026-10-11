@@ -186,4 +186,15 @@ public class PredictionTests
         _predictor.Record(2, new PurchaseUpgradeCommand(PlayerId, "speed"), _server.Tick + 1);
         Assert.Equal(0, _predictor.PendingCount);
     }
+
+    [Fact]
+    public void SailingIntoANewRegion_KeepsTheCommandsStillAwaitingTheServer()
+    {
+        _predictor.Record(1, new SetRudderCommand(PlayerId, 1), applyTick: _server.Tick + 1);
+        _predictor.Record(2, new AdjustThrottleCommand(PlayerId, 1), applyTick: _server.Tick + 2);
+
+        var moved = _predictor.ForRegion(Regions.FortressSize, Array.Empty<Island>());
+
+        Assert.Equal(2, moved.PendingCount);
+    }
 }

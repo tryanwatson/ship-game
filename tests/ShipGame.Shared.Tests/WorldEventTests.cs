@@ -150,20 +150,24 @@ public class WorldEventTests
     [Fact]
     public void AFortressFalling_IsAnnounced_WithEveryonesCards()
     {
-        var world = new World(new Vector2(200, 200));
-        world.Director = new RunDirector(1);
-        var island = new Island(1, new[] { new Vector2(20, 20), new Vector2(30, 20), new Vector2(30, 30), new Vector2(20, 30) }, isFortress: true);
-        world.AddIsland(island);
-        var fort = Fortresses.SpawnFort(world, island, 0f, FortKind.Battery);
-        world.SpawnShip(new Vector2(150, 150), 0f, ShipStats.Sloop, PlayerId).IsAnchored = true;
+        var world = Runs.Create(seed: 1, new[] { (PlayerId, "ANNE") });
+        world.Enqueue(new ChooseCardCommand(PlayerId, world.Players[PlayerId].CardOffers[0].Cards[0].Id));
         world.Step();
+        world.Enqueue(new ChooseStartingWeaponCommand(PlayerId, LongGun.AbilityId));
+        world.Step();
+        var director = world.Director!;
+        world.Enqueue(new ChooseCourseCommand(PlayerId, director.CurrentNode!.Next[0]));
+        world.Step();
+        var island = world.Islands.Single(i => i.IsFortress);
+        var forts = world.Ships.Where(s => s.IsFort).ToList();
         world.DrainEvents();
 
-        fort.Health = 0f;
+        foreach (var fort in forts)
+            fort.Health = 0f;
         world.Step();
 
         var events = world.DrainEvents();
-        Assert.Equal(fort.Id, Assert.Single(events.OfType<ShipSunk>()).ShipId);
+        Assert.Equal(forts.Select(f => f.Id).Order(), events.OfType<ShipSunk>().Select(e => e.ShipId).Order());
         Assert.Equal(island.Id, Assert.Single(events.OfType<FortressTaken>()).IslandId);
         Assert.Equal(PlayerId, Assert.Single(events.OfType<CardsOffered>()).PlayerId);
     }

@@ -1,6 +1,5 @@
 using System.Numerics;
 using ShipGame.Shared.Commands;
-using ShipGame.Shared.Maps;
 using ShipGame.Shared.Simulation;
 
 namespace ShipGame.Net;
@@ -8,7 +7,7 @@ namespace ShipGame.Net;
 /// <summary>
 /// Client-side prediction for the player's own ship, so it answers the helm at once instead of a round trip later.
 /// Every frame it takes the ship as of the newest snapshot, then re-runs the real simulation (a one-ship
-/// <see cref="World"/> with the map's islands) forward to the prediction tick, replaying the movement commands the
+/// <see cref="World"/> with the region's islands) forward to the prediction tick, replaying the movement commands the
 /// server hasn't confirmed yet at the ticks they're expected to land. Using the whole world step rather than just
 /// <see cref="ShipMovement.Step"/> gets anchoring, groundings and command rules exactly as the server applies them.
 ///
@@ -51,11 +50,23 @@ public sealed class LocalShipPredictor
     private Vector2 _positionError;
     private float _headingError;
 
-    public LocalShipPredictor(Vector2 worldSize)
+    /// <param name="islands">The region's islands, which the ship can run aground on.</param>
+    public LocalShipPredictor(Vector2 worldSize, IEnumerable<Island>? islands = null)
     {
         _scratch = new World(worldSize);
-        foreach (var island in Archipelago.CreateIslands())
+        foreach (var island in islands ?? Array.Empty<Island>())
             _scratch.AddIsland(island);
+    }
+
+    /// <summary>
+    /// A predictor for a new region (<paramref name="worldSize"/>, <paramref name="islands"/>) that still owes the
+    /// server's word on the commands this one was waiting on, so none sent across the change are lost.
+    /// </summary>
+    public LocalShipPredictor ForRegion(Vector2 worldSize, IEnumerable<Island> islands)
+    {
+        var next = new LocalShipPredictor(worldSize, islands) { _lastApplyTick = _lastApplyTick };
+        next._pending.AddRange(_pending);
+        return next;
     }
 
     /// <summary>Where to draw the ship (prediction plus any fading correction).</summary>

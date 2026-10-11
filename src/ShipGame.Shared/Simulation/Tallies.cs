@@ -21,7 +21,29 @@ public enum Tally : byte
 
 public static class Tallies
 {
-    /// <summary>What it counts, in the HUD's capitals: "NEXT IN 12 BROADSIDE HITS".</summary>
+    /// <summary>
+    /// <paramref name="count"/> of what it counts, in the HUD's capitals, singular or plural to suit: "12 BROADSIDE HITS",
+    /// "1 KILL".
+    /// </summary>
+    public static string Count(Tally tally, float count)
+    {
+        var whole = MathF.Round(count);
+        return $"{whole:0} {(whole == 1f ? Singular(tally) : Noun(tally))}";
+    }
+
+    /// <summary>One of what it counts: "BROADSIDE HIT", "SECOND AT ANCHOR".</summary>
+    public static string Singular(Tally tally) => tally switch
+    {
+        Tally.BroadsideHits => "BROADSIDE HIT",
+        Tally.LongGunHits => "LONG GUN HIT",
+        Tally.MortarHits => "MORTAR HIT",
+        Tally.Kills => "KILL",
+        Tally.TilesSailed => "TILE SAILED",
+        Tally.SecondsAnchored => "SECOND AT ANCHOR",
+        _ => Noun(tally), // damage and gold don't take an S
+    };
+
+    /// <summary>What it counts, in the HUD's capitals, plural: "BROADSIDE HITS".</summary>
     public static string Noun(Tally tally) => tally switch
     {
         Tally.BroadsideHits => "BROADSIDE HITS",

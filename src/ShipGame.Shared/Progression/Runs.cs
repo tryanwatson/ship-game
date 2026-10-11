@@ -2,23 +2,22 @@ using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Simulation;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Progression;
 
-/// <summary>Sets up a run on the <see cref="Archipelago"/>: the same for a solo game and a dedicated server.</summary>
+/// <summary>Sets up a run across a <see cref="SeaChart"/>: the same for a solo game and a dedicated server.</summary>
 public static class Runs
 {
-    /// <summary>Tiles between neighbouring ships in the starting line.</summary>
+    /// <summary>Tiles between neighbouring ships in the line they sail into each region in.</summary>
     public const float StartSpacing = 5f;
 
     /// <summary>
-    /// A fresh run: the map's islands and markets, the crew lined up abreast in the middle of the map facing north
-    /// (unarmed, with <paramref name="startingGold"/>), the fortresses manned, the pirates at sea, and the director to
-    /// hand out cards and send bosses. It opens paused: each player chooses a free starting card (any card, weapon
-    /// cards included, rerollable with their gold), then the weapon to set sail with, and play starts once everyone has.
-    /// A <paramref name="testing"/> run deals a late game's worth of hands instead of the one starting card (see
+    /// A fresh run: the crew (unarmed, with <paramref name="startingGold"/>) at the start of a newly drawn chart, in
+    /// open water, and the director to run the voyage (see <see cref="RunDirector"/>). It opens paused: each player
+    /// chooses a free starting card (any card, weapon cards included, rerollable with their gold), then the weapon to
+    /// set sail with, and play starts once everyone has; then the crew votes where to sail first. A
+    /// <paramref name="testing"/> run deals a late game's worth of hands instead of the one starting card (see
     /// <see cref="CardRewards.OfferTesting"/>), to try out late-game fights without playing up to them.
     /// </summary>
     /// <param name="crew">Who's sailing, and what they're called.</param>
@@ -26,15 +25,15 @@ public static class Runs
     public static World Create(int seed, IReadOnlyList<(int PlayerId, string Name)> crew, bool friendlyFire = false, int startingGold = 0,
         bool testing = false)
     {
-        var world = CreateMap();
-        world.Director = new RunDirector(seed);
+        var world = new World(Regions.StartSize);
+        var director = new RunDirector(seed);
+        world.Director = director;
         world.FriendlyFire = friendlyFire;
-        Contracts.OpenMarkets(world, seed);
 
         for (var i = 0; i < crew.Count; i++)
         {
-            world.SpawnShip(StartPosition(i, crew.Count), Archipelago.StartHeading, ShipStats.Sloop, crew[i].PlayerId,
-                new Ability?[Ship.AbilitySlotCount]);
+            // Anywhere for now: the start's region lines them up at its entry.
+            world.SpawnShip(world.WorldSize / 2f, Regions.EntryHeading, ShipStats.Sloop, crew[i].PlayerId, new Ability?[Ship.AbilitySlotCount]);
             var player = world.GetOrAddPlayer(crew[i].PlayerId);
             player.Name = PlayerNames.Clean(crew[i].Name) is { Length: > 0 } name ? name : PlayerNames.Default;
             player.NeedsStartingWeapon = true;
@@ -44,12 +43,13 @@ public static class Runs
             foreach (var (playerId, _) in crew)
                 world.AddGold(playerId, startingGold);
 
-        PirateCamps.Populate(world, seed: seed);
-        // The starting card: free, dealt at level 1, and no fortress to count toward a boss.
+        GrantLifeboats(world);
+        director.Begin(world);
+        // The starting card: free, dealt at level 1.
         if (testing)
-            CardRewards.OfferTesting(world, world.Director.Rng);
+            CardRewards.OfferTesting(world, director.Rng);
         else
-            CardRewards.OfferAll(world, world.Director.Rng, OfferSource.Start, 1);
+            CardRewards.OfferAll(world, director.Rng, OfferSource.Start, 1);
         return world;
     }
 
@@ -77,10 +77,22 @@ public static class Runs
         return null;
     }
 
+    /// <summary>
+    /// A lone sailor gets <see cref="Respawning.SoloLivesPerAct"/> lifeboats, at the start of the run and of every act
+    /// after (unused ones don't pile up). Crews don't: they have each other.
+    /// </summary>
+    public static void GrantLifeboats(World world)
+    {
+        if (world.Players.Count != 1)
+            return;
+        foreach (var player in world.Players.Values)
+            player.ExtraLives = Math.Max(player.ExtraLives, Respawning.SoloLivesPerAct);
+    }
+
     /// <summary>The most gold a run can be set to start with (a playtesting option).</summary>
     public const int MaxStartingGold = 99_999;
 
-    /// <summary>The map's islands on open water, with nothing else: for menus, mirrors, and tests.</summary>
+    /// <summary>The old hand-placed archipelago on open water, with nothing else: the sea behind the title menu, and for tests.</summary>
     public static World CreateMap()
     {
         var world = new World(Archipelago.Size);
@@ -88,8 +100,4 @@ public static class Runs
             world.AddIsland(island);
         return world;
     }
-
-    /// <summary>The <paramref name="index"/>th of <paramref name="count"/> ships abreast on the start line.</summary>
-    public static Vector2 StartPosition(int index, int count) =>
-        Archipelago.Start + new Vector2((index - (count - 1) / 2f) * StartSpacing, 0f);
 }

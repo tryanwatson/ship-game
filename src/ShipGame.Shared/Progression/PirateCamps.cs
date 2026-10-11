@@ -18,8 +18,8 @@ public static class PirateCamps
     /// <summary>Each player beyond the first adds this fraction to every pack.</summary>
     public const float SizePerExtraPlayer = 0.5f;
 
-    /// <summary>No pack grows past this, whatever the crew.</summary>
-    public const int MaxCampSize = 6;
+    /// <summary>No pack grows past this, whatever the crew (a fortress splits its guards into several; see <see cref="Fortresses.Garrison"/>).</summary>
+    public const int MaxCampSize = 16;
 
     /// <summary>Pirates in a group, at most.</summary>
     public const int MaxGroupSize = 3;
@@ -57,9 +57,9 @@ public static class PirateCamps
 
     /// <summary>
     /// <paramref name="size"/> pirates of <paramref name="level"/> round <paramref name="center"/>, split into groups
-    /// that each sail under <paramref name="orders"/>.
+    /// that each sail under <paramref name="orders"/>, facing <paramref name="facing"/> (the middle of the old map if not given).
     /// </summary>
-    public static void SpawnPack(World world, Vector2 center, int size, int level, PirateOrders orders, Random rng)
+    public static void SpawnPack(World world, Vector2 center, int size, int level, PirateOrders orders, Random rng, Vector2? facing = null)
     {
         var placed = 0;
         while (placed < size)
@@ -69,7 +69,7 @@ public static class PirateCamps
             for (var i = 0; i < groupSize; i++, placed++)
             {
                 var pirate = SpawnPirate(world, PackPosition(world, center, placed, size), ShipStats.PirateSloop, level,
-                    PirateRoles.Loadout(PirateRoles.Pick(rng)));
+                    PirateRoles.Loadout(PirateRoles.Pick(rng)), facing ?? Archipelago.Start);
                 group.Add(pirate);
                 pirate.Behavior = new HunterBehavior(orders, rng.Next(), groupSize > 1 ? group : null);
             }
@@ -88,10 +88,10 @@ public static class PirateCamps
         return new RoamOrders(Archipelago.Start, MathF.Max(sea.InnerRadius, StartBerth), MathF.Min(sea.OuterRadius, furthest));
     }
 
-    private static Ship SpawnPirate(World world, Vector2 position, ShipStats hull, int level, IReadOnlyList<Ability?> loadout)
+    private static Ship SpawnPirate(World world, Vector2 position, ShipStats hull, int level, IReadOnlyList<Ability?> loadout, Vector2 facing)
     {
-        // Facing the middle of the map, the way trouble comes from.
-        var toStart = Archipelago.Start - position;
+        // Facing the way trouble comes from.
+        var toStart = facing - position;
         var pirate = world.SpawnShip(position, MathF.Atan2(toStart.Y, toStart.X), hull, abilities: loadout);
         pirate.Stance = NpcStance.Patrolling;
         PirateLevels.Apply(pirate, level);

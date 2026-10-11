@@ -6,6 +6,9 @@
     <Project Path="src/ShipGame.Server/ShipGame.Server.csproj" />
     <Project Path="src/ShipGame.Shared/ShipGame.Shared.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/ShipGame.BalanceSim/ShipGame.BalanceSim.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ShipGame.Launcher.Tests/ShipGame.Launcher.Tests.csproj" />
     <Project Path="tests/ShipGame.Net.Tests/ShipGame.Net.Tests.csproj" />

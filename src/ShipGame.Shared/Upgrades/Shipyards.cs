@@ -18,8 +18,8 @@ public enum PurchaseResult
 public static class Shipyards
 {
     /// <summary>
-    /// The port a ship riding at anchor here can trade with, if any (same range as plundering): a shipyard, or a taken
-    /// fortress (see <see cref="World.IsPort"/>).
+    /// The port a ship riding at anchor here can shop at, if any (same range as plundering; see
+    /// <see cref="World.IsPort"/>).
     /// </summary>
     public static Island? ShipyardFrom(World world, Vector2 position)
     {
@@ -39,16 +39,16 @@ public static class Shipyards
         return nearest;
     }
 
-    /// <summary>A ship can trade with a shipyard only while its anchor is down beside one.</summary>
+    /// <summary>A ship can shop at a shipyard only while its anchor is down beside one.</summary>
     public static Island? DockedAt(World world, Ship ship) =>
         ship.Anchor == AnchorState.Down ? ShipyardFrom(world, ship.Position) : null;
 
     public static int Level(Ship ship, UpgradeDefinition upgrade) => ship.ModifierCount(upgrade.Source);
 
-    /// <summary>Levels of every upgrade the innermost shipyards stock, less one; each level of the waters adds one more.</summary>
+    /// <summary>Levels of every upgrade a level-0 shipyard would stock; each level of the port adds one more.</summary>
     public const int BaseStockedLevels = 2;
 
-    /// <summary>How many levels of <paramref name="upgrade"/> a shipyard on <paramref name="port"/> sells: more the further out.</summary>
+    /// <summary>How many levels of <paramref name="upgrade"/> a shipyard on <paramref name="port"/> sells: more the deeper into the voyage.</summary>
     public static int StockedLevels(Island port, UpgradeDefinition upgrade) =>
         Math.Min(upgrade.MaxLevel, BaseStockedLevels + port.Level);
 
@@ -140,6 +140,40 @@ public static class Shipyards
         world.AddGold(playerId, -skill.Cost);
         ship.AddSkill(skill);
         world.Emit(new SkillPurchased(world.Tick, ship.Id, skill.Id));
+        return null;
+    }
+
+    /// <summary>A card pack's price in act 1; it doubles each act, and doubles again for each one bought at the same port.</summary>
+    public const int CardPackBaseCost = 150;
+
+    /// <summary>What the next card pack costs a player who has bought <paramref name="boughtHere"/> at this port, in <paramref name="act"/>: 150, 300, 600.</summary>
+    public static int CardPackCost(int act, int boughtHere) =>
+        CardPackBaseCost * (1 << (Math.Clamp(act, 1, Maps.SeaChart.Acts) - 1)) * (1 << Math.Clamp(boughtHere, 0, 10));
+
+    /// <summary>What the next card pack costs <paramref name="player"/> where the crew is now.</summary>
+    public static int CardPackCost(World world, PlayerState player) =>
+        CardPackCost(world.Director?.CurrentNode?.Act ?? 1, player.PacksBoughtHere);
+
+    /// <summary>
+    /// Buys a hand of cards at the port the ship is docked at: dealt like a fortress of the port's level, chosen like
+    /// any other (the game waits for it). Null on success.
+    /// </summary>
+    public static RejectionReason? TryBuyCardPack(World world, Ship ship)
+    {
+        if (ship.OwnerPlayerId is not { } playerId || DockedAt(world, ship) is not { } port)
+            return RejectionReason.NotAtShipyard;
+        var player = world.GetOrAddPlayer(playerId);
+        var cost = CardPackCost(world, player);
+        if (player.Gold < cost)
+            return RejectionReason.NotEnoughGold;
+
+        var rng = world.Director?.Rng ?? new Random((int)world.Tick * 31 + playerId);
+        var offer = CardRewards.Deal(rng, CardRewards.Eligible(world, player), OfferSource.Shop, port.Level);
+        if (offer.Cards.Count == 0)
+            return RejectionReason.NoCardOffer;
+        world.AddGold(playerId, -cost);
+        player.PacksBoughtHere++;
+        CardRewards.Offer(world, playerId, offer);
         return null;
     }
 

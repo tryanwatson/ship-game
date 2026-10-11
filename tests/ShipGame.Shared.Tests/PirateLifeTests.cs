@@ -165,8 +165,14 @@ public class PirateLifeTests
     [Fact]
     public void Populate_MixesGuardsRoversAndGroups_FromTheSeed()
     {
-        var crew = new List<(int, string)> { (PlayerId, "ANNE") };
-        var world = Runs.Create(seed: 1, crew);
+        static World Populated(int seed)
+        {
+            var world = Runs.CreateMap();
+            world.SpawnShip(Archipelago.Start, 0f, ShipStats.Sloop, PlayerId);
+            PirateCamps.Populate(world, seed: seed);
+            return world;
+        }
+        var world = Populated(1);
         var behaviors = world.Ships.Where(s => s.Team == Team.Pirates && !s.IsFort).Select(s => (HunterBehavior)s.Behavior!).ToList();
 
         Assert.Contains(behaviors, b => b.Orders is GuardPost { IslandId: not null });
@@ -183,7 +189,7 @@ public class PirateLifeTests
         // The same seed deals the same hand; another deals a different one.
         static string Hand(World w) => string.Join(";", w.Ships.Where(s => s.Team == Team.Pirates && !s.IsFort)
             .Select(s => (HunterBehavior)s.Behavior!).Select(b => $"{b.Orders}/{b.Group?.MemberIds.Count ?? 1}"));
-        Assert.Equal(Hand(world), Hand(Runs.Create(seed: 1, crew)));
-        Assert.NotEqual(Hand(world), Hand(Runs.Create(seed: 2, crew)));
+        Assert.Equal(Hand(world), Hand(Populated(1)));
+        Assert.NotEqual(Hand(world), Hand(Populated(2)));
     }
 }

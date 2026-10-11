@@ -88,7 +88,7 @@ public class ProgressionTests
     }
 
     [Fact]
-    public void Ships_RegenerateHealthEverySecond_UpToTheirMaximum()
+    public void Ships_RegenerateHealthEverySecond_ButAHullMendsItselfOnlySoFar()
     {
         var (world, player) = CreateWorld();
         player.Health = 50f;
@@ -97,9 +97,17 @@ public class ProgressionTests
             world.Step();
         Assert.Equal(50f + 4 * ShipStats.Sloop.HealthRegen, player.Health, 2);
 
-        player.Health = player.Stats.MaxHealth - 0.01f;
-        world.Step();
-        world.Step();
+        // Past the ceiling the hull's own mending stops...
+        var ceiling = player.Stats.MaxHealth * World.NaturalRepairCeiling;
+        player.Health = ceiling + 1f;
+        for (var i = 0; i < SimConstants.TickRate * 4; i++)
+            world.Step();
+        Assert.Equal(ceiling + 1f, player.Health, 2);
+
+        // ...but repairs from elsewhere (a card, an upgrade) carry it the rest of the way.
+        player.AddModifier(new StatModifier(StatId.HealthRegen, ModifierKind.Flat, 100f, "test"));
+        for (var i = 0; i < SimConstants.TickRate; i++)
+            world.Step();
         Assert.Equal(player.Stats.MaxHealth, player.Health);
     }
 

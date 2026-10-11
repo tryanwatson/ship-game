@@ -5,7 +5,6 @@ using ShipGame.Shared.Commands;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Tests;
@@ -85,12 +84,9 @@ public class ArchipelagoTests
     }
 
     [Fact]
-    public void Fortresses_AreEnoughForEveryBoss_AndToughenFurtherOut()
+    public void Fortresses_ToughenFurtherOut()
     {
         var fortresses = Islands.Where(i => i.IsFortress).ToList();
-        Assert.True(fortresses.Count >= RunDirector.FortressesPerBoss * RunDirector.BossCount * 2,
-            $"only {fortresses.Count} fortresses: the crew should have a choice");
-        Assert.True(fortresses.Count(f => f.Level == 1) >= RunDirector.FortressesPerBoss, "the first boss should be reachable from the shallows");
         Assert.All(fortresses, f => Assert.False(f.HasShipyard));
 
         // Each a level or two above its waters at most, and on average harder the further out.
@@ -144,15 +140,17 @@ public class ArchipelagoTests
     [InlineData(12)]
     public void Populate_MansEveryFortress_AndSendsOutEveryPack_ClearOfLand(int players)
     {
-        var crew = Enumerable.Range(1, players).Select(id => (id, $"SAILOR {id}")).ToList();
-        var world = Runs.Create(seed: 1, crew);
+        var world = Runs.CreateMap();
+        for (var id = 1; id <= players; id++)
+            world.SpawnShip(Archipelago.Start, 0f, ShipStats.Sloop, id);
+        PirateCamps.Populate(world, seed: 1);
 
         var pirates = world.Ships.Where(s => s.Team == Team.Pirates).ToList();
         var forts = pirates.Where(p => p.IsFort).ToList();
         var ships = pirates.Where(p => !p.IsFort).ToList();
         var fortresses = world.Islands.Where(i => i.IsFortress).ToList();
 
-        Assert.Equal(fortresses.Sum(f => Fortresses.Forts(f.Level)), forts.Count);
+        Assert.Equal(fortresses.Sum(f => Fortresses.Forts(f.Level, players)), forts.Count);
         Assert.Equal(fortresses.Sum(f => PirateCamps.CampSize(Fortresses.GuardShips(f.Level), players))
                      + Archipelago.Camps.Sum(c => PirateCamps.CampSize(c.Count, players)), ships.Count);
         Assert.DoesNotContain(pirates, p => p.IsBoss); // bosses come later
@@ -173,27 +171,11 @@ public class ArchipelagoTests
         }
     }
 
-    [Fact]
-    public void Run_StartsTheCrewAbreastInTheMiddle_FacingNorth()
-    {
-        var crew = Enumerable.Range(1, 3).Select(id => (id, $"SAILOR {id}")).ToList();
-        var world = Runs.Create(seed: 1, crew);
-
-        var ships = world.Ships.Where(s => s.OwnerPlayerId is not null).OrderBy(s => s.Position.X).ToList();
-        Assert.Equal(3, ships.Count);
-        Assert.All(ships, s => Assert.Equal(Archipelago.Start.Y, s.Position.Y));
-        Assert.All(ships, s => Assert.Equal(Archipelago.StartHeading, s.Heading));
-        Assert.All(ships, s => Assert.All(s.Abilities, Assert.Null)); // the weapon's chosen once the run opens
-        Assert.Equal(Archipelago.Start.X, ships[1].Position.X, 3);
-        Assert.NotNull(world.Director);
-        Assert.Equal(Archipelago.Seas[0], Archipelago.SeaAt(ships[0].Position));
-    }
-
     [Theory]
     [InlineData(2, 1, 2)]
     [InlineData(2, 3, 4)]
-    [InlineData(3, 12, 6)] // held at the cap
-    [InlineData(1, 12, 6)]
+    [InlineData(3, 12, PirateCamps.MaxCampSize)] // held at the cap
+    [InlineData(1, 12, 7)]
     public void Camps_GrowWithTheCrew_UpToACap(int count, int players, int expected)
     {
         Assert.Equal(expected, PirateCamps.CampSize(count, players));
@@ -270,7 +252,7 @@ public class ArchipelagoTests
         Assert.False(world.IsVictory);
     }
 
-    // ---- Ports and trade --------------------------------------------------------------------------------
+    // ---- Ports ----------------------------------------------------------------------------------------
 
     [Fact]
     public void Shipyards_StockMoreLevels_FurtherOut()
@@ -307,38 +289,5 @@ public class ArchipelagoTests
 
         Assert.Equal(Shipyards.StockedLevels(port, hull), Shipyards.Level(ship, hull));
         Assert.Equal(RejectionReason.NotStockedHere, Assert.Single(world.DrainEvents().OfType<CommandRejected>()).Reason);
-    }
-
-    [Fact]
-    public void Contracts_RunOutwardOrAcross_WithinReach()
-    {
-        var world = Runs.CreateMap();
-        Contracts.OpenMarkets(world, seed: 3);
-
-        foreach (var post in world.Islands.Where(i => i.HasShipyard))
-        {
-            var offers = world.Trade.OffersAt(post.Id);
-            Assert.NotEmpty(offers);
-            foreach (var offer in offers)
-            {
-                var destination = world.FindIsland(offer.DestinationIslandId)!;
-                Assert.True(Contracts.Inward(world, post, destination) <= Contracts.MaxInward,
-                    $"{post.Name} sends cargo back inward to {destination.Name}");
-                Assert.True(Contracts.RouteDistance(post, destination) <= Contracts.MaxRouteDistance);
-                Assert.Equal(Contracts.PayoutFor(offer.Cost, offer.CargoUnits, Contracts.RouteDistance(post, destination), destination.Level),
-                    offer.Payout);
-            }
-        }
-    }
-
-    [Fact]
-    public void Contracts_PayADangerPremium_ForRougherWaters()
-    {
-        var calm = Contracts.PayoutFor(20, 10, 100f, destinationLevel: 1);
-        var rough = Contracts.PayoutFor(20, 10, 100f, destinationLevel: 5);
-        var hauling = 10 * 100f * Contracts.PayPerUnitTile;
-
-        Assert.Equal(Contracts.RoundGold(20 * (1 + Contracts.CapitalReturn) + hauling), calm);
-        Assert.Equal(Contracts.RoundGold(20 * (1 + Contracts.CapitalReturn) + hauling * (1 + 4 * Contracts.DangerPremiumPerLevel)), rough);
     }
 }

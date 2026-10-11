@@ -88,13 +88,17 @@ public sealed class AbilityBar
     /// <param name="plunderReady">An island is in plunder range: the anchor slot shows a chest instead.</param>
     /// <param name="shipyardReady">A shipyard is in range: the anchor slot shows a hammer (takes precedence).</param>
     /// <param name="anchorDropProgress">0..1 while X is held to drop anchor: the anchor slot fills to match.</param>
+    private const float TotalWidth = Ship.AbilitySlotCount * SlotSize + (Ship.AbilitySlotCount - 1) * SlotGap;
+
+    /// <summary>The top-left of the first slot: the 1-4 slots run right from here, centred on the screen.</summary>
+    public static Vector2 Origin(HudView hud) =>
+        new((hud.Viewport.Width - TotalWidth) / 2f, hud.Viewport.Height - BottomMargin - SlotSize);
+
     public void Draw(Ship? ship, bool plunderReady, bool shipyardReady, HudView hud, float anchorDropProgress = 0f)
     {
-        var viewport = hud.Viewport;
         _batch.Begin(hud.Transform);
 
-        var totalWidth = Ship.AbilitySlotCount * SlotSize + (Ship.AbilitySlotCount - 1) * SlotGap;
-        var origin = new Vector2((viewport.Width - totalWidth) / 2f, viewport.Height - BottomMargin - SlotSize);
+        var origin = Origin(hud);
 
         for (var i = 0; i < Ship.AbilitySlotCount; i++)
         {
@@ -120,7 +124,7 @@ public sealed class AbilityBar
         if (ship is not null)
         {
             DrawSailGauge(ship, origin - new Vector2(SlotGap * 2 + SailPipWidth, 0));
-            DrawAnchorSlot(ship, plunderReady, shipyardReady, origin + new Vector2(totalWidth + SlotGap * 2, 0), anchorDropProgress);
+            DrawAnchorSlot(ship, plunderReady, shipyardReady, origin + new Vector2(TotalWidth + SlotGap * 2, 0), anchorDropProgress);
         }
 
         _batch.Flush();

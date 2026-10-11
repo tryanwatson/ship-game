@@ -41,6 +41,7 @@ public sealed class CombatVisuals
     private readonly HashSet<int> _impacted = new();
     private readonly List<int> _expiredHits = new();
     private World? _world;
+    private int _region;
     private float _smokeClock;
     private int _seed;
 
@@ -50,9 +51,11 @@ public sealed class CombatVisuals
 
     public void EnsureWorld(World world)
     {
-        if (ReferenceEquals(world, _world))
+        // Smoke, wrecks and splashes belong to the sea they happened in: a new region starts clean.
+        if (ReferenceEquals(world, _world) && _region == world.RegionsEntered)
             return;
         _world = world;
+        _region = world.RegionsEntered;
         _particles.Clear(); _rings.Clear(); _wrecks.Clear();
         _poses.Clear(); _shots.Clear(); _launchDirections.Clear(); _hits.Clear(); _impacted.Clear();
         _smokeClock = 0f;
@@ -143,8 +146,6 @@ public sealed class CombatVisuals
                 case ShipSunk sunk when TryPose(world, sunk.ShipId, out var lost):
                     var ghost = new Ship(lost.Ship.Id, lost.Ship.OwnerPlayerId, lost.Ship.Stats)
                     { Team = lost.Ship.Team, Throttle = 0 };
-                    foreach (var lot in lost.Ship.Cargo)
-                        ghost.LoadCargo(lot);
                     if (_wrecks.Count == MaxWrecks)
                         _wrecks.RemoveAt(0);
                     _wrecks.Add(new Wreck { Ship = ghost, Position = lost.Position, Heading = lost.Heading });

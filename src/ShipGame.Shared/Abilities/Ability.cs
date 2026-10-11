@@ -30,7 +30,7 @@ public abstract class Ability
     public abstract int CooldownTicks { get; }
 
     /// <summary>This ship's cooldown for the ability: the base, changed by its skills (not yet by its reload speed).</summary>
-    public float CooldownTicksFor(Ship ship) => ship.AbilityValue(Id, AbilityStat.Cooldown, CooldownTicks);
+    public virtual float CooldownTicksFor(Ship ship) => ship.AbilityValue(Id, AbilityStat.Cooldown, CooldownTicks);
 
     /// <summary>
     /// Aimed at a point: the client shows a targeting indicator while the key is held and casts on release.

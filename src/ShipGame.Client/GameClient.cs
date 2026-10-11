@@ -12,7 +12,6 @@ using ShipGame.Shared.Commands;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 using NVector2 = System.Numerics.Vector2;
 
@@ -57,6 +56,7 @@ public sealed class GameClient : Game
     private PrimitiveBatch _primitives = null!;
     private WorldRenderer _worldRenderer = null!;
     private AbilityBar _abilityBar = null!;
+    private StatusRow _statusRow = null!;
     private CompassRose _compass = null!;
     private HudCounters _hudCounters = null!;
     private OffscreenMarkers _offscreenMarkers = null!;
@@ -71,6 +71,11 @@ public sealed class GameClient : Game
     private SeaBanner _seaBanner = null!;
     private CardSelectScreen _cardSelect = null!;
     private CardHand _cardHand = null!;
+    private ChartScreen _chartScreen = null!;
+
+    // The chart opens by itself once per stop, when there's a course to choose; and closes when the crew sails on.
+    private int _chartOpenedFor = -1;
+    private int _chartShownAt = -1;
 
     // The fortress whose fall the card screen is for (the latest taken).
     private string? _lastFortressTaken;
@@ -214,7 +219,7 @@ public sealed class GameClient : Game
 
     private static World EmptySea() => Runs.CreateMap();
 
-    /// <summary>A fresh solo run: the player's ship in the middle of the map, the fortresses all round (and, testing, a late game's cards to choose).</summary>
+    /// <summary>A fresh solo run: the player's ship at the start of a new chart (and, testing, a late game's cards to choose).</summary>
     private void StartRun()
     {
         var name = _lobbyName.Length > 0 ? _lobbyName : PlayerNames.Default;
@@ -237,6 +242,9 @@ public sealed class GameClient : Game
         _anchorHeldSeconds = 0;
         _ignoreRightDrag = false;
         _gameMenu?.Close();
+        _chartScreen?.Close();
+        _chartOpenedFor = -1;
+        _chartShownAt = -1;
     }
 
     protected override void LoadContent()
@@ -244,6 +252,7 @@ public sealed class GameClient : Game
         _primitives = new PrimitiveBatch(GraphicsDevice);
         _worldRenderer = new WorldRenderer(_primitives);
         _abilityBar = new AbilityBar(_primitives);
+        _statusRow = new StatusRow(_primitives);
         _compass = new CompassRose(_primitives);
         _hudCounters = new HudCounters(_primitives);
         _offscreenMarkers = new OffscreenMarkers(_primitives);
@@ -258,6 +267,7 @@ public sealed class GameClient : Game
         _seaBanner = new SeaBanner(_primitives);
         _cardSelect = new CardSelectScreen(_primitives);
         _cardHand = new CardHand(_primitives);
+        _chartScreen = new ChartScreen(_primitives);
     }
 
     protected override void UnloadContent()
@@ -291,7 +301,9 @@ public sealed class GameClient : Game
         // Esc: the game menu (resume or leave). Still connecting, or choosing a weapon before a solo run, there's
         // nothing to leave yet, so it goes straight back to the title menu.
         var menuJustOpened = false;
-        if (IsActive && _input.WasKeyPressed(Keys.Escape) && !_gameMenu.IsOpen)
+        if (IsActive && _input.WasKeyPressed(Keys.Escape) && _chartScreen.IsOpen && !_gameMenu.IsOpen)
+            _chartScreen.Close(); // Esc puts the chart away first
+        else if (IsActive && _input.WasKeyPressed(Keys.Escape) && !_gameMenu.IsOpen)
         {
             if (Online is { Connection.Status: ConnectionStatus.Connecting })
             {
@@ -355,8 +367,9 @@ public sealed class GameClient : Game
             ReleaseAnchorKey();  // nor the anchor key, or the server would let go on its own
         }
 
-        // Paused for cards: the choice is all there is (the helm can still be set, for when play resumes).
-        if (IsActive && IsPlaying && _session.World.IsPaused)
+        // Paused for cards (or choosing from a hand bought at the yard): the choice is all there is (the helm can still be
+        // set, for when play resumes).
+        if (IsActive && IsPlaying && ChoosingCards)
         {
             _aimKeyDown = null;
             _mapOpen = false;
@@ -375,10 +388,22 @@ public sealed class GameClient : Game
         }
         else if (IsActive && IsPlaying)
         {
-            // While an aimed key is down, clicks belong to targeting (they cancel it), not to the shipyard panel.
-            if (_aimKeyDown is null)
-                _shipyardPanel.Update(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _input, Hud, _session.Send);
-            HandleOrders(dt);
+            UpdateChart();
+            if (_chartScreen.IsOpen)
+            {
+                // The chart takes the mouse (a click is a vote, not a move order); the keys still sail and fight, since
+                // a fortress's guards don't stop for it.
+                if (_chartScreen.Update(_session.World, _input, Hud) is { } course)
+                    _session.Send(new ChooseCourseCommand(LocalPlayerId, course));
+                HandleOrders(dt, chartOpen: true);
+            }
+            else
+            {
+                // While an aimed key is down, clicks belong to targeting (they cancel it), not to the shipyard panel.
+                if (_aimKeyDown is null)
+                    _shipyardPanel.Update(_session.World, _session.World.GetPlayerShip(LocalPlayerId), _input, Hud, _session.Send);
+                HandleOrders(dt);
+            }
         }
         UpdateRudder();
         StepSession(dt);
@@ -391,10 +416,43 @@ public sealed class GameClient : Game
     }
 
     /// <summary>
+    /// Tab opens and closes the chart. It opens by itself when the crew is done at a stop and we've yet to vote (once a
+    /// stop, so closing it sticks), and closes when the crew sails on. Not at a port: the crew is there to shop, and
+    /// it's done there the moment it arrives, so a chart springing open would look like the last click didn't take.
+    /// </summary>
+    private void UpdateChart()
+    {
+        if (_session.World.Director is not { Chart: not null } director || _session.World.IsRunOver)
+        {
+            _chartScreen.Close();
+            return;
+        }
+        if (_chartShownAt != director.NodeId)
+        {
+            _chartScreen.Close();
+            _chartShownAt = director.NodeId;
+        }
+        if (director.Cleared && _chartOpenedFor != director.NodeId && LocalPlayer?.CourseVote is null
+            && director.CurrentNode?.Kind != NodeKind.Port)
+        {
+            _chartScreen.Open();
+            _chartOpenedFor = director.NodeId;
+        }
+        if (_input.WasKeyPressed(Keys.Tab))
+        {
+            _chartScreen.Toggle();
+            _mapOpen = false;
+        }
+    }
+
+    /// <summary>
     /// Solo, or online with the run under way. Connecting or in the lobby the keyboard is for typing a name, so none of
     /// it reaches the ship or the camera (typing "Ryan" mustn't lock the camera with Y and steer with A).
     /// </summary>
     private bool IsPlaying => Online is null or { Connection.Status: ConnectionStatus.InRun };
+
+    /// <summary>The card screen is up: the game's paused for everyone's cards, or we're choosing from a hand bought at a port.</summary>
+    private bool ChoosingCards => _session.World.IsPaused || LocalPlayer is { CardOffers.Count: > 0 };
 
     private PlayerState? LocalPlayer => _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player : null;
 
@@ -409,7 +467,10 @@ public sealed class GameClient : Game
         Announce(events);
     }
 
-    /// <summary>The run's big moments: a fortress taken (named on the card screen), a boss on its way (the banner).</summary>
+    /// <summary>
+    /// The run's big moments: sailing into a new stop (the banner), a fortress taken (named on the card screen), a boss
+    /// on its way (the banner).
+    /// </summary>
     private void Announce(System.Collections.Generic.IReadOnlyList<WorldEvent> events)
     {
         foreach (var e in events)
@@ -419,12 +480,47 @@ public sealed class GameClient : Game
                 case FortressTaken taken when _session.World.FindIsland(taken.IslandId) is { } island:
                     _lastFortressTaken = island.Name;
                     break;
+                case RegionEntered entered when _session.World.Director?.Chart?.Find(entered.NodeId) is { } node:
+                    AnnounceStop(node, entered.Islands);
+                    _cameraLocked = true; // a camera left panning would be looking at the old region's waters
+                    break;
+                case BossPhaseChanged phase:
+                    _seaBanner.Announce("THE FLAGSHIP RALLIES", phase.Phase >= RunDirector.BossPhaseGates.Count
+                        ? "LAST STAND  -  ESCORTS INCOMING" : "ESCORTS INCOMING", alarm: true);
+                    break;
+                case ReliefFleetSighted relief:
+                    _seaBanner.Announce("RELIEF FLEET SIGHTED", relief.Ships == 1
+                        ? "A SHIP COMES TO THE FORTRESS'S AID" : $"{relief.Ships} SHIPS COME TO THE FORTRESS'S AID", alarm: true);
+                    break;
                 case BossSpawned boss:
                     _seaBanner.Announce("PIRATE FLAGSHIP", boss.PreyPlayerId == LocalPlayerId
                         ? $"BOSS {boss.Round} OF {RunDirector.BossCount} IS COMING FOR YOU"
                         : $"BOSS {boss.Round} OF {RunDirector.BossCount} IS HUNTING THE CREW", alarm: true);
                     break;
             }
+        }
+    }
+
+    /// <summary>The banner for sailing into <paramref name="node"/>: the fortress's or port's name, and what's in store there.</summary>
+    private void AnnounceStop(ChartNode node, System.Collections.Generic.IReadOnlyList<Island> islands)
+    {
+        var act = $"ACT {SeaChart.ActNumeral(node.Act)}";
+        var named = islands.FirstOrDefault(i => i.IsFortress || i.HasShipyard)?.Name;
+        switch (node.Kind)
+        {
+            case NodeKind.Fortress:
+                _seaBanner.Announce(named ?? "FORTRESS",
+                    $"{act}  -  {SeaChart.Name(node.Difficulty)} LV {node.Level}  -  CARDS: {CardRewards.RewardLabel(node.Level)}");
+                break;
+            case NodeKind.Port:
+                _seaBanner.Announce(named ?? "PORT", $"{act}  -  PORT  -  EVERY HULL REPAIRED");
+                break;
+            case NodeKind.Boss:
+                _seaBanner.Announce("THE FLAGSHIP'S WATERS", $"{act}  -  BOSS {node.Act} OF {RunDirector.BossCount} IS COMING", alarm: true);
+                break;
+            default:
+                _seaBanner.Announce("OPEN WATER", "CHART YOUR COURSE");
+                break;
         }
     }
 
@@ -498,39 +594,39 @@ public sealed class GameClient : Game
         var plunderReady = localShip is not null && Plundering.PlunderableFrom(_session.World, localShip.Position) is not null;
         var shipyardReady = localShip is not null && Shipyards.ShipyardFrom(_session.World, localShip.Position) is not null;
         _abilityBar.Draw(localShip, plunderReady, shipyardReady, Hud, AnchorDropProgress);
+        _statusRow.Draw(localShip, _session.World.Tick - 1 + _session.InterpolationAlpha, _input, Hud);
         _compass.Draw(_session.World.Wind, Hud);
         var gold = _session.World.Players.TryGetValue(LocalPlayerId, out var player) ? player.Gold : 0;
         var inRun = !_session.World.IsRunOver && Online is null or { Connection.Status: ConnectionStatus.InRun };
-        var here = localShip?.Position ?? _session.World.GetPlayerShip(LocalPlayerId)?.Position ?? IsoProjection.IsoToWorld(_camera.Position);
-        _hudCounters.Draw(gold, Archipelago.LevelAt(here), Hud);
+        _hudCounters.Draw(gold, _session.World.Director?.CurrentNode?.Level ?? 1, Hud);
         // Where we are and what's coming, while there's a run to come to (not in the lobby or after it ends).
         if (_session.World.Director is { } director && inRun)
         {
-            _runForecast.Draw(director.Status, Archipelago.SeaAt(here), Hud);
-            if (!_session.World.IsPaused) // the card screen has the stage
-                _seaBanner.Draw(localShip is null ? null : Archipelago.SeaAt(localShip.Position), Hud);
+            _runForecast.Draw(_session.World, director, Hud);
+            if (!ChoosingCards) // the card screen has the stage
+                _seaBanner.Draw(Hud);
             _cardHand.Draw(LocalPlayer, _session.World.GetPlayerShip(LocalPlayerId), _input, Hud);
         }
-        // Choosing a contract charts each route beside the panel; otherwise M shows the full map.
-        if (_shipyardPanel.CurrentRoutes(_session.World, localShip, _input, Hud) is { } routes)
-            _mapView.Draw(_session.World, LocalPlayerId, Hud, ShipyardPanel.RouteMapArea(Hud), routes);
-        else if (_mapOpen)
+        if (_mapOpen)
             _mapView.Draw(_session.World, LocalPlayerId, Hud);
         _shipyardPanel.Draw(_session.World, localShip, _input, Hud);
         DrawStatusBanner();
-        if (inRun && _session.World.IsPaused)
+        if (inRun && !ChoosingCards)
+            _chartScreen.Draw(_session.World, LocalPlayerId, _input, Hud);
+        if (inRun && ChoosingCards)
             _cardSelect.Draw(_session.World, LocalPlayer, _lastFortressTaken, _input, Hud);
         if (_gameMenu.IsOpen)
             _gameMenu.Draw(Hud, GameMenuTitle, GameMenuNote);
         base.Draw(gameTime);
     }
 
-    private void HandleOrders(double dt)
+    /// <param name="chartOpen">The chart is up and has the mouse: only the keys reach the ship.</param>
+    private void HandleOrders(double dt, bool chartOpen = false)
     {
         _sinceMoveOrder += dt;
         UpdateAnchorKey(dt);
 
-        if (_input.WasKeyPressed(Keys.M))
+        if (!chartOpen && _input.WasKeyPressed(Keys.M))
             _mapOpen = !_mapOpen; // the game carries on underneath
 
         if (_input.WasKeyPressed(Keys.W) || _input.WasKeyPressed(Keys.Space))
@@ -565,6 +661,12 @@ public sealed class GameClient : Game
                 _session.Send(new CastAbilityCommand(LocalPlayerId, slot, mouseWorld));
                 _aimKeyDown = null;
             }
+        }
+
+        if (chartOpen)
+        {
+            _ignoreRightDrag = _input.IsRightMouseDown; // a right-drag begun over the chart doesn't steer once it's put away
+            return;
         }
 
         if (_aimKeyDown is not null && (_input.WasLeftMousePressed || _input.WasRightMousePressed))
@@ -727,7 +829,11 @@ public sealed class GameClient : Game
         else if (world.Players.TryGetValue(LocalPlayerId, out var player) && player.IsAwaitingRespawn)
         {
             var seconds = (int)Math.Ceiling(player.RespawnTicksRemaining / (double)SimConstants.TickRate);
-            _statusBanner.Draw("SUNK", $"RESPAWNING IN {seconds}", Hud);
+            // Alone, it's the lifeboat bringing you back: say how many are left this act.
+            var lifeboat = world.Players.Count == 1
+                ? player.ExtraLives == 0 ? "  -  ON YOUR LIFEBOAT: NONE LEFT THIS ACT" : $"  -  ON A LIFEBOAT: {player.ExtraLives} MORE THIS ACT"
+                : "";
+            _statusBanner.Draw("SUNK", $"RESPAWNING IN {seconds}{lifeboat}", Hud);
         }
     }
 
@@ -740,7 +846,8 @@ public sealed class GameClient : Game
             return "EVERY PIRATE FLAGSHIP IS SUNK";
         var status = world.Director?.Status ?? default;
         var fortresses = status.FortressesTaken == 1 ? "1 FORTRESS" : $"{status.FortressesTaken} FORTRESSES";
-        return $"TOOK {fortresses} - SANK {status.BossesSunk} OF {RunDirector.BossCount} BOSSES";
+        var act = world.Director?.CurrentNode is { } node ? $"LOST IN ACT {SeaChart.ActNumeral(node.Act)} - " : "";
+        return $"{act}TOOK {fortresses} - SANK {status.BossesSunk} OF {RunDirector.BossCount} BOSSES";
     }
 
     /// <summary>Online-only banners: connecting, refused or dropped, and the lobby. True if one was drawn.</summary>
@@ -799,8 +906,8 @@ public sealed class GameClient : Game
             status = "sunk - respawning";
         else
         {
-            var sea = Archipelago.SeaAt(ship.Position);
-            status = $"{sea.Name.ToLowerInvariant()} (level {sea.Level}), {world.Director?.FortressesTaken ?? 0} fortresses taken";
+            var where = world.Director?.CurrentNode is { } node ? RunForecast.Where(node).ToLowerInvariant() : "at sea";
+            status = $"{where}, {world.Director?.FortressesTaken ?? 0} fortresses taken";
         }
 
         if (ship?.Anchor == AnchorState.Down)

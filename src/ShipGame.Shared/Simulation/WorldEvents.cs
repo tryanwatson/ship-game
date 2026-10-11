@@ -1,8 +1,8 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Simulation;
@@ -71,32 +71,6 @@ public sealed record AbilityUnlocked(long Tick, int ShipId, string AbilityId, Ab
 /// <summary>A ship bought a skill from one of its weapons' trees.</summary>
 public sealed record SkillPurchased(long Tick, int ShipId, string SkillId) : WorldEvent(Tick);
 
-/// <summary>A trading post's full list of contracts on offer, sent when the markets open and whenever it changes.</summary>
-public sealed record ContractsOffered(long Tick, int IslandId, IReadOnlyList<TradeContract> Offers) : WorldEvent(Tick)
-{
-    // Records compare lists by reference; compare the contracts themselves.
-    public bool Equals(ContractsOffered? other) =>
-        other is not null && Tick == other.Tick && IslandId == other.IslandId && Offers.SequenceEqual(other.Offers);
-
-    public override int GetHashCode() => HashCode.Combine(Tick, IslandId, Offers.Count);
-}
-
-/// <summary>A ship bought a contract: its full cargo is now in the hold.</summary>
-public sealed record ContractPurchased(long Tick, int ShipId, int PlayerId, TradeContract Contract) : WorldEvent(Tick);
-
-/// <summary>Cargo reached its destination and paid <paramref name="Payout"/>; it's out of the hold.</summary>
-public sealed record ContractDelivered(long Tick, int ShipId, int PlayerId, int ContractId, int Payout) : WorldEvent(Tick);
-
-/// <summary>A sinking set what survived of a lot afloat as crate <paramref name="CrateId"/>.</summary>
-public sealed record CargoDropped(long Tick, int CrateId, Vector2 Position, CargoLot Cargo) : WorldEvent(Tick);
-
-/// <summary>A ship anchored beside a crate and hauled its cargo aboard.</summary>
-public sealed record CargoRecovered(long Tick, int CrateId, int ShipId, int PlayerId) : WorldEvent(Tick);
-
-/// <summary>A sinking left too little of a contract's cargo to float: it can never be delivered now.</summary>
-public sealed record CargoLost(long Tick, int ContractId) : WorldEvent(Tick);
-
-
 /// <summary>A player's ship went down; they'll be back in <paramref name="RespawnTicks"/> unless the run ends first.</summary>
 public sealed record PlayerSunk(long Tick, int PlayerId, int RespawnTicks) : WorldEvent(Tick);
 
@@ -134,6 +108,37 @@ public sealed record FireStarted(long Tick, int FireId, int OwnerShipId, Team Te
 
 /// <summary>Boss number <paramref name="Round"/> (from 1) has come for the crew, starting near <paramref name="PreyPlayerId"/>.</summary>
 public sealed record BossSpawned(long Tick, int ShipId, int Round, int PreyPlayerId) : WorldEvent(Tick);
+
+/// <summary>A boss was worn down to the end of a phase (<paramref name="Phase"/> of them now passed): it calls escorts and lets fly.</summary>
+public sealed record BossPhaseChanged(long Tick, int ShipId, int Phase) : WorldEvent(Tick);
+
+/// <summary>Pirates have come to relieve a fortress under siege: <paramref name="Ships"/> of them, from the edge of the sea.</summary>
+public sealed record ReliefFleetSighted(long Tick, int Ships) : WorldEvent(Tick);
+
+/// <summary>The run's chart, drawn as it starts (see <see cref="SeaChart"/>).</summary>
+public sealed record VoyageCharted(long Tick, SeaChart Chart) : WorldEvent(Tick)
+{
+    // The chart is a class: compare its stops.
+    public bool Equals(VoyageCharted? other) => other is not null && Tick == other.Tick && Chart.Nodes.SequenceEqual(other.Chart.Nodes);
+
+    public override int GetHashCode() => HashCode.Combine(Tick, Chart.Nodes.Count);
+}
+
+/// <summary>
+/// The crew sailed into the region for chart stop <paramref name="NodeId"/> (see <see cref="World.LoadRegion"/>): a sea of
+/// <paramref name="Size"/> with these islands. Everything but the players' ships was cleared away first: every entity
+/// numbered below <paramref name="FirstEntityId"/> that no player owns is from the old region.
+/// </summary>
+public sealed record RegionEntered(long Tick, int NodeId, Vector2 Size, IReadOnlyList<Island> Islands, int FirstEntityId) : WorldEvent(Tick)
+{
+    // Records compare lists by reference; compare the islands by what they are.
+    public bool Equals(RegionEntered? other) =>
+        other is not null && Tick == other.Tick && NodeId == other.NodeId && Size == other.Size && FirstEntityId == other.FirstEntityId
+        && Islands.Count == other.Islands.Count
+        && Islands.Zip(other.Islands).All(pair => pair.First.Id == pair.Second.Id && pair.First.Outline.SequenceEqual(pair.Second.Outline));
+
+    public override int GetHashCode() => HashCode.Combine(Tick, NodeId, Size, Islands.Count, FirstEntityId);
+}
 
 /// <summary>
 /// A ship left play without sinking: raised by the server, per client, when a ship sails out of everyone's range and
@@ -181,13 +186,7 @@ public enum RejectionReason
     /// <summary>The skill is on a branch closed off by a choice already made.</summary>
     ExcludedByChoice,
 
-    /// <summary>That contract isn't on offer here (anymore).</summary>
-    UnknownContract,
-
-    /// <summary>The hold hasn't room for the contract's cargo.</summary>
-    NotEnoughCargoSpace,
-
-    /// <summary>This shipyard doesn't sell that upgrade's next level; one further out does.</summary>
+    /// <summary>This shipyard doesn't sell that upgrade's next level; a port deeper into the voyage does.</summary>
     NotStockedHere,
 
     /// <summary>The hull is already at full health: there's nothing to repair.</summary>
@@ -207,4 +206,10 @@ public enum RejectionReason
 
     /// <summary>No such weapon.</summary>
     UnknownWeapon,
+
+    /// <summary>The crew can't choose where to sail next until they're done here (the fortress taken, the boss sunk).</summary>
+    NotChartingCourse,
+
+    /// <summary>The chart doesn't lead there from here.</summary>
+    UnknownCourse,
 }

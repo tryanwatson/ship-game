@@ -77,7 +77,6 @@ public sealed class StatModifiers
             WeaponRange = Stat(StatId.WeaponRange, baseStats.WeaponRange),
             MinTurnRadius = TurnRadius(baseStats.MinTurnRadius),
             TurnRadiusAtMaxSpeed = TurnRadius(baseStats.TurnRadiusAtMaxSpeed),
-            CargoCapacity = Stat(StatId.CargoCapacity, baseStats.CargoCapacity),
             HealthRegen = Stat(StatId.HealthRegen, baseStats.HealthRegen)
                 + Stat(StatId.HealthRegenFraction, 0f) * Stat(StatId.MaxHealth, baseStats.MaxHealth),
         };

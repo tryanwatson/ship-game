@@ -13,7 +13,7 @@ public sealed class LongGun : Ability
 {
     public const string AbilityId = "long-gun";
 
-    public const float Damage = 22f;
+    public const float Damage = 30f;
     public const float Range = 16f;
     public const float ProjectileSpeed = 26f;
     public const float ShotRadius = 0.3f;
@@ -31,6 +31,13 @@ public sealed class LongGun : Ability
     public const float PirateWindupSeconds = 0.8f;
     public static readonly int PirateWindupTicks = (int)MathF.Round(PirateWindupSeconds * SimConstants.TickRate);
 
+    /// <summary>
+    /// A pirate's long gun (a sniper's, a shore battery's) hits for this share of a player's, and reloads this many times
+    /// slower: the players' gun was made heavier and quicker as an opening weapon, not the shore's.
+    /// </summary>
+    public const float PirateDamageScale = 22f / Damage;
+    public const float PirateReloadScale = 1.25f;
+
     public override string Id => AbilityId;
 
     public override string Name => "Long Gun";
@@ -39,7 +46,9 @@ public sealed class LongGun : Ability
 
     public override bool IsAimed => true;
 
-    public override int CooldownTicks => (int)(5f * SimConstants.TickRate);
+    public override int CooldownTicks => (int)(4f * SimConstants.TickRate);
+
+    public override float CooldownTicksFor(Ship ship) => base.CooldownTicksFor(ship) * (ship.Team == Team.Pirates ? PirateReloadScale : 1f);
 
     public override int WindupTicksFor(Ship caster) => WindupTicks(caster);
 
@@ -51,7 +60,8 @@ public sealed class LongGun : Ability
         ProjectileSpeed * ship.Stats.ProjectileSpeed * ship.AbilityValue(AbilityId, AbilityStat.ProjectileSpeed, 1f);
 
     public static float DamageFor(Ship ship) =>
-        Damage * ship.Stats.WeaponDamage * ship.AbilityValue(AbilityId, AbilityStat.Damage, 1f) * ship.CastDamageScale;
+        Damage * ship.Stats.WeaponDamage * ship.AbilityValue(AbilityId, AbilityStat.Damage, 1f) * ship.CastDamageScale
+        * (ship.Team == Team.Pirates ? PirateDamageScale : 1f);
 
     /// <summary>Distance from the muzzle beyond which a hit counts as long range.</summary>
     public static float LongRangeFor(Ship ship) => RangeFor(ship) * LongRangeFraction;

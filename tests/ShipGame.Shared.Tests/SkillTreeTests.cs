@@ -460,10 +460,10 @@ public class SkillTreeTests
         var (world, ship) = Range("heavy-shot", "piercing-shot", "hullbreaker");
         var targets = Enumerable.Range(1, 4).Select(i => Target(world, ship.Position + new Vector2(0, i * 3))).ToArray();
         world.TryCastAbility(ship, AbilitySlot.Two, ship.Position + new Vector2(0, 16));
-        Assert.Equal(180, ship.GetAbility(AbilitySlot.Two)!.DurationTicks(0));
+        Assert.Equal(144, ship.GetAbility(AbilitySlot.Two)!.DurationTicks(0));
         StepUntil(world, () => world.Projectiles.Count == 0);
 
-        Assert.All(targets.Take(3), target => Assert.Equal(40.7f, Damage(target), 2));
+        Assert.All(targets.Take(3), target => Assert.Equal(55.5f, Damage(target), 2));
         Assert.Equal(0f, Damage(targets[3]));
     }
 

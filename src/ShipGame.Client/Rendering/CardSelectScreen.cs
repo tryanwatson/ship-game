@@ -154,6 +154,7 @@ public sealed class CardSelectScreen
         var title = testing ? "LATE-GAME TEST"
             : starting || offer?.Source == OfferSource.Start ? "SET SAIL"
             : offer?.Source == OfferSource.Boss ? "PIRATE FLAGSHIP SUNK"
+            : offer?.Source == OfferSource.Shop ? "BOUGHT AT THE YARD"
             : fortress is null ? "FORTRESS TAKEN" : $"{fortress} TAKEN";
         DrawCentered(title, 56f, 4f, Title, viewport.Width);
         var waiting = world.Players.Values.Count(p => (p.CardOffers.Count > 0 || p.NeedsStartingWeapon) && p.PlayerId != player?.PlayerId);

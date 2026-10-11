@@ -4,7 +4,7 @@ using Microsoft.Xna.Framework.Graphics;
 
 namespace ShipGame.Client.Rendering;
 
-/// <summary>Top-right readouts beneath the compass: gold, then the level of the waters we're in. Right-aligned icon + number panels.</summary>
+/// <summary>Top-right readouts beneath the compass: gold, then the level of the stop we're at. Right-aligned icon + number panels.</summary>
 public sealed class HudCounters
 {
     private const float RightMargin = 20f;
@@ -35,14 +35,14 @@ public sealed class HudCounters
         _batch = batch;
     }
 
-    public void Draw(int gold, int seaLevel, HudView hud)
+    public void Draw(int gold, int level, HudView hud)
     {
         var viewport = hud.Viewport;
         _batch.Begin(hud.Transform);
         var right = viewport.Width - RightMargin;
 
         DrawCounter(right, FirstTop, gold, GoldDigits, DrawCoin);
-        DrawCounter(right, FirstTop + DigitSize.Y + 2 * PanelPadding + RowGap, seaLevel, LevelDigits, DrawFlag);
+        DrawCounter(right, FirstTop + DigitSize.Y + 2 * PanelPadding + RowGap, level, LevelDigits, DrawFlag);
 
         _batch.Flush();
     }

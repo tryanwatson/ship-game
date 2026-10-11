@@ -6,7 +6,7 @@ namespace ShipGame.Client.Rendering;
 /// <summary>
 /// Maps the flat 2D simulation plane onto 2:1 isometric "iso space" (pixels at zoom 1, before the camera).
 /// The simulation's axes are screen-aligned (north, world -Y, is straight up the screen; east, +X, is right), so the
-/// long northward map is a plain rectangle; the isometric tile grid runs diagonally across them, at 45 degrees.
+/// region of sea is a plain rectangle; the isometric tile grid runs diagonally across them, at 45 degrees.
 /// Scenery built on that grid uses <see cref="Grid"/>. This is purely presentational; nothing in the simulation knows
 /// about it.
 /// </summary>

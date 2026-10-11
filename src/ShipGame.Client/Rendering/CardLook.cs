@@ -103,7 +103,8 @@ public static class CardLook
                 AbilityStat.BlastRadius => CardIcon.Blast,
                 AbilityStat.ClusterCount => CardIcon.Cluster,
                 AbilityStat.Range or AbilityStat.LongRangeDamage => CardIcon.Range,
-                AbilityStat.FlightTime or AbilityStat.SlowOnHit => CardIcon.Reload,
+                AbilityStat.SlowOnHit => CardIcon.Chain,
+                AbilityStat.FlightTime => CardIcon.Reload,
                 _ => CardIcon.Damage,
             };
         }

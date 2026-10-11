@@ -1,9 +1,9 @@
 using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Commands;
+using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Stats;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 
 namespace ShipGame.Shared.Simulation;
@@ -47,11 +47,20 @@ public sealed class World
         Discovery = new Discovery(worldSize);
     }
 
-    /// <summary>What each team has seen of the map. Player ships reveal it as they sail.</summary>
-    public Discovery Discovery { get; }
+    /// <summary>What each team has seen of the map. Player ships reveal it as they sail; it starts over in each region.</summary>
+    public Discovery Discovery { get; private set; }
 
-    /// <summary>Size of the playable area. Move targets are clamped to it; ships may drift into the margin.</summary>
-    public Vector2 WorldSize { get; }
+    /// <summary>
+    /// Size of the playable area. Move targets are clamped to it; ships may drift into the margin. Changes when the
+    /// crew sails into a new region (see <see cref="LoadRegion"/>).
+    /// </summary>
+    public Vector2 WorldSize { get; private set; }
+
+    /// <summary>
+    /// How many times the sea has been cleared for a new region (see <see cref="EnterRegion"/>): whatever was built
+    /// from the old one (scenery, wakes, wrecks) is out of date once this changes.
+    /// </summary>
+    public int RegionsEntered { get; private set; }
 
     public const float DefaultWindSpeed = 0.75f;
 
@@ -70,9 +79,6 @@ public sealed class World
     public IReadOnlyList<Island> Islands => _islands;
 
     public Island? FindIsland(int id) => _islands.Find(i => i.Id == id);
-
-    /// <summary>Contracts on offer and cargo afloat. Empty until <see cref="Contracts.OpenMarkets"/>.</summary>
-    public TradeBoard Trade { get; } = new();
 
     /// <summary>Shells in the air.</summary>
     public IReadOnlyList<AreaStrike> Strikes => _strikes;
@@ -167,16 +173,32 @@ public sealed class World
     /// </summary>
     public const int MaxShotRewindTicks = SimConstants.TickRate / 2;
 
+    /// <summary>How long a boss can't be hurt after one of its phases ends (see <see cref="Ship.PhaseGates"/>).</summary>
+    public const float PhaseShiftSeconds = 2f;
+    public static readonly int PhaseShiftTicks = (int)(PhaseShiftSeconds * SimConstants.TickRate);
+
+    /// <summary>
+    /// With friendly fire on, a player caught in a crewmate's blast or fire takes this share of it: their direct hits
+    /// still hurt in full, but one sailor's carpet of shells doesn't sink the crew.
+    /// </summary>
+    public const float AllySplashScale = 0.25f;
+
+    /// <summary>How much of an area's damage (a blast, a fire) from <paramref name="ownerTeam"/> reaches <paramref name="ship"/>.</summary>
+    private static float SplashScale(Team ownerTeam, Ship ship) => ownerTeam == Team.Players && ship.Team == Team.Players ? AllySplashScale : 1f;
+
     /// <summary>
     /// Hurts <paramref name="target"/> on behalf of <paramref name="attackerShipId"/>: more if it's marked, and it
     /// becomes marked if the attacker carries Hunter's Mark. Every weapon's damage comes through here.
     /// </summary>
     public void DealDamage(Ship target, float amount, int attackerShipId)
     {
+        if (Tick < target.InvulnerableUntilTick)
+            return;
         if (target.FindStatus(StatusId.Marked) is { } mark)
             amount *= 1f + mark.Power;
         if (target.IsAnchored && target.PerkValue(Perk.Braced) is > 0f and var braced)
             amount *= 1f - MathF.Min(braced, MaxBraced);
+        amount = ThroughPhaseGates(target, amount);
         var dealt = MathF.Min(amount, target.Health);
         target.Health = MathF.Max(0f, target.Health - amount);
         RecordHit(target, attackerShipId);
@@ -186,6 +208,26 @@ public sealed class World
         attacker.AddToTally(Tally.DamageDealt, dealt);
         if (attacker.PerkValue(Perk.HuntersMark) is > 0f and var marking)
             ApplyStatus(target, StatusId.Marked, marking, attackerShipId);
+    }
+
+    /// <summary>
+    /// How much of a blow of <paramref name="amount"/> reaches <paramref name="target"/>'s hull: none while it's
+    /// untouchable, and for a boss, no further than the end of its phase (see <see cref="Ship.PhaseGates"/>), which it
+    /// reaches: the rest is lost, and it's untouchable a moment. Every kind of damage goes through here.
+    /// </summary>
+    private float ThroughPhaseGates(Ship target, float amount)
+    {
+        if (Tick < target.InvulnerableUntilTick)
+            return 0f;
+        if (target.PhasesPassed < target.PhaseGates.Count
+            && target.PhaseGates[target.PhasesPassed] * target.Stats.MaxHealth is var gate && target.Health - amount <= gate)
+        {
+            amount = MathF.Max(0f, target.Health - gate);
+            target.PhasesPassed++;
+            target.InvulnerableUntilTick = Tick + PhaseShiftTicks;
+            Emit(new BossPhaseChanged(Tick, target.Id, target.PhasesPassed));
+        }
+        return amount;
     }
 
     /// <summary>
@@ -439,7 +481,6 @@ public sealed class World
         {
             RemoveShip(ship.Id);
             Emit(new ShipSunk(Tick, ship.Id, null));
-            Contracts.SpillCargo(this, ship); // their cargo stays in play for everyone else
         }
         _players.Remove(playerId);
     }
@@ -457,10 +498,9 @@ public sealed class World
     public IReadOnlyCollection<int> TakenFortresses => _takenFortresses;
 
     /// <summary>
-    /// Whether ships can trade at <paramref name="island"/>: shop for upgrades, weapons, skills and repairs, and buy
-    /// contracts. Every shipyard, and every fortress once it's taken.
+    /// Whether ships can shop at <paramref name="island"/> for upgrades, weapons, skills and repairs. Every shipyard (a taken fortress isn't one: ports are their own stops on the chart).
     /// </summary>
-    public bool IsPort(Island island) => island.HasShipyard || (island.IsFortress && _takenFortresses.Contains(island.Id));
+    public bool IsPort(Island island) => island.HasShipyard;
 
     /// <summary>Whether <paramref name="island"/> is a fortress still in pirate hands.</summary>
     public bool IsHeld(Island island) => island.IsFortress && !_takenFortresses.Contains(island.Id);
@@ -472,6 +512,93 @@ public sealed class World
             return false;
         Emit(new FortressTaken(Tick, island.Id));
         return true;
+    }
+
+    /// <summary>Where the crew sailed into this region (the middle of the sea until a region is loaded): where a lone sailor's lifeboat brings them back.</summary>
+    public Vector2 RegionEntry
+    {
+        get => _regionEntry ?? WorldSize / 2f;
+        private set => _regionEntry = value;
+    }
+
+    private Vector2? _regionEntry;
+
+    /// <summary>
+    /// The crew sails on into a new region (see <see cref="Maps.Regions"/>): the sea is cleared of everything but the
+    /// players' ships (pirates, shots, shells, fires, the old islands and what was learned of them), resized,
+    /// and given <paramref name="layout"/>'s islands. The crew's ships come in abreast at its entry, sails furled,
+    /// anchors up, and shaking off their statuses; anyone waiting to respawn comes back with them. Health carries over.
+    /// Announced with <see cref="RegionEntered"/>, which carries everything a client needs to do the same.
+    /// </summary>
+    public void LoadRegion(RegionLayout layout, int nodeId)
+    {
+        var firstEntityId = _nextEntityId;
+        EnterRegion(layout.Size, layout.Islands, firstEntityId);
+        Emit(new RegionEntered(Tick, nodeId, layout.Size, layout.Islands, firstEntityId));
+
+        RegionEntry = layout.Entry;
+        var crew = _players.Values.OrderBy(p => p.PlayerId).ToList();
+        foreach (var player in crew)
+        {
+            player.DeathsThisStop = 0;
+            player.PacksBoughtHere = 0;
+        }
+        for (var i = 0; i < crew.Count; i++)
+        {
+            var position = layout.Entry + new Vector2((i - (crew.Count - 1) / 2f) * Runs.StartSpacing, 0f);
+            if (GetPlayerShip(crew[i].PlayerId) is { } ship)
+                SailIn(ship, position);
+            else if (crew[i].IsAwaitingRespawn)
+                Respawning.RespawnNow(this, crew[i], position);
+        }
+    }
+
+    /// <summary>
+    /// Clears the sea for a new region of <paramref name="size"/> with <paramref name="islands"/>: every ship no player
+    /// owns that's numbered below <paramref name="firstEntityId"/> goes (the old region's), and every shot, shell, fire,
+    /// crate, island, and discovery. A client mirroring the server calls this for <see cref="RegionEntered"/>; the
+    /// players' ships move with the snapshots.
+    /// </summary>
+    public void EnterRegion(Vector2 size, IReadOnlyList<Island> islands, int firstEntityId)
+    {
+        bool Old(Ship s) => s.OwnerPlayerId is null && s.Id < firstEntityId;
+        foreach (var ship in _ships.Where(Old))
+            _lastSightCell.Remove(ship.Id);
+        _ships.RemoveAll(Old);
+        _projectiles.Clear();
+        _strikes.Clear();
+        _warnings.Clear();
+        _fires.Clear();
+        _hitFiresByOwner.Clear();
+        _echoes.Clear();
+        _islands.Clear();
+        _islands.AddRange(islands);
+        _plunderedIslands.Clear();
+        _takenFortresses.Clear();
+        WorldSize = size;
+        Discovery = new Discovery(size);
+        _lastSightCell.Clear();
+        RegionsEntered++;
+    }
+
+    /// <summary>A player's ship arriving in a new region at <paramref name="position"/>, at rest and facing north.</summary>
+    private void SailIn(Ship ship, Vector2 position)
+    {
+        ship.Position = ship.PreviousPosition = position;
+        ship.Heading = ship.PreviousHeading = Regions.EntryHeading;
+        ship.Speed = 0f;
+        ship.Throttle = 0;
+        ship.Rudder = 0;
+        ship.MoveTarget = null;
+        ship.IsHoldingCourse = false;
+        ship.WindDrift = Vector2.Zero;
+        ship.IsAnchored = false;
+        ship.AnchorDropTicksRemaining = 0;
+        ship.PlunderIslandId = null;
+        ship.PlunderTicks = 0;
+        ship.PlunderConsentIslandId = null;
+        foreach (var status in ship.Statuses.ToList())
+            RemoveStatus(ship, status.Id);
     }
 
     /// <summary>Sets the tick counter, for a client mirroring the server's clock.</summary>
@@ -506,9 +633,11 @@ public sealed class World
     /// <summary>
     /// Everything stops while anyone has cards to choose (see <see cref="CardRewards"/>), for as long as it takes: the
     /// tick doesn't advance, so nothing moves, reloads, burns down, or comes due, and only choices and the helm get
-    /// through. A player who leaves takes their offers with them.
+    /// through. A player who leaves takes their offers with them. A hand bought at a port is the buyer's own business:
+    /// the rest of the crew shops on while they choose (and doesn't sail until they have; see <see cref="RunDirector"/>).
     /// </summary>
-    public bool IsPaused => !IsRunOver && _players.Values.Any(p => p.CardOffers.Count > 0 || p.NeedsStartingWeapon);
+    public bool IsPaused => !IsRunOver
+                            && _players.Values.Any(p => p.NeedsStartingWeapon || p.CardOffers.Any(o => o.Source != OfferSource.Shop));
 
     public void Step()
     {
@@ -561,7 +690,11 @@ public sealed class World
         {
             // Forts are built on land.
             if (!ship.IsFort && IslandCollision.Resolve(ship, _islands))
+            {
+                // Nobody's blow, so nobody's kill: straight off the hull, but by the same rules as any damage.
+                ship.Health = MathF.Max(0f, ship.Health - ThroughPhaseGates(ship, IslandCollision.GroundingDamage));
                 Emit(new ShipGrounded(Tick, ship.Id));
+            }
         }
 
         RevealMap();
@@ -589,7 +722,6 @@ public sealed class World
         Regenerate(dt);
 
         Plundering.Step(this);
-        Contracts.Step(this);
 
         ResolveSinkings();
         Respawning.Step(this);
@@ -662,7 +794,6 @@ public sealed class World
             if (!victim.IsSunk)
                 continue;
             Emit(new ShipSunk(Tick, victim.Id, victim.LastHitByShipId));
-            Contracts.SpillCargo(this, victim);
             if (victim.OwnerPlayerId is { } playerId)
                 Respawning.OnPlayerSunk(this, victim, GetOrAddPlayer(playerId));
         }
@@ -706,13 +837,28 @@ public sealed class World
             Emit(new AreaDiscovered(Tick, team, cells));
     }
 
-    /// <summary>Every ship still afloat mends at its <see cref="ShipStats.HealthRegen"/> rate, up to its maximum.</summary>
+    /// <summary>
+    /// A player's hull mends by itself (at its hull's own <see cref="ShipStats.HealthRegen"/>) only this far: beyond it
+    /// takes a port, or the repairs that upgrades, cards and the broadside's stout hull bring. Damage carries from stop
+    /// to stop, so it has to be made good, not waited out.
+    /// </summary>
+    public const float NaturalRepairCeiling = 0.6f;
+
+    /// <summary>
+    /// Every ship still afloat mends at its <see cref="ShipStats.HealthRegen"/> rate, up to its maximum; a player's
+    /// hull's own share of that stops at <see cref="NaturalRepairCeiling"/>.
+    /// </summary>
     private void Regenerate(float dt)
     {
         foreach (var ship in _ships)
         {
-            if (!ship.IsSunk)
-                ship.Health = MathF.Min(ship.Stats.MaxHealth, ship.Health + ship.Stats.HealthRegen * dt);
+            if (ship.IsSunk)
+                continue;
+            var regen = ship.Stats.HealthRegen;
+            if (ship.OwnerPlayerId is not null && ship.Health >= ship.Stats.MaxHealth * NaturalRepairCeiling)
+                regen -= MathF.Min(regen, ship.BaseStats.HealthRegen);
+            if (regen > 0f)
+                ship.Health = MathF.Min(ship.Stats.MaxHealth, ship.Health + regen * dt);
         }
     }
 
@@ -804,7 +950,7 @@ public sealed class World
                     continue;
                 HullShape.GetWorldOutline(ship.Position, ship.Heading, ship.Stats, hull);
                 if (Geometry.DistanceToConvex(hull, fire.Position) <= fire.Radius)
-                    DealDamage(ship, fire.Dps * dt, fire.OwnerShipId);
+                    DealDamage(ship, fire.Dps * dt * SplashScale(fire.Team, ship), fire.OwnerShipId);
             }
         }
         _fires.RemoveAll(f =>
@@ -849,7 +995,7 @@ public sealed class World
                 HullShape.GetWorldOutline(ship.Position, ship.Heading, ship.Stats, hull);
                 if (Geometry.DistanceToConvex(hull, strike.Target) > strike.Radius)
                     continue;
-                DealDamage(ship, strike.Damage, strike.OwnerShipId);
+                DealDamage(ship, strike.Damage * SplashScale(strike.Team, ship), strike.OwnerShipId);
                 OnWeaponHit(strike.OwnerShipId, ship, strike.AbilityId);
             }
             Emit(new AreaStrikeImpact(Tick, strike.Id, strike.Target, strike.Radius));
@@ -1171,6 +1317,8 @@ public sealed class World
             return CardRewards.TryReroll(this, command.PlayerId, reroll.Tier);
         if (command is ChooseStartingWeaponCommand weapon)
             return Runs.TryChooseStartingWeapon(this, command.PlayerId, weapon.AbilityId);
+        if (command is ChooseCourseCommand course)
+            return Director is { } director ? director.TryVote(this, command.PlayerId, course.NodeId) : RejectionReason.NotChartingCourse;
 
         // Commands only ever act on the issuing player's own ship; this is also the server-side ownership check.
         var ship = GetPlayerShip(command.PlayerId);
@@ -1208,14 +1356,14 @@ public sealed class World
                 return Shipyards.TryChoosePlunder(this, ship);
             case PurchaseRepairCommand:
                 return Shipyards.TryRepair(this, ship);
+            case BuyCardPackCommand:
+                return Shipyards.TryBuyCardPack(this, ship);
             case PurchaseUpgradeCommand purchase:
                 return Shipyards.ToRejection(Shipyards.TryPurchase(this, ship, purchase.UpgradeId));
             case UnlockAbilityCommand unlock:
                 return Shipyards.TryUnlockAbility(this, ship, unlock.AbilityId);
             case PurchaseSkillCommand skill:
                 return Shipyards.TryPurchaseSkill(this, ship, skill.SkillId);
-            case PurchaseContractCommand contract:
-                return Contracts.TryPurchase(this, ship, contract.ContractId);
             case SetRudderCommand rudder:
                 ship.Rudder = Math.Clamp(rudder.Rudder, -1, 1);
                 if (ship.Rudder != 0)

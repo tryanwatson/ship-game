@@ -8,11 +8,11 @@ public static class Protocol
     public const string Key = "ShipGame";
 
     /// <summary>Bump whenever the wire format changes.</summary>
-    public const int Version = 25;
+    public const int Version = 29;
 
     public const int DefaultPort = 7777;
 
-    public const int MaxPlayers = 12;
+    public const int MaxPlayers = ShipGame.Shared.Maps.Regions.MaxCrew;
 
     /// <summary>Snapshots go out every this many simulation ticks (30 Hz / 2 = 15 Hz).</summary>
     public const int SnapshotEveryTicks = 2;

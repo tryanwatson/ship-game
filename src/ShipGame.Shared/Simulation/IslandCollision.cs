@@ -14,7 +14,10 @@ public static class IslandCollision
     /// </summary>
     public const float DamagingImpactSpeed = 1f;
 
-    /// <summary>Pushes the hull out of any island it overlaps. Returns true if it ran aground hard enough to take damage.</summary>
+    /// <summary>
+    /// Pushes the hull out of any island it overlaps. Returns true if it ran aground hard enough to take damage: the
+    /// caller takes off <see cref="GroundingDamage"/> (World, so it plays by the same rules as other damage).
+    /// </summary>
     public static bool Resolve(Ship ship, IReadOnlyList<Island> islands)
     {
         var wasAground = ship.IsAground;
@@ -39,10 +42,7 @@ public static class IslandCollision
             // scraping along a coast with its bow still angled in would otherwise be hit again every tick.
             var impactSpeed = -Vector2.Dot(ship.Velocity, normal);
             if (impactSpeed > DamagingImpactSpeed && !wasAground && !ship.IsAground)
-            {
-                ship.Health = MathF.Max(0f, ship.Health - GroundingDamage);
                 damaged = true;
-            }
             ship.IsAground = true;
 
             // Back out of the land, then lose the part of our way that was driving into it, keeping the along-shore

@@ -2,7 +2,6 @@ using System.Numerics;
 using ShipGame.Shared.Abilities;
 using ShipGame.Shared.Ai;
 using ShipGame.Shared.Commands;
-using ShipGame.Shared.Trading;
 using ShipGame.Shared.Upgrades;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
@@ -247,50 +246,38 @@ public class FortTests
     }
 
     [Fact]
-    public void Forts_AreSturdierForBiggerCrews()
+    public void Forts_AreSturdierForBiggerCrews_AndPayAsMuchMore()
     {
         var (world, island) = CreateFortress();
         var solo = Fortresses.SpawnFort(world, island, 0f, FortKind.Battery, players: 1);
         var crew = Fortresses.SpawnFort(world, island, MathF.PI, FortKind.Battery, players: 3);
 
-        Assert.Equal(solo.Stats.MaxHealth * (1f + 2 * Fortresses.HealthPerExtraPlayer), crew.Stats.MaxHealth, 3);
+        // A bigger crew meets more forts, each sturdier: all told, the crew's share of everything to wear through.
+        Assert.Equal(solo.Stats.MaxHealth * Fortresses.FortHealthScale(3), crew.Stats.MaxHealth, 3);
+        Assert.Equal(Fortresses.CrewScale(3), Fortresses.FortHealthScale(3) * Fortresses.CountScale(3), 3);
         Assert.Equal(crew.Stats.MaxHealth, crew.Health);
+        // Gold follows the health: three sailors share it, and the forts together pay CrewScale times a lone sailor's.
+        Assert.Equal(KillRewards.GoldFor(solo) * Fortresses.FortHealthScale(3), KillRewards.GoldFor(crew), 0);
+        // And its guns hit a little harder, since not all of them can bear on every sailor.
+        Assert.Equal(solo.Stats.WeaponDamage + 2 * Fortresses.DamagePerExtraPlayer, crew.Stats.WeaponDamage, 3);
     }
 
     [Fact]
-    public void ATakenFortress_IsAPort_ForShoppingRepairsAndTrade()
+    public void ATakenFortress_IsNoPort_AndIsPlunderedWithoutAsking()
     {
         var (world, island) = CreateFortress();
-        world.Director = new RunDirector(1);
-        Contracts.OpenMarkets(world, seed: 1);
-        world.AddIsland(new Island(2, new[] { new Vector2(150, 150), new Vector2(160, 150), new Vector2(160, 160), new Vector2(150, 160) }));
-        var fort = Fortresses.SpawnFort(world, island, MathF.PI, FortKind.Battery); // west shore, out of reach of the east
         var ship = world.SpawnShip(new Vector2(67.5f, 60f), 0f, ShipStats.Sloop, PlayerId);
         ship.IsAnchored = true;
-        ship.Health = 40f;
         world.AddGold(PlayerId, 500);
-        world.Step();
-        Assert.Null(Shipyards.DockedAt(world, ship)); // held: no trading with pirates
-        Assert.Empty(world.Trade.OffersAt(island.Id));
 
-        fort.Health = 0f;
-        world.Step();
-        world.Enqueue(new ChooseCardCommand(PlayerId, world.Players[PlayerId].CardOffers[0].Cards[0].Id));
+        world.TakeFortress(island);
         world.Step();
 
-        Assert.True(world.IsPort(island));
-        Assert.Same(island, Shipyards.DockedAt(world, ship));
-        Assert.NotEmpty(world.Trade.OffersAt(island.Id));
-        world.Enqueue(new PurchaseRepairCommand(PlayerId));
-        world.Enqueue(new PurchaseUpgradeCommand(PlayerId, "hull"));
-        world.Step();
-        Assert.Equal(ship.Stats.MaxHealth, ship.Health);
-        Assert.Equal(1, Shipyards.Level(ship, UpgradeCatalog.Find("hull")!));
-
-        // Like a shipyard, it's only plundered when asked.
+        Assert.False(world.IsPort(island)); // ports are stops of their own on the chart
+        Assert.Null(Shipyards.DockedAt(world, ship));
         for (var i = 0; i < Plundering.DurationTicks + 5; i++)
             world.Step();
-        Assert.False(world.IsPlundered(island));
+        Assert.True(world.IsPlundered(island));
     }
 
     [Fact]

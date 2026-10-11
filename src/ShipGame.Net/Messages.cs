@@ -15,7 +15,7 @@ public sealed record LobbyState(bool RunInProgress, IReadOnlyList<LobbyPlayer> P
 /// <param name="Name">What they're called (see <c>PlayerNames</c>); empty until they give one, which readying up needs.</param>
 public sealed record LobbyPlayer(int PlayerId, bool Ready, string Name = "");
 
-/// <summary>A run is starting: clients rebuild their world. The islands come from the map, not the wire.</summary>
+/// <summary>A run is starting: clients rebuild their world, empty. Its chart and first region follow as events.</summary>
 /// <param name="Crew">Who's sailing and what they're called; each starts by choosing a card and then a weapon.</param>
 public sealed record RunStart(long Tick, Vector2 WorldSize, Vector2 Wind, bool FriendlyFire = false,
     IReadOnlyList<(int PlayerId, string Name)>? Crew = null)
@@ -80,7 +80,9 @@ public sealed class ShipState
     public (int Remaining, int Duration)[][] Cooldowns = new (int, int)[Ship.AbilitySlotCount][];
 }
 
-public sealed record PlayerSnapshot(int PlayerId, int Gold, int Kills, int RespawnTicks);
+/// <param name="CourseVote">The chart stop they've voted to sail to next, if any.</param>
+public sealed record PlayerSnapshot(int PlayerId, int Gold, int Kills, int RespawnTicks, int? CourseVote = null, int ExtraLives = 0,
+    int PacksBoughtHere = 0);
 
 /// <summary>The world as of one server tick, as far as clients need to draw it.</summary>
 public sealed class Snapshot
@@ -131,7 +133,8 @@ public sealed class Snapshot
             Victory = world.IsVictory,
         };
         foreach (var player in world.Players.Values)
-            snapshot.Players.Add(new PlayerSnapshot(player.PlayerId, player.Gold, player.Kills, player.RespawnTicksRemaining));
+            snapshot.Players.Add(new PlayerSnapshot(player.PlayerId, player.Gold, player.Kills, player.RespawnTicksRemaining, player.CourseVote,
+                player.ExtraLives, player.PacksBoughtHere));
         snapshot.PlunderedIslands.AddRange(world.PlunderedIslands);
         foreach (var ship in world.Ships)
         {

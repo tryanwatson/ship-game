@@ -1,5 +1,6 @@
 using System;
 using Microsoft.Xna.Framework;
+using System.Linq;
 using ShipGame.Shared.Maps;
 using ShipGame.Shared.Progression;
 using ShipGame.Shared.Simulation;
@@ -7,9 +8,9 @@ using ShipGame.Shared.Simulation;
 namespace ShipGame.Client.Rendering;
 
 /// <summary>
-/// Top-right, under the counters: the waters we're in and their level, how many fortresses the crew has taken and
-/// how many more until the next boss, and the boss itself once it's coming. Reads the director's
-/// <see cref="RunStatus"/>, which clients mirror from the server.
+/// Top-right, under the counters: where the crew is on the chart (act, stop, difficulty, level), what's to be done
+/// there (the fortress to take, the boss on its way or hunting), and once it's done, the call to chart a course with
+/// how many have voted. Reads the director, which clients mirror from the server.
 /// </summary>
 public sealed class RunForecast
 {
@@ -22,6 +23,7 @@ public sealed class RunForecast
     private static readonly Color Panel = new Color(12, 16, 24) * 0.75f;
     private static readonly Color SeaText = new(235, 235, 240);
     private static readonly Color FortressText = new(225, 205, 160);
+    private static readonly Color ChartText = new(150, 215, 240);
     private static readonly Color Urgent = new(240, 95, 80);
 
     private readonly PrimitiveBatch _batch;
@@ -36,36 +38,64 @@ public sealed class RunForecast
 
     private static float Step => PixelFont.Height(Scale) + 2 * PanelPadding + LineGap;
 
-    public void Draw(RunStatus status, Sea sea, HudView hud)
+    public void Draw(World world, RunDirector director, HudView hud)
     {
+        if (director.CurrentNode is not { } node)
+            return;
         _batch.Begin(hud.Transform);
         var right = hud.Viewport.Width - RightMargin;
         var top = HudCounters.Bottom + Gap;
 
-        DrawLine($"{sea.Name}  LV {sea.Level}", right, top, SeaText);
-        DrawLine(FortressLine(status), right, top + Step, FortressText);
-        if (BossLine(status) is { } boss)
-            DrawLine(boss, right, top + 2 * Step, Urgent);
+        DrawLine(Where(node), right, top, SeaText);
+        if (Task(world, director, node) is var (task, color))
+            DrawLine(task, right, top + Step, color);
+        DrawLine($"{Count(director.FortressesTaken, "FORTRESS", "FORTRESSES")} TAKEN - BOSS {Math.Min(director.BossesSunk + 1, RunDirector.BossCount)} OF {RunDirector.BossCount}",
+            right, top + 2 * Step, FortressText);
 
         _batch.Flush();
     }
 
-    private static string FortressLine(RunStatus s)
+    /// <summary>"ACT II - ROUGH FORTRESS - LV 4".</summary>
+    public static string Where(ChartNode node)
     {
-        var taken = s.FortressesTaken == 1 ? "1 FORTRESS TAKEN" : $"{s.FortressesTaken} FORTRESSES TAKEN";
-        var next = s.FortressesForNextBoss;
-        return next > s.FortressesTaken ? $"{taken} - BOSS AT {next}" : taken;
+        var act = $"ACT {SeaChart.ActNumeral(node.Act)}";
+        return node.Kind switch
+        {
+            NodeKind.Start => $"{act} - OPEN WATER",
+            NodeKind.Fortress => $"{act} - {SeaChart.Name(node.Difficulty)} FORTRESS - LV {node.Level}",
+            NodeKind.Port => $"{act} - PORT",
+            _ => $"{act} - FLAGSHIP - LV {node.Level}",
+        };
     }
 
-    private static string? BossLine(RunStatus s)
+    /// <summary>What there is to do here, or the call to vote once it's done.</summary>
+    private static (string, Color)? Task(World world, RunDirector director, ChartNode node)
     {
-        var round = $"BOSS {s.BossesSpawned + (s.BossAfloat ? 0 : 1)} OF {RunDirector.BossCount}";
-        if (s.BossAfloat)
-            return $"{round} IS HUNTING THE CREW";
-        if (s.BossCountdownTicks > 0)
-            return $"{round} ARRIVES IN {Clock(s.BossCountdownTicks)}";
+        if (director.Cleared)
+        {
+            var voted = $"{world.Players.Values.Count(p => p.CourseVote is not null)}/{world.Players.Count} VOTED";
+            if (node.Kind == NodeKind.Port && world.Islands.FirstOrDefault(i => i.HasShipyard) is { } yard)
+                return ($"ANCHOR AT {yard.Name} TO SHOP - TAB: SAIL ON ({voted})", ChartText);
+            return ($"TAB: CHART YOUR COURSE - {voted}", ChartText);
+        }
+        if (node.Kind == NodeKind.Fortress)
+        {
+            // Not a count of the forts left: online, only the ones near someone are sent, so it would come up short.
+            var name = world.Islands.FirstOrDefault(i => i.IsFortress)?.Name ?? "THE FORTRESS";
+            return ($"TAKE {name} - SINK EVERY FORT", FortressText);
+        }
+        if (node.Kind == NodeKind.Boss)
+        {
+            var round = $"BOSS {node.Act} OF {RunDirector.BossCount}";
+            if (director.BossAfloat)
+                return ($"{round} IS HUNTING THE CREW", Urgent);
+            if (director.BossCountdownTicks > 0)
+                return ($"{round} ARRIVES IN {Clock(director.BossCountdownTicks)}", Urgent);
+        }
         return null;
     }
+
+    private static string Count(int n, string one, string many) => n == 1 ? $"1 {one}" : $"{n} {many}";
 
     /// <summary>M:SS, rounded up so it never shows 0:00 before it happens.</summary>
     private static string Clock(int ticks)
