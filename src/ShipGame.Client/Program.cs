@@ -6,6 +6,13 @@ using ShipGame.Net;
 // Host a game:              dotnet run --project src/ShipGame.Client -- --host [7777] [--no-friendly-fire]
 // Join a game:              dotnet run --project src/ShipGame.Client -- --connect 127.0.0.1[:7777] [--password P]
 // Simulate a bad network:   add --lag <ms> [--jitter <ms>] [--loss <percent>] (applies to any online game)
+// Write the sounds out:      dotnet run --project src/ShipGame.Client -- --dump-sounds <folder>   (WAVs, to audition them)
+if (Array.IndexOf(args, "--dump-sounds") is var dump and >= 0)
+{
+    ShipGame.Client.Audio.SoundDump.Write(dump + 1 < args.Length ? args[dump + 1] : "sounds");
+    return;
+}
+
 string? host = null;
 var port = Protocol.DefaultPort;
 var hosting = false;

@@ -27,6 +27,12 @@ public sealed class ClientSettings
     /// <summary>Whether solo and hosted runs open with a late game's worth of cards to choose (a playtesting option).</summary>
     public bool Testing { get; set; }
 
+    /// <summary>Sound effects volume (and the sea), 0..1.</summary>
+    public float Volume { get; set; } = 0.8f;
+
+    /// <summary>Music volume, 0..1: light by default, under the sea and the guns.</summary>
+    public float MusicVolume { get; set; } = 0.3f;
+
     /// <summary>The name last given in a lobby; shown over the ship, solo too.</summary>
     public string PlayerName { get; set; } = "";
 

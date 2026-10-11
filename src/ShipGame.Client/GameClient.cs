@@ -3,6 +3,7 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using ShipGame.Client.Audio;
 using ShipGame.Client.Input;
 using ShipGame.Client.Rendering;
 using ShipGame.Client.Session;
@@ -72,6 +73,8 @@ public sealed class GameClient : Game
     private CardSelectScreen _cardSelect = null!;
     private CardHand _cardHand = null!;
     private ChartScreen _chartScreen = null!;
+    private GameAudio? _audio;
+    private MusicPlayer? _music;
 
     // The chart opens by itself once per stop, when there's a course to choose; and closes when the crew sails on.
     private int _chartOpenedFor = -1;
@@ -163,6 +166,12 @@ public sealed class GameClient : Game
         base.Initialize(); // loads content, including the menu
 
         _settings = ClientSettings.Load();
+        _gameMenu.SoundPercent = (int)MathF.Round(Math.Clamp(_settings.Volume, 0f, 1f) * 100f);
+        _gameMenu.MusicPercent = (int)MathF.Round(Math.Clamp(_settings.MusicVolume, 0f, 1f) * 100f);
+        if (_audio is not null)
+            _audio.Volume = _settings.Volume;
+        if (_music is not null)
+            _music.Volume = _settings.MusicVolume;
         _lobbyName = PlayerNames.Clean(_settings.PlayerName);
         _menu.Address = _settings.LastAddress;
         _menu.Password = _settings.LastPassword;
@@ -268,18 +277,26 @@ public sealed class GameClient : Game
         _cardSelect = new CardSelectScreen(_primitives);
         _cardHand = new CardHand(_primitives);
         _chartScreen = new ChartScreen(_primitives);
+        _audio = GameAudio.TryCreate();
+        if (_audio is not null) // no audio device, no music either
+            _music = MusicPlayer.TryCreate(System.IO.Path.Combine(AppContext.BaseDirectory, "Music"));
     }
 
     protected override void UnloadContent()
     {
         LeaveSession();
         _primitives.Dispose();
+        _audio?.Dispose();
+        _music?.Dispose();
     }
 
     protected override void Update(GameTime gameTime)
     {
         var dt = gameTime.ElapsedGameTime.TotalSeconds;
         _input.Update();
+        _audio?.Update(dt);
+        _music?.Watch(_menu.IsOpen ? null : _session.World, LocalPlayerId, dt);
+        _music?.Update(dt);
 
         if (_menu.IsOpen)
         {
@@ -326,9 +343,25 @@ public sealed class GameClient : Game
                 switch (_gameMenu.Update(_input, Hud, GameMenuNote))
                 {
                     case GameMenuAction.Resume:
+                        _audio?.Play(Cue.Click);
                         _gameMenu.Close();
                         break;
+                    case GameMenuAction.Sound:
+                        _settings.Volume = _gameMenu.SoundPercent / 100f;
+                        _settings.Save();
+                        if (_audio is not null)
+                            _audio.Volume = _settings.Volume;
+                        _audio?.Play(Cue.Click);
+                        break;
+                    case GameMenuAction.Music:
+                        _settings.MusicVolume = _gameMenu.MusicPercent / 100f;
+                        _settings.Save();
+                        if (_music is not null)
+                            _music.Volume = _settings.MusicVolume;
+                        _audio?.Play(Cue.Click);
+                        break;
                     case GameMenuAction.Leave:
+                        _audio?.Play(Cue.Click);
                         OpenMenu();
                         base.Update(gameTime);
                         return;
@@ -394,7 +427,10 @@ public sealed class GameClient : Game
                 // The chart takes the mouse (a click is a vote, not a move order); the keys still sail and fight, since
                 // a fortress's guards don't stop for it.
                 if (_chartScreen.Update(_session.World, _input, Hud) is { } course)
+                {
+                    _audio?.Play(Cue.Click);
                     _session.Send(new ChooseCourseCommand(LocalPlayerId, course));
+                }
                 HandleOrders(dt, chartOpen: true);
             }
             else
@@ -461,9 +497,12 @@ public sealed class GameClient : Game
     {
         _worldRenderer.CaptureEffects(_session.World, _session.InterpolationAlpha);
         _worldRenderer.UpdateEffects((float)dt);
+        _audio?.Capture(_session.World);
         _session.Update(dt);
         var events = _session.TakeEvents();
         _worldRenderer.ProcessEffects(_session.World, events);
+        _audio?.SetListener(_camera.Position, _camera.Zoom);
+        _audio?.HandleEvents(_session.World, events, LocalPlayerId);
         Announce(events);
     }
 
@@ -541,7 +580,10 @@ public sealed class GameClient : Game
             _settings.Save();
         }
 
-        switch (_menu.Update(_input, Hud, dt))
+        var action = _menu.Update(_input, Hud, dt);
+        if (action != MenuAction.None)
+            _audio?.Play(Cue.Click);
+        switch (action)
         {
             case MenuAction.PlaySolo:
                 SaveSettings();

@@ -59,7 +59,7 @@ progress.
 | Type (lobby) | Your name, shown over your ship and on the map |
 | - / = | Starting gold: in the lobby, or on the main menu for solo (a playtesting option) |
 | Enter | Ready up (lobby), new run (solo, after sinking) |
-| Esc | Game menu: resume or leave the game (solo pauses; online carries on) |
+| Esc | Game menu: resume, set the sound and music volume, or leave the game (solo pauses; online carries on) |
 
 ## Developing
 
